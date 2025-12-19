@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # Application
     log_level: str = "INFO"
-    disable_cors: bool = False  # Set DISABLE_CORS=true to disable CORS
+    enable_cors: bool = True  # Set ENABLE_CORS=false to disable CORS
 
 
 @lru_cache
