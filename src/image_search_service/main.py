@@ -23,9 +23,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Note: Database and external clients are lazily initialized on first use,
     so we only need to handle cleanup here.
     """
+    from image_search_service.services.watcher_manager import WatcherManager
+
     logger.info("Application starting up")
+
+    # Start file watcher if enabled
+    watcher = WatcherManager.get_instance()
+    watcher.start()
+
     yield
+
     logger.info("Application shutting down")
+
+    # Stop file watcher
+    watcher.stop()
+
     await close_db()
     close_qdrant()
 

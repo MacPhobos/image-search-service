@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     enable_cors: bool = True  # Set ENABLE_CORS=false to disable CORS
 
+    # Training system settings
+    image_root_dir: str = Field(default="", alias="IMAGE_ROOT_DIR")
+    thumbnail_dir: str = Field(default="/tmp/thumbnails", alias="THUMBNAIL_DIR")
+    thumbnail_size: int = Field(default=256, alias="THUMBNAIL_SIZE")
+    watch_enabled: bool = Field(default=False, alias="WATCH_ENABLED")
+    watch_interval_seconds: int = Field(default=60, alias="WATCH_INTERVAL_SECONDS")
+    watch_debounce_seconds: float = Field(default=1.0, alias="WATCH_DEBOUNCE_SECONDS")
+    watch_auto_train: bool = Field(default=False, alias="WATCH_AUTO_TRAIN")
+    training_batch_size: int = Field(default=32, alias="TRAINING_BATCH_SIZE")
+
 
 @lru_cache
 def get_settings() -> Settings:
