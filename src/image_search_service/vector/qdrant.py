@@ -81,6 +81,7 @@ def search_vectors(
     limit: int = 50,
     offset: int = 0,
     filters: dict[str, str] | None = None,
+    client: QdrantClient | None = None,
 ) -> list[dict[str, Any]]:
     """Search for similar vectors.
 
@@ -89,12 +90,14 @@ def search_vectors(
         limit: Maximum number of results
         offset: Offset for pagination
         filters: Optional filters (from_date, to_date)
+        client: Optional Qdrant client (uses default if not provided)
 
     Returns:
         List of search results with asset_id, score, and payload
     """
     settings = get_settings()
-    client = get_qdrant_client()
+    if client is None:
+        client = get_qdrant_client()
 
     # Build filter if date range provided
     qdrant_filter = None

@@ -1,6 +1,7 @@
 """Search endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from qdrant_client import QdrantClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,13 +24,16 @@ router = APIRouter(prefix="/search", tags=["search"])
 
 @router.post("", response_model=SearchResponse, responses={503: {"model": ErrorResponse}})
 async def search_assets(
-    request: SearchRequest, db: AsyncSession = Depends(get_db)
+    request: SearchRequest,
+    db: AsyncSession = Depends(get_db),
+    qdrant: QdrantClient = Depends(get_qdrant_client),
 ) -> SearchResponse:
     """Semantic search for assets using text query.
 
     Args:
         request: Search request with query and filters
         db: Database session
+        qdrant: Qdrant client for vector search
 
     Returns:
         Search response with matching assets and scores
@@ -39,8 +43,7 @@ async def search_assets(
     """
     # Check Qdrant connectivity
     try:
-        client = get_qdrant_client()
-        client.get_collections()
+        qdrant.get_collections()
     except Exception as e:
         logger.error(f"Qdrant unavailable: {e}")
         raise HTTPException(
@@ -69,6 +72,7 @@ async def search_assets(
             limit=request.limit,
             offset=request.offset,
             filters=request.filters,
+            client=qdrant,
         )
     except Exception as e:
         logger.error(f"Qdrant search failed: {e}")
