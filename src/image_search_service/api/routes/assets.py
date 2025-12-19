@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from rq import Retry
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -102,8 +103,12 @@ async def ingest_assets(
             await db.flush()
             asset_id = asset.id
 
-        # Enqueue for indexing
-        queue.enqueue("image_search_service.queue.jobs.index_asset", str(asset_id), retry=3)
+        # Enqueue for indexing with retry on failure
+        queue.enqueue(
+            "image_search_service.queue.jobs.index_asset",
+            str(asset_id),
+            retry=Retry(max=3),
+        )
         enqueued += 1
 
     await db.commit()
