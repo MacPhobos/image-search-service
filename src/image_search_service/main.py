@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from image_search_service.api.routes import router
+from image_search_service.api.routes import api_v1_router, router
 from image_search_service.core.logging import configure_logging, get_logger
 from image_search_service.db.session import close_db
 from image_search_service.vector.qdrant import close_qdrant
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
 
     # Register routes
     app.include_router(router)
+    app.include_router(api_v1_router)
 
     return app
 

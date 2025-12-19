@@ -11,6 +11,7 @@ app = typer.Typer(help="Image Search Service CLI")
 @app.command()
 def health_check() -> None:
     """Check service health by calling the health endpoint."""
+
     async def _check() -> None:
         async with AsyncClient() as client:
             try:

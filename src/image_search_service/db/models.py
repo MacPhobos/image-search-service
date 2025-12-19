@@ -25,6 +25,10 @@ class ImageAsset(Base):
         server_default=func.now(),
         nullable=False,
     )
+    indexed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:
         return f"<ImageAsset(id={self.id}, path={self.path})>"

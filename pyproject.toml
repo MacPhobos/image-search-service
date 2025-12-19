@@ -15,6 +15,10 @@ dependencies = [
     "rq>=2.0.0",
     "qdrant-client>=1.12.0",
     "typer[all]>=0.15.0",
+    "open-clip-torch>=2.24.0",
+    "torch>=2.0.0",
+    "pillow>=10.0.0",
+    "psycopg2-binary>=2.9.9",
 ]
 
 [project.optional-dependencies]
@@ -49,7 +53,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["rq.*", "qdrant_client.*"]
+module = ["rq.*", "qdrant_client.*", "open_clip.*", "torch.*", "PIL.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

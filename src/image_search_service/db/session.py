@@ -2,6 +2,8 @@
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -16,6 +18,7 @@ logger = get_logger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+_sync_engine: Engine | None = None
 
 
 def get_engine() -> AsyncEngine:
@@ -62,12 +65,35 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+def get_sync_engine() -> Engine:
+    """Get synchronous engine for RQ workers.
+
+    Returns:
+        Synchronous SQLAlchemy engine
+    """
+    global _sync_engine
+
+    if _sync_engine is None:
+        settings = get_settings()
+        # Convert async URL to sync (replace asyncpg with psycopg2)
+        sync_url = settings.database_url.replace("postgresql+asyncpg", "postgresql+psycopg2")
+        _sync_engine = create_engine(sync_url, pool_pre_ping=True)
+        logger.info("Sync database engine initialized for workers")
+
+    return _sync_engine
+
+
 async def close_db() -> None:
     """Close database engine and cleanup resources."""
-    global _engine, _session_factory
+    global _engine, _session_factory, _sync_engine
 
     if _engine is not None:
         await _engine.dispose()
         _engine = None
         _session_factory = None
-        logger.info("Database engine closed")
+        logger.info("Async database engine closed")
+
+    if _sync_engine is not None:
+        _sync_engine.dispose()
+        _sync_engine = None
+        logger.info("Sync database engine closed")

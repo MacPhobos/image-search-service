@@ -2,6 +2,9 @@
 
 from fastapi import APIRouter
 
+from image_search_service.api.routes.assets import router as assets_router
+from image_search_service.api.routes.search import router as search_router
+
 router = APIRouter()
 
 
@@ -13,3 +16,9 @@ async def health_check() -> dict[str, str]:
         Status dictionary indicating service health
     """
     return {"status": "ok"}
+
+
+# API v1 router with all endpoints
+api_v1_router = APIRouter(prefix="/api/v1")
+api_v1_router.include_router(assets_router)
+api_v1_router.include_router(search_router)
