@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 T = TypeVar("T")
 
@@ -17,6 +17,21 @@ class Asset(BaseModel):
     path: str
     created_at: datetime = Field(alias="createdAt")
     indexed_at: datetime | None = Field(None, alias="indexedAt")
+
+    @computed_field(alias="url")
+    def url(self) -> str:
+        """Full-size image URL."""
+        return f"/api/v1/images/{self.id}/full"
+
+    @computed_field(alias="thumbnailUrl")
+    def thumbnail_url(self) -> str:
+        """Thumbnail image URL."""
+        return f"/api/v1/images/{self.id}/thumbnail"
+
+    @computed_field(alias="filename")
+    def filename(self) -> str:
+        """Extracted filename from path."""
+        return self.path.split("/")[-1]
 
 
 class IngestRequest(BaseModel):
