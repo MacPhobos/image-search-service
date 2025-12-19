@@ -242,7 +242,7 @@ class TrainingService:
         images_per_minute = None
 
         if session.status == SessionStatus.RUNNING.value and session.started_at:
-            elapsed = (datetime.utcnow() - session.started_at).total_seconds()
+            elapsed = (datetime.now(UTC) - session.started_at).total_seconds()
             if elapsed > 0 and current > 0:
                 images_per_minute = (current / elapsed) * 60
                 remaining = total - current
