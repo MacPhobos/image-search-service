@@ -1,4 +1,6 @@
-
+.claude
+.claude-mpm
+.idea
 # Added by Claude MPM /mpm-init
 $RECYCLE.BIN/
 *$py.class

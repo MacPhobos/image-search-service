@@ -90,6 +90,33 @@ image-search-service/
 make test
 ```
 
+## Database creation
+
+### 1) Create role (user) with password
+    sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+    CREATE ROLE "image-search" LOGIN PASSWORD 'somepassword';
+    SQL
+
+### 2) Create database owned by that user
+    sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+    CREATE DATABASE "image-search" OWNER "image-search";
+    SQL
+
+### 3) Grant “admin-ish” rights on that DB + schema (so the user can create/use objects)
+    sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+    GRANT ALL PRIVILEGES ON DATABASE "image-search" TO "image-search";
+
+    \c "image-search"
+    GRANT ALL ON SCHEMA public TO "image-search";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "image-search";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "image-search";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "image-search";
+    SQL
+
+### Quick test login:
+
+psql "postgresql://image-search:somepassword@localhost:5432/image-search"
+
 ## License
 
 See LICENSE file.
