@@ -46,6 +46,7 @@ class TrainingService:
         session = TrainingSession(
             name=data.name,
             root_path=data.root_path,
+            category_id=data.category_id,
             status=SessionStatus.PENDING.value,
             config=data.config.model_dump() if data.config else None,
             total_images=0,
@@ -93,7 +94,10 @@ class TrainingService:
         query = (
             select(TrainingSession)
             .where(TrainingSession.id == session_id)
-            .options(selectinload(TrainingSession.subdirectories))
+            .options(
+                selectinload(TrainingSession.subdirectories),
+                selectinload(TrainingSession.category),
+            )
         )
         result = await db.execute(query)
         return result.scalar_one_or_none()
@@ -134,7 +138,10 @@ class TrainingService:
             query.offset(offset)
             .limit(page_size)
             .order_by(TrainingSession.created_at.desc())
-            .options(selectinload(TrainingSession.subdirectories))
+            .options(
+                selectinload(TrainingSession.subdirectories),
+                selectinload(TrainingSession.category),
+            )
         )
 
         result = await db.execute(query)

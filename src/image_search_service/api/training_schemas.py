@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from image_search_service.api.category_schemas import CategoryResponse
+
 # ============================================================================
 # Training Session Schemas
 # ============================================================================
@@ -24,6 +26,7 @@ class TrainingSessionCreate(BaseModel):
 
     name: str
     root_path: str = Field(alias="rootPath")
+    category_id: int = Field(alias="categoryId", description="Category ID for this session")
     subdirectories: list[str] = Field(default_factory=list)
     config: TrainingSessionConfig | None = None
 
@@ -46,6 +49,8 @@ class TrainingSessionResponse(BaseModel):
     name: str
     status: str
     root_path: str = Field(alias="rootPath")
+    category_id: int | None = Field(None, alias="categoryId", serialization_alias="categoryId")
+    category: CategoryResponse | None = None
     config: dict[str, object] | None = None
     total_images: int = Field(alias="totalImages")
     processed_images: int = Field(alias="processedImages")
@@ -177,6 +182,8 @@ class TrainingSessionDetailResponse(TrainingSessionResponse):
 
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
+    category_id: int | None = Field(None, alias="categoryId", serialization_alias="categoryId")
+    category: CategoryResponse | None = None
     subdirectories: list[TrainingSubdirectoryResponse] = Field(default_factory=list)
     progress: ProgressStats | None = None
     jobs_summary: JobsSummary | None = Field(None, alias="jobsSummary")

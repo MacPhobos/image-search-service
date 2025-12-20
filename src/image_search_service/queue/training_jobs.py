@@ -12,6 +12,7 @@ from image_search_service.db.models import JobStatus, TrainingJob
 from image_search_service.db.sync_operations import (
     create_evidence_sync,
     get_asset_by_id_sync,
+    get_session_by_id_sync,
     get_sync_session,
     update_asset_indexed_at_sync,
     update_job_progress_sync,
@@ -232,6 +233,10 @@ def train_single_asset(job_id: int, asset_id: int, session_id: int) -> dict[str,
             update_training_job_sync(db_session, job_id, JobStatus.FAILED.value, error_msg)
             return {"status": "error", "message": error_msg}
 
+        # Get training session to access category_id
+        training_session = get_session_by_id_sync(db_session, session_id)
+        category_id = training_session.category_id if training_session else None
+
         # Ensure Qdrant collection exists
         ensure_collection(embedding_service.embedding_dim)
 
@@ -278,9 +283,11 @@ def train_single_asset(job_id: int, asset_id: int, session_id: int) -> dict[str,
         checksum = hashlib.sha256(embedding_bytes).hexdigest()
 
         # Upsert to Qdrant
-        payload: dict[str, str] = {"path": asset.path}
+        payload: dict[str, str | int] = {"path": asset.path}
         if asset.created_at:
             payload["created_at"] = asset.created_at.isoformat()
+        if category_id is not None:
+            payload["category_id"] = category_id
 
         upsert_vector(
             asset_id=asset.id,

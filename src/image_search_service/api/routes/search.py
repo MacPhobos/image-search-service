@@ -67,11 +67,18 @@ async def search_assets(
 
     # Search Qdrant
     try:
+        # Build filters dict from request
+        search_filters: dict[str, str | int] = {}
+        if request.filters:
+            search_filters.update(request.filters)
+        if request.category_id is not None:
+            search_filters["category_id"] = request.category_id
+
         vector_results = search_vectors(
             query_vector=query_vector,
             limit=request.limit,
             offset=request.offset,
-            filters=request.filters,
+            filters=search_filters if search_filters else None,
             client=qdrant,
         )
     except Exception as e:

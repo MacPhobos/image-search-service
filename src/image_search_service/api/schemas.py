@@ -62,6 +62,7 @@ class SearchRequest(BaseModel):
     limit: int = 50
     offset: int = 0
     filters: dict[str, str] | None = None  # from_date, to_date
+    category_id: int | None = Field(None, alias="categoryId", description="Filter by category ID")
 
 
 class SearchResult(BaseModel):

@@ -64,6 +64,37 @@ class SubdirectoryStatus(str, Enum):
     FAILED = "failed"
 
 
+class Category(Base):
+    """Category model for organizing training sessions."""
+
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    color: Mapped[str | None] = mapped_column(String(7), nullable=True)  # Hex color like #3B82F6
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    training_sessions: Mapped[list["TrainingSession"]] = relationship(
+        "TrainingSession", back_populates="category"
+    )
+
+    __table_args__ = (
+        Index("idx_categories_name", "name"),
+        Index("idx_categories_is_default", "is_default"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Category(id={self.id}, name={self.name}, is_default={self.is_default})>"
+
+
 class ImageAsset(Base):
     """Image asset model storing metadata and file paths."""
 
@@ -122,6 +153,9 @@ class TrainingSession(Base):
         String(20), nullable=False, default=SessionStatus.PENDING.value
     )
     root_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    category_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
     config: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
 
     # Progress tracking
@@ -144,6 +178,9 @@ class TrainingSession(Base):
     )
 
     # Relationships
+    category: Mapped["Category | None"] = relationship(
+        "Category", back_populates="training_sessions"
+    )
     subdirectories: Mapped[list["TrainingSubdirectory"]] = relationship(
         "TrainingSubdirectory", back_populates="session", cascade="all, delete-orphan"
     )

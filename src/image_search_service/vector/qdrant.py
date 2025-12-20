@@ -7,6 +7,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchValue,
     PointStruct,
     Range,
     VectorParams,
@@ -57,13 +58,13 @@ def ensure_collection(embedding_dim: int) -> None:
         )
 
 
-def upsert_vector(asset_id: int, vector: list[float], payload: dict[str, str]) -> None:
+def upsert_vector(asset_id: int, vector: list[float], payload: dict[str, str | int]) -> None:
     """Upsert a vector point into Qdrant.
 
     Args:
         asset_id: Asset ID (used as point ID)
         vector: Embedding vector
-        payload: Additional metadata
+        payload: Additional metadata (strings and integers)
     """
     settings = get_settings()
     client = get_qdrant_client()
@@ -80,7 +81,7 @@ def search_vectors(
     query_vector: list[float],
     limit: int = 50,
     offset: int = 0,
-    filters: dict[str, str] | None = None,
+    filters: dict[str, str | int] | None = None,
     client: QdrantClient | None = None,
 ) -> list[dict[str, Any]]:
     """Search for similar vectors.
@@ -89,7 +90,7 @@ def search_vectors(
         query_vector: Query embedding vector
         limit: Maximum number of results
         offset: Offset for pagination
-        filters: Optional filters (from_date, to_date)
+        filters: Optional filters (from_date, to_date, category_id)
         client: Optional Qdrant client (uses default if not provided)
 
     Returns:
@@ -99,7 +100,7 @@ def search_vectors(
     if client is None:
         client = get_qdrant_client()
 
-    # Build filter if date range provided
+    # Build filter if date range or category_id provided
     qdrant_filter = None
     if filters:
         conditions: list[FieldCondition] = []
@@ -112,6 +113,10 @@ def search_vectors(
         if filters.get("to_date"):
             conditions.append(
                 FieldCondition(key="created_at", range=Range(lte=filters["to_date"]))  # type: ignore[arg-type]
+            )
+        if filters.get("category_id"):
+            conditions.append(
+                FieldCondition(key="category_id", match=MatchValue(value=filters["category_id"]))
             )
         if conditions:
             # Filter.must accepts various condition types, use type: ignore for simplicity
