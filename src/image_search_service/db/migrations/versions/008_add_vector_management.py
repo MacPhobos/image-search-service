@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column("deletion_target", sa.Text(), nullable=False),
         sa.Column("vector_count", sa.Integer(), nullable=False),
         sa.Column("deletion_reason", sa.Text(), nullable=True),
-        sa.Column("metadata_json", sa.JSON(), nullable=True),
+        sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

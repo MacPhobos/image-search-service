@@ -176,6 +176,10 @@ class TrainingSession(Base):
     paused_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reset_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     category: Mapped["Category | None"] = relationship(
@@ -324,4 +328,41 @@ class TrainingEvidence(Base):
         return (
             f"<TrainingEvidence(id={self.id}, "
             f"asset_id={self.asset_id}, model={self.model_name})>"
+        )
+
+
+class VectorDeletionLog(Base):
+    """Audit log for vector deletion operations."""
+
+    __tablename__ = "vector_deletion_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    deletion_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # DIRECTORY, ASSET, SESSION, CATEGORY, ORPHAN, FULL_RESET
+    deletion_target: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )  # Path prefix, asset_id, session_id, etc.
+    vector_count: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )  # Number of vectors deleted
+    deletion_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # Optional user-provided reason
+    metadata_json: Mapped[dict[str, object] | None] = mapped_column(
+        "metadata", JSON, nullable=True
+    )  # Additional context (column name "metadata", attribute name "metadata_json")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_vector_deletion_logs_deletion_type", "deletion_type"),
+        Index("idx_vector_deletion_logs_created_at", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<VectorDeletionLog(id={self.id}, "
+            f"type={self.deletion_type}, count={self.vector_count})>"
         )

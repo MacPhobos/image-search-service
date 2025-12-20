@@ -9,6 +9,7 @@ from image_search_service.api.routes.images import router as images_router
 from image_search_service.api.routes.search import router as search_router
 from image_search_service.api.routes.system import router as system_router
 from image_search_service.api.routes.training import router as training_router
+from image_search_service.api.routes.vectors import router as vectors_router
 
 router = APIRouter()
 
@@ -32,3 +33,4 @@ api_v1_router.include_router(search_router)
 api_v1_router.include_router(training_router)
 api_v1_router.include_router(evidence_router)
 api_v1_router.include_router(system_router)
+api_v1_router.include_router(vectors_router)
