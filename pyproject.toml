@@ -23,6 +23,7 @@ dependencies = [
     "insightface>=0.7.3",
     "onnxruntime-gpu>=1.16.0",
     "opencv-python>=4.8.0",
+    "hdbscan>=0.8.33",
 ]
 
 [project.optional-dependencies]
@@ -58,7 +59,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["rq.*", "qdrant_client.*", "open_clip.*", "torch.*", "PIL.*", "insightface.*", "onnxruntime.*", "cv2.*"]
+module = ["rq.*", "qdrant_client.*", "open_clip.*", "torch.*", "PIL.*", "insightface.*", "onnxruntime.*", "cv2.*", "hdbscan.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
