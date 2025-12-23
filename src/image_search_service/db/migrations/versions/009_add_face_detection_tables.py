@@ -21,11 +21,23 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # Create person_status enum
-    op.execute("CREATE TYPE person_status AS ENUM ('active', 'merged', 'hidden')")
+    # Create person_status enum (idempotent)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE person_status AS ENUM ('active', 'merged', 'hidden');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
 
-    # Create prototype_role enum
-    op.execute("CREATE TYPE prototype_role AS ENUM ('centroid', 'exemplar')")
+    # Create prototype_role enum (idempotent)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE prototype_role AS ENUM ('centroid', 'exemplar');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
 
     # Create persons table
     op.create_table(
@@ -183,6 +195,6 @@ def downgrade() -> None:
     # Drop persons table
     op.drop_table("persons")
 
-    # Drop enums
-    op.execute("DROP TYPE prototype_role")
-    op.execute("DROP TYPE person_status")
+    # Drop enums (idempotent)
+    op.execute("DROP TYPE IF EXISTS prototype_role")
+    op.execute("DROP TYPE IF EXISTS person_status")
