@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from image_search_service.api.vector_schemas import (
     AssetDeleteResponse,
@@ -142,17 +143,25 @@ async def retrain_directory(
     )
     db.add(new_session)
     await db.commit()
-    await db.refresh(new_session)
+
+    # Reload session with category relationship
+    query = (
+        select(TrainingSession)
+        .where(TrainingSession.id == new_session.id)
+        .options(selectinload(TrainingSession.category))
+    )
+    result = await db.execute(query)
+    refreshed_session = result.scalar_one()
 
     logger.info(
-        f"Retrain: deleted {deleted_count} vectors, created session {new_session.id} "
+        f"Retrain: deleted {deleted_count} vectors, created session {refreshed_session.id} "
         f"for '{request.path_prefix}'"
     )
 
     return RetrainResponse(
         pathPrefix=request.path_prefix,
         vectorsDeleted=deleted_count,
-        newSessionId=new_session.id,
+        newSessionId=refreshed_session.id,
         message=f"Deleted {deleted_count} vectors and created new training session",
     )
 

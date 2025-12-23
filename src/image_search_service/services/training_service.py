@@ -74,10 +74,14 @@ class TrainingService:
                 db.add(subdir)
 
         await db.commit()
-        await db.refresh(session)
+
+        # Refresh session with category relationship loaded
+        refreshed_session = await self.get_session(db, session.id)
+        if not refreshed_session:
+            raise ValueError(f"Failed to retrieve created session {session.id}")
 
         logger.info(f"Created training session {session.id}: {session.name}")
-        return session
+        return refreshed_session
 
     async def get_session(
         self, db: AsyncSession, session_id: int
