@@ -20,6 +20,9 @@ dependencies = [
     "pillow>=10.0.0",
     "psycopg2-binary>=2.9.9",
     "watchdog>=6.0.0",
+    "insightface>=0.7.3",
+    "onnxruntime-gpu>=1.16.0",
+    "opencv-python>=4.8.0",
 ]
 
 [project.optional-dependencies]
@@ -55,7 +58,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["rq.*", "qdrant_client.*", "open_clip.*", "torch.*", "PIL.*"]
+module = ["rq.*", "qdrant_client.*", "open_clip.*", "torch.*", "PIL.*", "insightface.*", "onnxruntime.*", "cv2.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
