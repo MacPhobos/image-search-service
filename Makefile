@@ -1,4 +1,5 @@
-.PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest
+.PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
+	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection faces-pipeline
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -43,3 +44,31 @@ ingest: ## Ingest images from directory (usage: make ingest DIR=/path/to/images)
 	curl -X POST http://localhost:8000/api/v1/assets/ingest \
 		-H "Content-Type: application/json" \
 		-d '{"rootPath": "$(DIR)", "recursive": true}'
+
+# Face detection and recognition targets
+faces-backfill: ## Backfill face detection for assets without faces
+	@echo "Running face backfill (limit=$(or $(LIMIT),1000))..."
+	uv run python -m image_search_service.scripts.cli faces backfill --limit $(or $(LIMIT),1000)
+
+faces-cluster: ## Cluster unlabeled faces using HDBSCAN
+	@echo "Running face clustering (max-faces=$(or $(MAX_FACES),50000))..."
+	uv run python -m image_search_service.scripts.cli faces cluster --max-faces $(or $(MAX_FACES),50000)
+
+faces-assign: ## Assign new faces to known persons
+	@echo "Running face assignment (max-faces=$(or $(MAX_FACES),1000))..."
+	uv run python -m image_search_service.scripts.cli faces assign --max-faces $(or $(MAX_FACES),1000)
+
+faces-centroids: ## Compute/update person centroid embeddings
+	@echo "Computing person centroids..."
+	uv run python -m image_search_service.scripts.cli faces centroids
+
+faces-stats: ## Show face detection and recognition statistics
+	@echo "Face pipeline statistics..."
+	uv run python -m image_search_service.scripts.cli faces stats
+
+faces-ensure-collection: ## Ensure Qdrant faces collection exists
+	@echo "Ensuring Qdrant faces collection..."
+	uv run python -m image_search_service.scripts.cli faces ensure-collection
+
+faces-pipeline: faces-ensure-collection faces-backfill faces-cluster faces-assign faces-centroids faces-stats ## Run full face detection pipeline
+	@echo "Face pipeline complete!"

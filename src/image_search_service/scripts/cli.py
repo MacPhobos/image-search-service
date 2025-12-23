@@ -5,7 +5,12 @@ import asyncio
 import typer
 from httpx import AsyncClient
 
+from image_search_service.scripts.faces import faces_app
+
 app = typer.Typer(help="Image Search Service CLI")
+
+# Register face commands subgroup
+app.add_typer(faces_app)
 
 
 @app.command()
