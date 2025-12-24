@@ -5,7 +5,7 @@ import uuid
 from typing import Optional
 
 import numpy as np
-from qdrant_client.models import FieldCondition, Filter, IsNullCondition, PayloadField, Range
+from qdrant_client.models import FieldCondition, Filter, IsEmptyCondition, PayloadField, Range
 from sqlalchemy import update
 from sqlalchemy.orm import Session as SyncSession
 
@@ -73,7 +73,7 @@ class FaceClusterer:
         while len(face_ids) < max_faces:
             # Build filter for unlabeled faces
             must_conditions = [
-                IsNullCondition(is_null=PayloadField(key="person_id")),
+                IsEmptyCondition(is_empty=PayloadField(key="person_id")),
                 FieldCondition(key="quality_score", range=Range(gte=quality_threshold)),
             ]
 

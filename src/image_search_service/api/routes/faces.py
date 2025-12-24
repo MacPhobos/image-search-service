@@ -1,7 +1,6 @@
 """Face detection and recognition API routes."""
 
 import logging
-from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,12 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.api.face_schemas import (
     BoundingBox,
+    BulkMoveRequest,
+    BulkMoveResponse,
+    BulkRemoveRequest,
+    BulkRemoveResponse,
     ClusterDetailResponse,
     ClusteringResultResponse,
     ClusterListResponse,
     ClusterSummary,
     DetectFacesRequest,
     DetectFacesResponse,
+    FaceInPhoto,
     FaceInstanceListResponse,
     FaceInstanceResponse,
     LabelClusterRequest,
@@ -23,12 +27,15 @@ from image_search_service.api.face_schemas import (
     MergePersonsRequest,
     MergePersonsResponse,
     PersonListResponse,
+    PersonPhotoGroup,
+    PersonPhotosResponse,
     PersonResponse,
     SplitClusterRequest,
     SplitClusterResponse,
     TriggerClusteringRequest,
 )
 from image_search_service.db.models import (
+    FaceAssignmentEvent,
     FaceInstance,
     ImageAsset,
     Person,
@@ -247,7 +254,7 @@ async def split_cluster(
 async def list_persons(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status: Optional[str] = Query(
+    status: str | None = Query(
         None, description="Filter by status: active, merged, hidden"
     ),
     db: AsyncSession = Depends(get_db),
@@ -296,6 +303,121 @@ async def list_persons(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/persons/{person_id}/photos", response_model=PersonPhotosResponse)
+async def get_person_photos(
+    person_id: UUID,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> PersonPhotosResponse:
+    """
+    Get photos containing faces assigned to this person, grouped by photo.
+
+    Returns photos with all faces in each photo, including faces belonging
+    to other persons or no person. This enables photo-level review workflow.
+    """
+    # Step 1: Verify person exists
+    person = await db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+
+    # Step 2: Get distinct asset_ids for photos containing this person's faces
+    asset_subquery = (
+        select(FaceInstance.asset_id)
+        .where(FaceInstance.person_id == person_id)
+        .distinct()
+        .subquery()
+    )
+
+    # Step 3: Count total photos
+    count_query = select(func.count()).select_from(asset_subquery)
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # Step 4: Get paginated asset IDs ordered by asset_id DESC
+    # (ideally we'd order by taken_at but that's not in ImageAsset model yet)
+    paginated_assets_query = (
+        select(ImageAsset.id)
+        .where(ImageAsset.id.in_(select(asset_subquery.c.asset_id)))
+        .order_by(ImageAsset.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    assets_result = await db.execute(paginated_assets_query)
+    asset_ids = [row[0] for row in assets_result.all()]
+
+    # Step 5: For each photo, get ALL faces (not just this person's)
+    # Build a dict mapping asset_id -> list of faces
+    if asset_ids:
+        faces_query = (
+            select(FaceInstance, Person.name)
+            .outerjoin(Person, FaceInstance.person_id == Person.id)
+            .where(FaceInstance.asset_id.in_(asset_ids))
+            .order_by(FaceInstance.asset_id, FaceInstance.bbox_x)
+        )
+        faces_result = await db.execute(faces_query)
+        faces_data = faces_result.all()
+
+        # Group faces by asset_id
+        faces_by_asset: dict[int, list[tuple[FaceInstance, str | None]]] = {}
+        for face, person_name in faces_data:
+            if face.asset_id not in faces_by_asset:
+                faces_by_asset[face.asset_id] = []
+            faces_by_asset[face.asset_id].append((face, person_name))
+    else:
+        faces_by_asset = {}
+
+    # Step 6: Build PersonPhotoGroup for each photo
+    items = []
+    for asset_id in asset_ids:
+        faces_in_photo = faces_by_asset.get(asset_id, [])
+
+        # Convert to FaceInPhoto schema
+        face_schemas = []
+        has_non_person_faces = False
+
+        for face, face_person_name in faces_in_photo:
+            face_schemas.append(
+                FaceInPhoto(
+                    face_instance_id=face.id,
+                    bbox_x=face.bbox_x,
+                    bbox_y=face.bbox_y,
+                    bbox_w=face.bbox_w,
+                    bbox_h=face.bbox_h,
+                    detection_confidence=face.detection_confidence,
+                    quality_score=face.quality_score,
+                    person_id=face.person_id,
+                    person_name=face_person_name,
+                    cluster_id=face.cluster_id,
+                )
+            )
+
+            # Check if this face belongs to a different person or no person
+            if face.person_id != person_id:
+                has_non_person_faces = True
+
+        items.append(
+            PersonPhotoGroup(
+                photo_id=asset_id,
+                taken_at=None,  # TODO: Add EXIF taken_at to ImageAsset model
+                thumbnail_url=f"/api/v1/images/{asset_id}/thumbnail",
+                full_url=f"/api/v1/images/{asset_id}/full",
+                faces=face_schemas,
+                face_count=len(face_schemas),
+                has_non_person_faces=has_non_person_faces,
+            )
+        )
+
+    return PersonPhotosResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        person_id=person_id,
+        person_name=person.name,
     )
 
 
@@ -353,6 +475,250 @@ async def merge_persons(
     )
 
 
+@router.post("/persons/{person_id}/photos/bulk-remove", response_model=BulkRemoveResponse)
+async def bulk_remove_from_person(
+    person_id: UUID,
+    request: BulkRemoveRequest,
+    db: AsyncSession = Depends(get_db),
+) -> BulkRemoveResponse:
+    """
+    Remove person assignment from all faces in selected photos.
+
+    Only affects faces currently assigned to the specified person.
+    Other faces in the same photos are not modified.
+    """
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # Step 1: Verify person exists
+    person = await db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+
+    # Handle empty photo_ids list
+    if not request.photo_ids:
+        return BulkRemoveResponse(
+            updated_faces=0,
+            updated_photos=0,
+            skipped_faces=0,
+        )
+
+    # Step 2: Find faces in selected photos that belong to this person
+    query = select(FaceInstance).where(
+        FaceInstance.asset_id.in_(request.photo_ids),
+        FaceInstance.person_id == person_id,
+    )
+    result = await db.execute(query)
+    faces = result.scalars().all()
+
+    if not faces:
+        # No faces matched - all were already unassigned or belong to other persons
+        return BulkRemoveResponse(
+            updated_faces=0,
+            updated_photos=0,
+            skipped_faces=0,
+        )
+
+    # Step 3: Update database - set person_id to None
+    face_ids = []
+    qdrant_point_ids = []
+    affected_photo_ids = set()
+
+    for face in faces:
+        face.person_id = None
+        face_ids.append(face.id)
+        qdrant_point_ids.append(face.qdrant_point_id)
+        affected_photo_ids.add(face.asset_id)
+
+    try:
+        # Step 4: Update Qdrant payloads (remove person_id)
+        qdrant = get_face_qdrant_client()
+        qdrant.update_person_ids(qdrant_point_ids, None)
+
+        # Step 5: Create audit event
+        event = FaceAssignmentEvent(
+            operation="REMOVE_FROM_PERSON",
+            from_person_id=person_id,
+            to_person_id=None,
+            affected_photo_ids=list(affected_photo_ids),
+            affected_face_instance_ids=[str(fid) for fid in face_ids],
+            face_count=len(faces),
+            photo_count=len(affected_photo_ids),
+            actor=None,
+            note=f"Bulk remove from {len(request.photo_ids)} selected photos",
+        )
+        db.add(event)
+
+        await db.commit()
+
+        logger.info(
+            f"Bulk removed {len(faces)} faces from person {person.name} "
+            f"in {len(affected_photo_ids)} photos"
+        )
+
+        return BulkRemoveResponse(
+            updated_faces=len(faces),
+            updated_photos=len(affected_photo_ids),
+            skipped_faces=0,
+        )
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to bulk remove faces from person {person_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to remove faces: {str(e)}")
+
+
+@router.post("/persons/{person_id}/photos/bulk-move", response_model=BulkMoveResponse)
+async def bulk_move_to_person(
+    person_id: UUID,
+    request: BulkMoveRequest,
+    db: AsyncSession = Depends(get_db),
+) -> BulkMoveResponse:
+    """
+    Move faces from one person to another.
+
+    Only affects faces currently assigned to the specified person.
+    Creates a new person if to_person_name is provided.
+    """
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # Step 1: Verify source person exists
+    source_person = await db.get(Person, person_id)
+    if not source_person:
+        raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+
+    # Handle empty photo_ids list
+    if not request.photo_ids:
+        # Still need to determine target person for response
+        if request.to_person_id:
+            target_person = await db.get(Person, request.to_person_id)
+            if not target_person:
+                raise HTTPException(
+                    status_code=404, detail=f"Target person {request.to_person_id} not found"
+                )
+            return BulkMoveResponse(
+                to_person_id=target_person.id,
+                to_person_name=target_person.name,
+                updated_faces=0,
+                updated_photos=0,
+                skipped_faces=0,
+                person_created=False,
+            )
+        else:
+            # Create new person even with no faces to move
+            target_person = Person(name=request.to_person_name)
+            db.add(target_person)
+            await db.flush()
+            return BulkMoveResponse(
+                to_person_id=target_person.id,
+                to_person_name=target_person.name,
+                updated_faces=0,
+                updated_photos=0,
+                skipped_faces=0,
+                person_created=True,
+            )
+
+    # Step 2: Resolve destination person
+    person_created = False
+    if request.to_person_id:
+        # Use existing person
+        target_person = await db.get(Person, request.to_person_id)
+        if not target_person:
+            raise HTTPException(
+                status_code=404, detail=f"Target person {request.to_person_id} not found"
+            )
+    else:
+        # Create new person (case-insensitive check for existing name)
+        # Validator ensures to_person_name is not None here, but mypy needs explicit check
+        if not request.to_person_name:
+            raise HTTPException(
+                status_code=422,
+                detail="to_person_name must be provided when to_person_id is not set",
+            )
+
+        person_query = select(Person).where(
+            func.lower(Person.name) == request.to_person_name.lower()
+        )
+        person_result = await db.execute(person_query)
+        target_person = person_result.scalar_one_or_none()
+
+        if not target_person:
+            target_person = Person(name=request.to_person_name)
+            db.add(target_person)
+            await db.flush()
+            person_created = True
+            logger.info(f"Created new person: {target_person.name} ({target_person.id})")
+
+    # Step 3: Find faces in selected photos that belong to source person
+    query = select(FaceInstance).where(
+        FaceInstance.asset_id.in_(request.photo_ids),
+        FaceInstance.person_id == person_id,
+    )
+    result = await db.execute(query)
+    faces = result.scalars().all()
+
+    if not faces:
+        # No faces matched
+        return BulkMoveResponse(
+            to_person_id=target_person.id,
+            to_person_name=target_person.name,
+            updated_faces=0,
+            updated_photos=0,
+            skipped_faces=0,
+            person_created=person_created,
+        )
+
+    # Step 4: Update database - move faces to target person
+    face_ids = []
+    qdrant_point_ids = []
+    affected_photo_ids = set()
+
+    for face in faces:
+        face.person_id = target_person.id
+        face_ids.append(face.id)
+        qdrant_point_ids.append(face.qdrant_point_id)
+        affected_photo_ids.add(face.asset_id)
+
+    try:
+        # Step 5: Update Qdrant payloads
+        qdrant = get_face_qdrant_client()
+        qdrant.update_person_ids(qdrant_point_ids, target_person.id)
+
+        # Step 6: Create audit event
+        event = FaceAssignmentEvent(
+            operation="MOVE_TO_PERSON",
+            from_person_id=person_id,
+            to_person_id=target_person.id,
+            affected_photo_ids=list(affected_photo_ids),
+            affected_face_instance_ids=[str(fid) for fid in face_ids],
+            face_count=len(faces),
+            photo_count=len(affected_photo_ids),
+            actor=None,
+            note=f"Bulk move from {len(request.photo_ids)} selected photos",
+        )
+        db.add(event)
+
+        await db.commit()
+
+        logger.info(
+            f"Bulk moved {len(faces)} faces from {source_person.name} to {target_person.name} "
+            f"in {len(affected_photo_ids)} photos"
+        )
+
+        return BulkMoveResponse(
+            to_person_id=target_person.id,
+            to_person_name=target_person.name,
+            updated_faces=len(faces),
+            updated_photos=len(affected_photo_ids),
+            skipped_faces=0,
+            person_created=person_created,
+        )
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to bulk move faces from person {person_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to move faces: {str(e)}")
+
+
 # ============ Face Detection Endpoints ============
 
 
@@ -375,6 +741,8 @@ async def detect_faces_in_asset(
     with get_sync_session() as sync_db:
         service = get_face_service(sync_db)
         sync_asset = sync_db.get(ImageAsset, asset_id)
+        if not sync_asset:
+            raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
 
         faces = service.process_asset(
             sync_asset,

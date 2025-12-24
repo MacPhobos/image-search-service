@@ -401,7 +401,12 @@ class Person(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[PersonStatus] = mapped_column(
-        SQLEnum(PersonStatus, name="person_status", create_type=True),
+        SQLEnum(
+            PersonStatus,
+            name="person_status",
+            create_type=False,  # We create it in migration
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
         default=PersonStatus.ACTIVE,
     )
@@ -534,7 +539,12 @@ class PersonPrototype(Base):
         UUID(as_uuid=True), nullable=False
     )
     role: Mapped[PrototypeRole] = mapped_column(
-        SQLEnum(PrototypeRole, name="prototype_role", create_type=True),
+        SQLEnum(
+            PrototypeRole,
+            name="prototype_role",
+            create_type=False,  # We create it in migration
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -551,4 +561,53 @@ class PersonPrototype(Base):
         return (
             f"<PersonPrototype(id={self.id}, person_id={self.person_id}, "
             f"role={self.role})>"
+        )
+
+
+class FaceAssignmentEvent(Base):
+    """Audit log for face assignment changes and person management operations."""
+
+    __tablename__ = "face_assignment_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    operation: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # REMOVE_FROM_PERSON, MOVE_TO_PERSON
+    from_person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("persons.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    to_person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("persons.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    affected_photo_ids: Mapped[list[int] | None] = mapped_column(
+        JSONB, nullable=True
+    )  # Array of asset_ids
+    affected_face_instance_ids: Mapped[list[str] | None] = mapped_column(
+        JSONB, nullable=True
+    )  # Array of UUIDs as strings
+    face_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    photo_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_face_assignment_events_created_at", "created_at"),
+        Index("ix_face_assignment_events_operation", "operation"),
+        Index("ix_face_assignment_events_from_person_id", "from_person_id"),
+        Index("ix_face_assignment_events_to_person_id", "to_person_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<FaceAssignmentEvent(id={self.id}, operation={self.operation}, "
+            f"face_count={self.face_count})>"
         )

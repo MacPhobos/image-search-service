@@ -344,24 +344,33 @@ class FaceQdrantClient:
     def update_person_ids(
         self,
         point_ids: list[uuid.UUID],
-        person_id: uuid.UUID,
+        person_id: uuid.UUID | None,
     ) -> None:
         """Bulk update person_id for multiple faces.
 
         Args:
             point_ids: List of face point IDs
-            person_id: Person UUID to assign
+            person_id: Person UUID to assign, or None to remove assignment
         """
         if not point_ids:
             return
 
         try:
-            self.client.set_payload(
-                collection_name=FACE_COLLECTION_NAME,
-                payload={"person_id": str(person_id)},
-                points=[str(point_id) for point_id in point_ids],
-            )
-            logger.info(f"Updated person_id to {person_id} for {len(point_ids)} faces")
+            # Use delete_payload to remove person_id if None
+            if person_id is None:
+                self.client.delete_payload(
+                    collection_name=FACE_COLLECTION_NAME,
+                    keys=["person_id"],
+                    points=[str(point_id) for point_id in point_ids],
+                )
+                logger.info(f"Removed person_id from {len(point_ids)} faces")
+            else:
+                self.client.set_payload(
+                    collection_name=FACE_COLLECTION_NAME,
+                    payload={"person_id": str(person_id)},
+                    points=[str(point_id) for point_id in point_ids],
+                )
+                logger.info(f"Updated person_id to {person_id} for {len(point_ids)} faces")
 
         except Exception as e:
             logger.error(f"Failed to update person_ids: {e}")

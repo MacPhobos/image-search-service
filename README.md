@@ -117,6 +117,46 @@ make test
 
 psql "postgresql://image-search:somepassword@localhost:5432/image-search"
 
+
+##
+
+Commands to Run
+
+cd /export/workspace/image-search/image-search-service
+
+# 1. Install dependencies
+uv sync --dev
+
+# 2. Run database migration
+make migrate
+
+# 3. Ensure Qdrant collection exists
+make faces-ensure-collection
+
+# 4. Run face backfill on existing assets
+make faces-backfill LIMIT=100
+
+# 5. Cluster unlabeled faces
+make faces-cluster MAX_FACES=10000
+
+# 6. Label a cluster via API
+curl -X POST http://localhost:8000/api/v1/faces/clusters/clu_abc123def456/label \
+-H "Content-Type: application/json" \
+-d '{"name": "Alice"}'
+
+# 7. Run incremental assignment
+make faces-assign MAX_FACES=500
+
+# 8. View statistics
+make faces-stats
+
+🔄 Full Pipeline (Single Command)
+
+make faces-pipeline
+
+This runs: ensure-collection → backfill → cluster → assign → centroids → stats
+
+
 ## License
 
 See LICENSE file.

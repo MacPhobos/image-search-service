@@ -266,7 +266,12 @@ def show_stats() -> None:
     """
     from sqlalchemy import func, select
 
-    from image_search_service.db.models import FaceInstance, Person, PersonPrototype
+    from image_search_service.db.models import (
+        FaceInstance,
+        Person,
+        PersonPrototype,
+        PersonStatus,
+    )
     from image_search_service.db.sync_operations import get_sync_session
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
@@ -299,7 +304,7 @@ def show_stats() -> None:
         )
         active_persons = (
             db_session.execute(
-                select(func.count(Person.id)).where(Person.status == "active")
+                select(func.count(Person.id)).where(Person.status == PersonStatus.ACTIVE)
             ).scalar()
             or 0
         )

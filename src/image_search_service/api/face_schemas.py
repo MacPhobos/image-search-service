@@ -1,10 +1,9 @@
 """Pydantic schemas for face detection and recognition APIs."""
 
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def to_camel(string: str) -> str:
@@ -48,10 +47,10 @@ class FaceInstanceResponse(CamelCaseModel):
     asset_id: int
     bbox: BoundingBox
     detection_confidence: float
-    quality_score: Optional[float] = None
-    cluster_id: Optional[str] = None
-    person_id: Optional[UUID] = None
-    person_name: Optional[str] = None
+    quality_score: float | None = None
+    cluster_id: str | None = None
+    person_id: UUID | None = None
+    person_name: str | None = None
     created_at: datetime
 
 
@@ -70,9 +69,9 @@ class ClusterSummary(CamelCaseModel):
     cluster_id: str
     face_count: int
     sample_face_ids: list[UUID]
-    avg_quality: Optional[float] = None
-    person_id: Optional[UUID] = None
-    person_name: Optional[str] = None
+    avg_quality: float | None = None
+    person_id: UUID | None = None
+    person_name: str | None = None
 
 
 class ClusterListResponse(CamelCaseModel):
@@ -89,8 +88,8 @@ class ClusterDetailResponse(CamelCaseModel):
 
     cluster_id: str
     faces: list[FaceInstanceResponse]
-    person_id: Optional[UUID] = None
-    person_name: Optional[str] = None
+    person_id: UUID | None = None
+    person_name: str | None = None
 
 
 class PersonResponse(CamelCaseModel):
@@ -187,3 +186,83 @@ class DetectFacesResponse(CamelCaseModel):
     asset_id: int
     faces_detected: int
     face_ids: list[UUID]
+
+
+class FaceInPhoto(CamelCaseModel):
+    """Face instance info for photo grouping."""
+
+    face_instance_id: UUID
+    bbox_x: int
+    bbox_y: int
+    bbox_w: int
+    bbox_h: int
+    detection_confidence: float
+    quality_score: float | None = None
+    person_id: UUID | None = None
+    person_name: str | None = None
+    cluster_id: str | None = None
+
+
+class PersonPhotoGroup(CamelCaseModel):
+    """A photo with its faces, grouped for person review."""
+
+    photo_id: int  # asset_id
+    taken_at: datetime | None = None  # from EXIF if available
+    thumbnail_url: str
+    full_url: str
+    faces: list[FaceInPhoto]
+    face_count: int
+    has_non_person_faces: bool  # True if any face in photo has different/no person_id
+
+
+class PersonPhotosResponse(CamelCaseModel):
+    """Paginated response for person's photos."""
+
+    items: list[PersonPhotoGroup]
+    total: int
+    page: int
+    page_size: int
+    person_id: UUID
+    person_name: str
+
+
+class BulkRemoveRequest(CamelCaseModel):
+    """Request to remove person assignment from faces in selected photos."""
+
+    photo_ids: list[int]  # asset_ids
+
+
+class BulkRemoveResponse(CamelCaseModel):
+    """Response from bulk remove operation."""
+
+    updated_faces: int
+    updated_photos: int
+    skipped_faces: int  # faces that didn't match (already unassigned)
+
+
+class BulkMoveRequest(CamelCaseModel):
+    """Request to move faces from one person to another."""
+
+    photo_ids: list[int]  # asset_ids
+    to_person_id: UUID | None = None  # existing person
+    to_person_name: str | None = None  # create new person if provided
+
+    @model_validator(mode='after')
+    def validate_destination(self) -> 'BulkMoveRequest':
+        """Validate that either to_person_id or to_person_name is provided."""
+        if not self.to_person_id and not self.to_person_name:
+            raise ValueError("Either to_person_id or to_person_name must be provided")
+        if self.to_person_id and self.to_person_name:
+            raise ValueError("Provide either to_person_id or to_person_name, not both")
+        return self
+
+
+class BulkMoveResponse(CamelCaseModel):
+    """Response from bulk move operation."""
+
+    to_person_id: UUID
+    to_person_name: str
+    updated_faces: int
+    updated_photos: int
+    skipped_faces: int
+    person_created: bool  # True if new person was created

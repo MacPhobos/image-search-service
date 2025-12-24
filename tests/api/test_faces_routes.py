@@ -165,6 +165,132 @@ class TestPersonEndpoints:
 
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_get_person_photos_not_found(self, test_client):
+        """Test getting photos for non-existent person."""
+        fake_id = str(uuid.uuid4())
+        response = await test_client.get(f"/api/v1/faces/persons/{fake_id}/photos")
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_get_person_photos_empty(self, test_client, db_session, mock_person):
+        """Test getting photos for person with no faces."""
+        response = await test_client.get(f"/api/v1/faces/persons/{mock_person.id}/photos")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == []
+        assert data["total"] == 0
+        assert data["page"] == 1
+        assert data["personId"] == str(mock_person.id)
+        assert data["personName"] == mock_person.name
+
+    @pytest.mark.asyncio
+    async def test_get_person_photos_success(self, test_client, db_session, mock_person, mock_image_asset):
+        """Test getting photos for person with faces."""
+        from image_search_service.db.models import FaceInstance
+
+        # Create 2 faces for the person in the same photo
+        face1 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=100,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.95,
+            quality_score=0.85,
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        face2 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=300,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.92,
+            quality_score=0.78,
+            qdrant_point_id=uuid.uuid4(),
+            person_id=None,  # Unlabeled face
+        )
+        db_session.add(face1)
+        db_session.add(face2)
+        await db_session.commit()
+
+        response = await test_client.get(f"/api/v1/faces/persons/{mock_person.id}/photos")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["items"]) == 1
+
+        photo = data["items"][0]
+        assert photo["photoId"] == mock_image_asset.id
+        assert photo["faceCount"] == 2
+        assert photo["hasNonPersonFaces"] is True  # face2 has no person_id
+        assert len(photo["faces"]) == 2
+        assert photo["thumbnailUrl"] == f"/api/v1/images/{mock_image_asset.id}/thumbnail"
+        assert photo["fullUrl"] == f"/api/v1/images/{mock_image_asset.id}/full"
+
+    @pytest.mark.asyncio
+    async def test_get_person_photos_pagination(self, test_client, db_session, mock_person):
+        """Test pagination of person photos."""
+        from image_search_service.db.models import FaceInstance, ImageAsset
+
+        # Create 3 different photos with faces for this person
+        for i in range(3):
+            asset = ImageAsset(
+                path=f"/test/photo_{i}.jpg",
+                training_status="pending",
+            )
+            db_session.add(asset)
+            await db_session.flush()
+
+            face = FaceInstance(
+                id=uuid.uuid4(),
+                asset_id=asset.id,
+                bbox_x=100,
+                bbox_y=100,
+                bbox_w=80,
+                bbox_h=80,
+                detection_confidence=0.95,
+                quality_score=0.85,
+                qdrant_point_id=uuid.uuid4(),
+                person_id=mock_person.id,
+            )
+            db_session.add(face)
+
+        await db_session.commit()
+
+        # Get first page with page_size=2
+        response = await test_client.get(
+            f"/api/v1/faces/persons/{mock_person.id}/photos",
+            params={"page": 1, "page_size": 2}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 3
+        assert len(data["items"]) == 2
+        assert data["page"] == 1
+        assert data["pageSize"] == 2
+
+        # Get second page
+        response = await test_client.get(
+            f"/api/v1/faces/persons/{mock_person.id}/photos",
+            params={"page": 2, "page_size": 2}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 3
+        assert len(data["items"]) == 1
+        assert data["page"] == 2
+
 
 class TestFaceDetectionEndpoints:
     """Tests for face detection API endpoints."""
@@ -306,6 +432,233 @@ class TestPrototypeEndpoints:
         )
 
         assert response.status_code == 404
+
+
+class TestBulkOperations:
+    """Tests for bulk face assignment operations."""
+
+    @pytest.mark.asyncio
+    async def test_bulk_remove_person_not_found(self, test_client):
+        """Test bulk remove with non-existent person."""
+        fake_id = str(uuid.uuid4())
+        response = await test_client.post(
+            f"/api/v1/faces/persons/{fake_id}/photos/bulk-remove",
+            json={"photoIds": [1, 2, 3]}
+        )
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_bulk_remove_empty_photo_ids(self, test_client, db_session, mock_person):
+        """Test bulk remove with empty photo list."""
+        response = await test_client.post(
+            f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-remove",
+            json={"photoIds": []}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["updatedFaces"] == 0
+        assert data["updatedPhotos"] == 0
+        assert data["skippedFaces"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bulk_remove_no_matching_faces(self, test_client, db_session, mock_person, mock_image_asset):
+        """Test bulk remove when no faces match."""
+        # Photo exists but has no faces from this person
+        response = await test_client.post(
+            f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-remove",
+            json={"photoIds": [mock_image_asset.id]}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["updatedFaces"] == 0
+        assert data["updatedPhotos"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bulk_remove_success(self, test_client, db_session, mock_person, mock_image_asset):
+        """Test successful bulk remove operation."""
+        from image_search_service.db.models import FaceInstance
+        from unittest.mock import patch
+
+        # Create 2 faces for the person
+        face1 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=100,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.95,
+            quality_score=0.85,
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        face2 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=300,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.92,
+            quality_score=0.78,
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        db_session.add(face1)
+        db_session.add(face2)
+        await db_session.commit()
+
+        # Mock Qdrant update
+        with patch("image_search_service.api.routes.faces.get_face_qdrant_client") as mock_qdrant:
+            mock_qdrant.return_value.update_person_ids.return_value = None
+
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-remove",
+                json={"photoIds": [mock_image_asset.id]}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["updatedFaces"] == 2
+            assert data["updatedPhotos"] == 1
+
+            # Verify Qdrant was called with None
+            mock_qdrant.return_value.update_person_ids.assert_called_once()
+            call_args = mock_qdrant.return_value.update_person_ids.call_args
+            assert call_args[0][1] is None  # person_id should be None
+
+    @pytest.mark.asyncio
+    async def test_bulk_move_person_not_found(self, test_client):
+        """Test bulk move with non-existent source person."""
+        fake_id = str(uuid.uuid4())
+        response = await test_client.post(
+            f"/api/v1/faces/persons/{fake_id}/photos/bulk-move",
+            json={"photoIds": [1, 2], "toPersonName": "New Person"}
+        )
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_bulk_move_missing_destination(self, test_client, db_session, mock_person):
+        """Test bulk move without destination person."""
+        response = await test_client.post(
+            f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
+            json={"photoIds": [1, 2]}  # Missing both toPersonId and toPersonName
+        )
+
+        # Should return validation error
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_bulk_move_both_destinations(self, test_client, db_session, mock_person):
+        """Test bulk move with both toPersonId and toPersonName."""
+        response = await test_client.post(
+            f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
+            json={
+                "photoIds": [1, 2],
+                "toPersonId": str(uuid.uuid4()),
+                "toPersonName": "New Person"
+            }
+        )
+
+        # Should return validation error
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_bulk_move_to_nonexistent_person(self, test_client, db_session, mock_person):
+        """Test bulk move to non-existent target person."""
+        fake_target_id = str(uuid.uuid4())
+        response = await test_client.post(
+            f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
+            json={"photoIds": [1, 2], "toPersonId": fake_target_id}
+        )
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_bulk_move_create_new_person(self, test_client, db_session, mock_person, mock_image_asset):
+        """Test bulk move creating a new person."""
+        from image_search_service.db.models import FaceInstance
+        from unittest.mock import patch
+
+        # Create a face for the source person
+        face = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=100,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.95,
+            quality_score=0.85,
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        db_session.add(face)
+        await db_session.commit()
+
+        # Mock Qdrant update
+        with patch("image_search_service.api.routes.faces.get_face_qdrant_client") as mock_qdrant:
+            mock_qdrant.return_value.update_person_ids.return_value = None
+
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
+                json={"photoIds": [mock_image_asset.id], "toPersonName": "New Person"}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["toPersonName"] == "New Person"
+            assert data["updatedFaces"] == 1
+            assert data["updatedPhotos"] == 1
+            assert data["personCreated"] is True
+
+    @pytest.mark.asyncio
+    async def test_bulk_move_to_existing_person(self, test_client, db_session, mock_person, mock_image_asset):
+        """Test bulk move to existing person."""
+        from image_search_service.db.models import FaceInstance, Person
+        from unittest.mock import patch
+
+        # Create target person
+        target_person = Person(name="Target Person")
+        db_session.add(target_person)
+        await db_session.flush()
+
+        # Create a face for the source person
+        face = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=100,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.95,
+            quality_score=0.85,
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        db_session.add(face)
+        await db_session.commit()
+
+        # Mock Qdrant update
+        with patch("image_search_service.api.routes.faces.get_face_qdrant_client") as mock_qdrant:
+            mock_qdrant.return_value.update_person_ids.return_value = None
+
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
+                json={"photoIds": [mock_image_asset.id], "toPersonId": str(target_person.id)}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["toPersonId"] == str(target_person.id)
+            assert data["toPersonName"] == "Target Person"
+            assert data["updatedFaces"] == 1
+            assert data["updatedPhotos"] == 1
+            assert data["personCreated"] is False
 
 
 class TestClusteringWorkflow:
