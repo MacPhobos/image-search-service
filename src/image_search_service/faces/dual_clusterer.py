@@ -366,19 +366,24 @@ class DualModeClusterer:
             return None
 
     def _cluster_hdbscan(self, embeddings: npt.NDArray[np.float64]) -> npt.NDArray[np.int64]:
-        """Cluster using HDBSCAN."""
+        """Cluster using HDBSCAN with cosine distance."""
         try:
             import hdbscan
         except ImportError:
             logger.error("hdbscan not installed. Run: pip install hdbscan")
             raise
 
+        from sklearn.metrics.pairwise import cosine_distances
+
+        # Compute pairwise cosine distances (precomputed metric)
+        distance_matrix = cosine_distances(embeddings)
+
         clusterer = hdbscan.HDBSCAN(
             min_cluster_size=self.unknown_min_cluster_size,
-            metric="cosine",
+            metric="precomputed",
             cluster_selection_method="eom",
         )
-        return clusterer.fit_predict(embeddings)  # type: ignore[no-any-return]
+        return clusterer.fit_predict(distance_matrix)  # type: ignore[no-any-return]
 
     def _cluster_dbscan(self, embeddings: npt.NDArray[np.float64]) -> npt.NDArray[np.int64]:
         """Cluster using DBSCAN."""
