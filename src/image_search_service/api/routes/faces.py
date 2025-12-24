@@ -8,6 +8,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.api.face_schemas import (
+    AssignFaceRequest,
+    AssignFaceResponse,
     BoundingBox,
     BulkMoveRequest,
     BulkMoveResponse,
@@ -17,6 +19,8 @@ from image_search_service.api.face_schemas import (
     ClusteringResultResponse,
     ClusterListResponse,
     ClusterSummary,
+    CreatePersonRequest,
+    CreatePersonResponse,
     DetectFacesRequest,
     DetectFacesResponse,
     FaceInPhoto,
@@ -303,6 +307,39 @@ async def list_persons(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.post("/persons", response_model=CreatePersonResponse, status_code=201)
+async def create_person(
+    request: CreatePersonRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CreatePersonResponse:
+    """Create a new person entity."""
+    # Check for existing person with same name (case-insensitive)
+    person_query = select(Person).where(func.lower(Person.name) == request.name.lower())
+    person_result = await db.execute(person_query)
+    existing_person = person_result.scalar_one_or_none()
+
+    if existing_person:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Person with name '{request.name}' already exists",
+        )
+
+    # Create new person
+    person = Person(name=request.name)
+    db.add(person)
+    await db.commit()
+    await db.refresh(person)
+
+    logger.info(f"Created new person: {person.name} ({person.id})")
+
+    return CreatePersonResponse(
+        id=person.id,
+        name=person.name,
+        status=person.status.value,
+        created_at=person.created_at,
     )
 
 
@@ -799,6 +836,68 @@ async def get_faces_for_asset(
         page=1,
         page_size=len(faces),
     )
+
+
+@router.post("/faces/{face_id}/assign", response_model=AssignFaceResponse)
+async def assign_face_to_person(
+    face_id: UUID,
+    request: AssignFaceRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AssignFaceResponse:
+    """Assign a single face instance to a person."""
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # Get face instance from DB
+    face = await db.get(FaceInstance, face_id)
+    if not face:
+        raise HTTPException(status_code=404, detail=f"Face {face_id} not found")
+
+    # Get target person from DB
+    person = await db.get(Person, request.person_id)
+    if not person:
+        raise HTTPException(
+            status_code=404, detail=f"Person {request.person_id} not found"
+        )
+
+    # Track previous assignment for audit log
+    previous_person_id = face.person_id
+
+    # Update face.person_id to new person
+    face.person_id = person.id
+
+    try:
+        # Update Qdrant payload with new person_id
+        qdrant = get_face_qdrant_client()
+        qdrant.update_person_ids([face.qdrant_point_id], person.id)
+
+        # Create audit event
+        event = FaceAssignmentEvent(
+            operation="ASSIGN_TO_PERSON",
+            from_person_id=previous_person_id,
+            to_person_id=person.id,
+            affected_photo_ids=[face.asset_id],
+            affected_face_instance_ids=[str(face.id)],
+            face_count=1,
+            photo_count=1,
+            actor=None,
+            note=f"Single face assignment to {person.name}",
+        )
+        db.add(event)
+
+        await db.commit()
+
+        logger.info(f"Assigned face {face_id} to person {person.name} ({person.id})")
+
+        return AssignFaceResponse(
+            face_id=face.id,
+            person_id=person.id,
+            person_name=person.name,
+        )
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to assign face {face_id} to person {request.person_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to assign face: {str(e)}")
 
 
 # ============ Helper Functions ============

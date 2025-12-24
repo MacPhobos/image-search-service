@@ -48,7 +48,7 @@ ingest: ## Ingest images from directory (usage: make ingest DIR=/path/to/images)
 # Face detection and recognition targets
 faces-backfill: ## Backfill face detection for assets without faces
 	@echo "Running face backfill (limit=$(or $(LIMIT),1000))..."
-	uv run python -m image_search_service.scripts.cli faces backfill --limit $(or $(LIMIT),1000)
+	uv run python -m image_search_service.scripts.cli faces backfill --limit $(or $(LIMIT),5000)
 
 faces-cluster: ## Cluster unlabeled faces using HDBSCAN
 	@echo "Running face clustering (max-faces=$(or $(MAX_FACES),50000))..."
@@ -56,7 +56,7 @@ faces-cluster: ## Cluster unlabeled faces using HDBSCAN
 
 faces-assign: ## Assign new faces to known persons
 	@echo "Running face assignment (max-faces=$(or $(MAX_FACES),1000))..."
-	uv run python -m image_search_service.scripts.cli faces assign --max-faces $(or $(MAX_FACES),1000)
+	uv run python -m image_search_service.scripts.cli faces assign --max-faces $(or $(MAX_FACES),5000)
 
 faces-centroids: ## Compute/update person centroid embeddings
 	@echo "Computing person centroids..."

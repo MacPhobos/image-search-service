@@ -266,3 +266,32 @@ class BulkMoveResponse(CamelCaseModel):
     updated_photos: int
     skipped_faces: int
     person_created: bool  # True if new person was created
+
+
+class CreatePersonRequest(CamelCaseModel):
+    """Request to create a new person."""
+
+    name: str = Field(min_length=1, max_length=255)
+
+
+class CreatePersonResponse(CamelCaseModel):
+    """Response from creating a person."""
+
+    id: UUID
+    name: str
+    status: str
+    created_at: datetime
+
+
+class AssignFaceRequest(CamelCaseModel):
+    """Request to assign a face to a person."""
+
+    person_id: UUID
+
+
+class AssignFaceResponse(CamelCaseModel):
+    """Response from assigning a face."""
+
+    face_id: UUID
+    person_id: UUID
+    person_name: str

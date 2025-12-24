@@ -134,7 +134,7 @@ make migrate
 make faces-ensure-collection
 
 # 4. Run face backfill on existing assets
-make faces-backfill LIMIT=100
+make faces-backfill LIMIT=10000
 
 # 5. Cluster unlabeled faces
 make faces-cluster MAX_FACES=10000
