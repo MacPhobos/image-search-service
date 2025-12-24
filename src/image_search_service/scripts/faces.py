@@ -2,7 +2,6 @@
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 import typer
 
@@ -81,7 +80,7 @@ def cluster_faces(
     max_faces: int = typer.Option(50000, help="Maximum faces to cluster"),
     min_cluster_size: int = typer.Option(5, help="HDBSCAN min_cluster_size"),
     min_samples: int = typer.Option(3, help="HDBSCAN min_samples"),
-    time_bucket: Optional[str] = typer.Option(None, help="Filter by YYYY-MM"),
+    time_bucket: str | None = typer.Option(None, help="Filter by YYYY-MM"),
     queue: bool = typer.Option(False, help="Run as background job"),
 ) -> None:
     """Cluster unlabeled faces using HDBSCAN.
@@ -137,7 +136,7 @@ def cluster_faces(
 
 @faces_app.command("assign")
 def assign_faces(
-    since: Optional[str] = typer.Option(
+    since: str | None = typer.Option(
         None, help="Only faces created after YYYY-MM-DD"
     ),
     max_faces: int = typer.Option(1000, help="Maximum faces to process"),
@@ -255,6 +254,50 @@ def ensure_qdrant_collection() -> None:
         typer.echo(f"Points: {info.get('points_count', 0)}")
     else:
         typer.echo("Collection created successfully")
+
+
+@faces_app.command("cluster-dual")
+def cluster_faces_dual(
+    person_threshold: float = typer.Option(0.7, help="Person match threshold (0-1)"),
+    unknown_method: str = typer.Option("hdbscan", help="Unknown clustering method"),
+    unknown_min_size: int = typer.Option(3, help="Min cluster size for unknown"),
+    unknown_eps: float = typer.Option(0.5, help="Distance threshold for DBSCAN/Agglomerative"),
+    max_faces: int | None = typer.Option(None, help="Max faces to process"),
+    queue: bool = typer.Option(False, help="Run as background job"),
+) -> None:
+    """Run dual-mode clustering (supervised + unsupervised).
+
+    Example:
+        faces cluster-dual --person-threshold 0.75 --unknown-method hdbscan
+    """
+    if queue:
+        # Note: cluster_dual_job needs to be implemented in queue/face_jobs.py
+        typer.echo("Queue support not yet implemented for cluster-dual")
+        typer.echo("Run without --queue flag to execute directly")
+        raise typer.Exit(1)
+    else:
+        from image_search_service.db.sync_operations import get_sync_session
+        from image_search_service.faces.dual_clusterer import get_dual_mode_clusterer
+
+        typer.echo("Running dual-mode clustering...")
+
+        db_session = get_sync_session()
+        try:
+            clusterer = get_dual_mode_clusterer(
+                db_session=db_session,
+                person_match_threshold=person_threshold,
+                unknown_min_cluster_size=unknown_min_size,
+                unknown_method=unknown_method,
+                unknown_eps=unknown_eps,
+            )
+
+            result = clusterer.cluster_all_faces(max_faces=max_faces)
+
+            typer.echo(f"Assigned to people: {result['assigned_to_people']}")
+            typer.echo(f"Unknown clusters: {result['unknown_clusters']}")
+            typer.echo(f"Total processed: {result['total_processed']}")
+        finally:
+            db_session.close()
 
 
 @faces_app.command("stats")

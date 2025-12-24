@@ -62,6 +62,29 @@ class Settings(BaseSettings):
     watch_auto_train: bool = Field(default=False, alias="WATCH_AUTO_TRAIN")
     training_batch_size: int = Field(default=32, alias="TRAINING_BATCH_SIZE")
 
+    # Face recognition model settings
+    face_model_name: str = Field(default="buffalo_l", alias="FACE_MODEL_NAME")
+    face_model_checkpoint: str = Field(default="", alias="FACE_MODEL_CHECKPOINT")
+    face_training_enabled: bool = Field(default=False, alias="FACE_TRAINING_ENABLED")
+
+    # Training hyperparameters
+    face_triplet_margin: float = Field(default=0.2, alias="FACE_TRIPLET_MARGIN")
+    face_training_epochs: int = Field(default=20, alias="FACE_TRAINING_EPOCHS")
+    face_batch_size: int = Field(default=32, alias="FACE_BATCH_SIZE")
+    face_learning_rate: float = Field(default=0.0001, alias="FACE_LEARNING_RATE")
+
+    # Supervised clustering (known people)
+    face_person_match_threshold: float = Field(default=0.7, alias="FACE_PERSON_MATCH_THRESHOLD")
+
+    # Unsupervised clustering (unknown faces)
+    face_unknown_clustering_method: str = Field(
+        default="hdbscan", alias="FACE_UNKNOWN_CLUSTERING_METHOD"
+    )
+    face_unknown_min_cluster_size: int = Field(
+        default=3, alias="FACE_UNKNOWN_MIN_CLUSTER_SIZE"
+    )
+    face_unknown_eps: float = Field(default=0.5, alias="FACE_UNKNOWN_EPS")
+
 
 @lru_cache
 def get_settings() -> Settings:

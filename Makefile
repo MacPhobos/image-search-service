@@ -1,5 +1,5 @@
 .PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
-	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection faces-pipeline
+	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection faces-cluster-dual faces-pipeline
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -69,6 +69,13 @@ faces-stats: ## Show face detection and recognition statistics
 faces-ensure-collection: ## Ensure Qdrant faces collection exists
 	@echo "Ensuring Qdrant faces collection..."
 	uv run python -m image_search_service.scripts.cli faces ensure-collection
+
+faces-cluster-dual: ## Run dual-mode clustering (supervised + unsupervised)
+	@echo "Running dual-mode clustering..."
+	uv run python -m image_search_service.scripts.cli faces cluster-dual \
+		--person-threshold $(or $(PERSON_THRESHOLD),0.7) \
+		--unknown-method $(or $(UNKNOWN_METHOD),hdbscan) \
+		--unknown-min-size $(or $(UNKNOWN_MIN_SIZE),3)
 
 faces-pipeline: faces-ensure-collection faces-backfill faces-cluster faces-assign faces-centroids faces-stats ## Run full face detection pipeline
 	@echo "Face pipeline complete!"
