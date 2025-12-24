@@ -1,5 +1,5 @@
 .PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
-	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection faces-cluster-dual faces-pipeline
+	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection faces-cluster-dual faces-train-matching faces-pipeline
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -76,6 +76,14 @@ faces-cluster-dual: ## Run dual-mode clustering (supervised + unsupervised)
 		--person-threshold $(or $(PERSON_THRESHOLD),0.7) \
 		--unknown-method $(or $(UNKNOWN_METHOD),hdbscan) \
 		--unknown-min-size $(or $(UNKNOWN_MIN_SIZE),3)
+
+faces-train-matching: ## Train face matching model with triplet loss
+	@echo "Training face matching model..."
+	uv run python -m image_search_service.scripts.cli faces train-matching \
+		--epochs $(or $(EPOCHS),20) \
+		--margin $(or $(MARGIN),0.2) \
+		--batch-size $(or $(BATCH_SIZE),32) \
+		--min-faces $(or $(MIN_FACES),5)
 
 faces-pipeline: faces-ensure-collection faces-backfill faces-cluster faces-assign faces-centroids faces-stats ## Run full face detection pipeline
 	@echo "Face pipeline complete!"

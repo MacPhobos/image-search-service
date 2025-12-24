@@ -300,6 +300,62 @@ def cluster_faces_dual(
             db_session.close()
 
 
+@faces_app.command("train-matching")
+def train_person_matching(
+    epochs: int = typer.Option(20, help="Training epochs"),
+    margin: float = typer.Option(0.2, help="Triplet loss margin"),
+    batch_size: int = typer.Option(32, help="Batch size"),
+    learning_rate: float = typer.Option(0.0001, help="Learning rate"),
+    min_faces: int = typer.Option(5, help="Min faces per person to include"),
+    checkpoint: str | None = typer.Option(None, help="Checkpoint save path"),
+    queue: bool = typer.Option(False, help="Run as background job"),
+) -> None:
+    """Train face matching model using triplet loss on labeled faces.
+
+    Example:
+        faces train-matching --epochs 50 --margin 0.3
+    """
+    if queue:
+        # Note: train_matching_job needs to be implemented in queue/face_jobs.py
+        typer.echo("Queue support not yet implemented for train-matching")
+        typer.echo("Run without --queue flag to execute directly")
+        raise typer.Exit(1)
+    else:
+        from image_search_service.db.sync_operations import get_sync_session
+        from image_search_service.faces.trainer import get_face_trainer
+
+        typer.echo("Training face matching model with triplet loss...")
+        typer.echo(f"Epochs: {epochs}, Margin: {margin}, Batch size: {batch_size}")
+        typer.echo(f"Learning rate: {learning_rate}, Min faces per person: {min_faces}")
+
+        db_session = get_sync_session()
+        try:
+            trainer = get_face_trainer(
+                db_session=db_session,
+                margin=margin,
+                epochs=epochs,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+            )
+
+            result = trainer.fine_tune_for_person_clustering(
+                min_faces_per_person=min_faces,
+                checkpoint_path=checkpoint,
+            )
+
+            typer.echo("")
+            typer.echo("=== Training Results ===")
+            typer.echo(f"Epochs completed: {result['epochs']}")
+            typer.echo(f"Final loss: {result['final_loss']:.4f}")
+            typer.echo(f"Persons trained: {result['persons_trained']}")
+            typer.echo(f"Triplets used: {result['triplets_used']}")
+
+            if checkpoint:
+                typer.echo(f"Checkpoint saved to: {checkpoint}")
+        finally:
+            db_session.close()
+
+
 @faces_app.command("stats")
 def show_stats() -> None:
     """Show face detection and recognition statistics.
