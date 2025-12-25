@@ -161,6 +161,11 @@ async def label_cluster(
     db: AsyncSession = Depends(get_db),
 ) -> LabelClusterResponse:
     """Label a cluster with a person name, creating the person if needed."""
+    from redis import Redis
+    from rq import Queue
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.queue.face_jobs import propagate_person_label_job
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     # Get faces in cluster
@@ -215,6 +220,30 @@ async def label_cluster(
     await db.commit()
 
     logger.info(f"Labeled cluster {cluster_id} as person {person.name} ({len(faces)} faces)")
+
+    # Trigger propagation job using the best quality face as source
+    if sorted_faces:
+        best_face = sorted_faces[0]
+        try:
+            settings = get_settings()
+            redis_conn = Redis.from_url(settings.redis_url)
+            queue = Queue("default", connection=redis_conn)
+
+            queue.enqueue(
+                propagate_person_label_job,
+                source_face_id=str(best_face.id),
+                person_id=str(person.id),
+                min_confidence=0.7,
+                max_suggestions=50,
+                job_timeout="10m",
+            )
+            logger.info(
+                f"Queued propagation job for face {best_face.id} → person {person.id} "
+                f"(cluster {cluster_id})"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to enqueue propagation job: {e}")
+            # Don't fail the request if job queueing fails
 
     return LabelClusterResponse(
         person_id=person.id,
@@ -620,6 +649,11 @@ async def bulk_move_to_person(
     Only affects faces currently assigned to the specified person.
     Creates a new person if to_person_name is provided.
     """
+    from redis import Redis
+    from rq import Queue
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.queue.face_jobs import propagate_person_label_job
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     # Step 1: Verify source person exists
@@ -745,6 +779,32 @@ async def bulk_move_to_person(
             f"in {len(affected_photo_ids)} photos"
         )
 
+        # Trigger propagation job using the first face as source
+        if faces:
+            # Sort by quality to use best face
+            sorted_faces = sorted(faces, key=lambda f: f.quality_score or 0, reverse=True)
+            best_face = sorted_faces[0]
+            try:
+                settings = get_settings()
+                redis_conn = Redis.from_url(settings.redis_url)
+                queue = Queue("default", connection=redis_conn)
+
+                queue.enqueue(
+                    propagate_person_label_job,
+                    source_face_id=str(best_face.id),
+                    person_id=str(target_person.id),
+                    min_confidence=0.7,
+                    max_suggestions=50,
+                    job_timeout="10m",
+                )
+                logger.info(
+                    f"Queued propagation job for face {best_face.id} → person {target_person.id} "
+                    f"(bulk move from person {person_id})"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to enqueue propagation job: {e}")
+                # Don't fail the request if job queueing fails
+
         return BulkMoveResponse(
             to_person_id=target_person.id,
             to_person_name=target_person.name,
@@ -849,6 +909,11 @@ async def assign_face_to_person(
     db: AsyncSession = Depends(get_db),
 ) -> AssignFaceResponse:
     """Assign a single face instance to a person."""
+    from redis import Redis
+    from rq import Queue
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.queue.face_jobs import propagate_person_label_job
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     # Get face instance from DB
@@ -876,7 +941,10 @@ async def assign_face_to_person(
             await db.rollback()
             raise HTTPException(
                 status_code=404,
-                detail=f"Face embedding not found in vector database. The face may need to be re-detected.",
+                detail=(
+                    "Face embedding not found in vector database. "
+                    "The face may need to be re-detected."
+                ),
             )
 
         # Update Qdrant payload with new person_id
@@ -899,6 +967,28 @@ async def assign_face_to_person(
         await db.commit()
 
         logger.info(f"Assigned face {face_id} to person {person.name} ({person.id})")
+
+        # Trigger propagation job using the assigned face as source
+        try:
+            settings = get_settings()
+            redis_conn = Redis.from_url(settings.redis_url)
+            queue = Queue("default", connection=redis_conn)
+
+            queue.enqueue(
+                propagate_person_label_job,
+                source_face_id=str(face.id),
+                person_id=str(person.id),
+                min_confidence=0.7,
+                max_suggestions=50,
+                job_timeout="10m",
+            )
+            logger.info(
+                f"Queued propagation job for face {face.id} → person {person.id} "
+                f"(single assignment)"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to enqueue propagation job: {e}")
+            # Don't fail the request if job queueing fails
 
         return AssignFaceResponse(
             face_id=face.id,
