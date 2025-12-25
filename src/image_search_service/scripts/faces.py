@@ -11,6 +11,54 @@ logger = logging.getLogger(__name__)
 faces_app = typer.Typer(name="faces", help="Face detection and recognition commands")
 
 
+def _print_bottleneck_analysis(
+    io_time: float,
+    gpu_time: float,
+    batch_size: int,
+) -> None:
+    """Print bottleneck analysis based on I/O vs GPU time distribution.
+
+    Args:
+        io_time: Total time spent on I/O operations (seconds)
+        gpu_time: Total time spent on GPU operations (seconds)
+        batch_size: Current batch size setting
+    """
+    if io_time <= 0 and gpu_time <= 0:
+        return
+
+    total_time = io_time + gpu_time
+    io_pct = (io_time / total_time * 100) if total_time > 0 else 0
+    gpu_pct = (gpu_time / total_time * 100) if total_time > 0 else 0
+
+    typer.echo("\n" + "=" * 50)
+    typer.echo("BOTTLENECK ANALYSIS:")
+    typer.echo("=" * 50)
+    typer.echo(f"I/O Time:  {io_time:.1f}s ({io_pct:.1f}%)")
+    typer.echo(f"GPU Time:  {gpu_time:.1f}s ({gpu_pct:.1f}%)")
+    typer.echo(f"Total:     {total_time:.1f}s")
+    typer.echo("")
+
+    # Determine bottleneck
+    IO_BOUND_THRESHOLD = 70.0  # If I/O > 70%, it's I/O bound
+    GPU_BOUND_THRESHOLD = 70.0  # If GPU > 70%, it's GPU bound
+
+    if io_pct > IO_BOUND_THRESHOLD:
+        typer.echo("⚠️  I/O BOUND - Consider:")
+        typer.echo(f"  • Increase NFS buffer size (current: likely 2KB → try 1MB)")
+        typer.echo(f"  • Increase batch size (current: {batch_size} → try {batch_size * 2})")
+        typer.echo("  • Add image prefetching with threading")
+        typer.echo("  • Check NFS mount options (rsize, wsize)")
+    elif gpu_pct > GPU_BOUND_THRESHOLD:
+        typer.echo("✓ GPU BOUND - Processing is GPU-limited (optimal for this workload)")
+        if batch_size < 8:
+            typer.echo(f"  • Consider increasing batch size (current: {batch_size} → try 8)")
+            typer.echo("    to better overlap I/O with GPU processing")
+    else:
+        typer.echo("⚖️  BALANCED - I/O and GPU are roughly equal")
+        typer.echo(f"  • Current batch size ({batch_size}) seems appropriate")
+        typer.echo("  • Monitor performance over larger workloads")
+
+
 @faces_app.command("backfill")
 def backfill_faces(
     limit: int = typer.Option(1000, help="Number of assets to process"),
@@ -64,21 +112,56 @@ def backfill_faces(
 
             typer.echo(f"Processing {len(assets)} assets...")
 
-            # Setup progress bar
+            # Track cumulative timing for progress reports
+            cumulative_io_time = 0.0
+            cumulative_gpu_time = 0.0
+            batch_counter = 0
+            report_interval = 10  # Report every 10 batches
+
+            # Setup progress bar with timing callback
+            def progress_with_timing(step: int) -> None:
+                """Progress callback that also prints timing every 10 batches."""
+                nonlocal batch_counter, cumulative_io_time, cumulative_gpu_time
+                pbar.update(step)
+                batch_counter += step
+
+                # Report every report_interval * batch_size assets
+                if batch_counter > 0 and batch_counter % (report_interval * batch_size) == 0:
+                    if cumulative_io_time > 0 or cumulative_gpu_time > 0:
+                        total_time = cumulative_io_time + cumulative_gpu_time
+                        io_pct = (cumulative_io_time / total_time * 100) if total_time > 0 else 0
+                        gpu_pct = (cumulative_gpu_time / total_time * 100) if total_time > 0 else 0
+                        typer.echo(
+                            f"\nBatch {batch_counter // batch_size}: "
+                            f"I/O {io_pct:.1f}% ({cumulative_io_time:.1f}s) | "
+                            f"GPU {gpu_pct:.1f}% ({cumulative_gpu_time:.1f}s)"
+                        )
+
             with tqdm(total=len(assets), desc="Face detection", unit="img") as pbar:
                 service = get_face_service(db_session)
                 result = service.process_assets_batch(
                     asset_ids=[a.id for a in assets],
                     min_confidence=min_confidence,
                     batch_size=batch_size,
-                    progress_callback=pbar.update,
+                    progress_callback=progress_with_timing,
                 )
+
+                # Update cumulative times
+                cumulative_io_time = result.get('io_time', 0.0)
+                cumulative_gpu_time = result.get('gpu_time', 0.0)
 
             typer.echo(f"\nProcessed: {result['processed']} assets")
             typer.echo(f"Faces detected: {result['total_faces']}")
             typer.echo(f"Errors: {result['errors']}")
             if result.get('throughput'):
                 typer.echo(f"Throughput: {result['throughput']:.2f} images/second")
+
+            # Print bottleneck analysis
+            _print_bottleneck_analysis(
+                io_time=cumulative_io_time,
+                gpu_time=cumulative_gpu_time,
+                batch_size=batch_size,
+            )
         finally:
             db_session.close()
 

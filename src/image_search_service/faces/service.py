@@ -134,7 +134,14 @@ class FaceProcessingService:
             progress_callback: Optional callable(step: int) to report progress
 
         Returns:
-            Summary dict with counts and throughput metrics.
+            Summary dict with counts, throughput, and timing metrics:
+            - processed: Number of assets processed
+            - total_faces: Total faces detected
+            - errors: Number of errors
+            - throughput: Assets per second
+            - elapsed_time: Total wall clock time
+            - io_time: Total I/O time (loading images from disk)
+            - gpu_time: Total GPU time (face detection)
         """
         if not asset_ids:
             return {
@@ -142,6 +149,9 @@ class FaceProcessingService:
                 "total_faces": 0,
                 "errors": 0,
                 "throughput": 0.0,
+                "io_time": 0.0,
+                "gpu_time": 0.0,
+                "elapsed_time": 0.0,
             }
 
         total_faces = 0
@@ -149,6 +159,10 @@ class FaceProcessingService:
         errors = 0
         error_details: list[dict[str, Any]] = []
         start_time = time.time()
+
+        # Timing tracking
+        total_io_time = 0.0
+        total_gpu_time = 0.0
 
         # Special case: batch_size=1 means sequential processing (backward compatible)
         if batch_size == 1:
@@ -158,15 +172,18 @@ class FaceProcessingService:
 
         # Producer-consumer pattern: ThreadPoolExecutor pre-loads images
         # while GPU processes them sequentially
-        def load_asset_data(asset_id: int) -> tuple[int, ImageAsset | None, str | None]:
-            """Load asset from DB and return (id, asset, error)."""
+        def load_asset_data(asset_id: int) -> tuple[int, ImageAsset | None, str | None, float]:
+            """Load asset from DB and return (id, asset, error, io_time)."""
+            io_start = time.time()
             try:
                 asset = self.db.get(ImageAsset, asset_id)
+                io_elapsed = time.time() - io_start
                 if not asset:
-                    return (asset_id, None, f"Asset not found: {asset_id}")
-                return (asset_id, asset, None)
+                    return (asset_id, None, f"Asset not found: {asset_id}", io_elapsed)
+                return (asset_id, asset, None, io_elapsed)
             except Exception as e:
-                return (asset_id, None, f"Error loading asset: {e}")
+                io_elapsed = time.time() - io_start
+                return (asset_id, None, f"Error loading asset: {e}", io_elapsed)
 
         # Use ThreadPoolExecutor to parallelize DB lookups
         with ThreadPoolExecutor(max_workers=batch_size) as executor:
@@ -178,7 +195,8 @@ class FaceProcessingService:
 
             # Process results as they complete
             for future in as_completed(future_to_id):
-                asset_id, asset, error = future.result()
+                asset_id, asset, error, io_time = future.result()
+                total_io_time += io_time
 
                 if error:
                     logger.warning(error)
@@ -196,7 +214,11 @@ class FaceProcessingService:
 
                 # Process face detection (GPU-bound, runs sequentially)
                 try:
+                    gpu_start = time.time()
                     faces = self.process_asset(asset, min_confidence, min_face_size)
+                    gpu_elapsed = time.time() - gpu_start
+                    total_gpu_time += gpu_elapsed
+
                     total_faces += len(faces)
                     processed += 1
                     if progress_callback:
@@ -220,6 +242,8 @@ class FaceProcessingService:
             "error_details": error_details,
             "throughput": throughput,
             "elapsed_time": elapsed_time,
+            "io_time": total_io_time,
+            "gpu_time": total_gpu_time,
         }
 
     def _process_assets_sequential(
@@ -236,8 +260,16 @@ class FaceProcessingService:
         error_details: list[dict[str, Any]] = []
         start_time = time.time()
 
+        # Timing tracking
+        total_io_time = 0.0
+        total_gpu_time = 0.0
+
         for asset_id in asset_ids:
+            io_start = time.time()
             asset = self.db.get(ImageAsset, asset_id)
+            io_elapsed = time.time() - io_start
+            total_io_time += io_elapsed
+
             if not asset:
                 logger.warning(f"Asset not found: {asset_id}")
                 errors += 1
@@ -247,7 +279,11 @@ class FaceProcessingService:
                 continue
 
             try:
+                gpu_start = time.time()
                 faces = self.process_asset(asset, min_confidence, min_face_size)
+                gpu_elapsed = time.time() - gpu_start
+                total_gpu_time += gpu_elapsed
+
                 total_faces += len(faces)
                 processed += 1
                 if progress_callback:
@@ -269,6 +305,8 @@ class FaceProcessingService:
             "error_details": error_details,
             "throughput": throughput,
             "elapsed_time": elapsed_time,
+            "io_time": total_io_time,
+            "gpu_time": total_gpu_time,
         }
 
     def _resolve_asset_path(self, asset: ImageAsset) -> str | None:
