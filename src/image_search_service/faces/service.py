@@ -1,7 +1,9 @@
 """High-level face processing service."""
 
 import logging
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -116,34 +118,157 @@ class FaceProcessingService:
         asset_ids: list[int],
         min_confidence: float = 0.5,
         min_face_size: int = 20,
-    ) -> dict[str, int]:
-        """Process multiple assets in batch.
+        batch_size: int = 8,
+        progress_callback: Any = None,
+    ) -> dict[str, Any]:
+        """Process multiple assets in batch with parallel I/O loading.
 
-        Returns summary dict with counts.
+        Uses ThreadPoolExecutor to pre-load images while GPU processes current image.
+        This overlaps disk I/O with GPU inference for better throughput.
+
+        Args:
+            asset_ids: List of asset IDs to process
+            min_confidence: Minimum detection confidence threshold
+            min_face_size: Minimum face width/height in pixels
+            batch_size: Number of images to pre-load in parallel (default: 8)
+            progress_callback: Optional callable(step: int) to report progress
+
+        Returns:
+            Summary dict with counts and throughput metrics.
         """
+        if not asset_ids:
+            return {
+                "processed": 0,
+                "total_faces": 0,
+                "errors": 0,
+                "throughput": 0.0,
+            }
+
         total_faces = 0
         processed = 0
         errors = 0
+        error_details: list[dict[str, Any]] = []
+        start_time = time.time()
+
+        # Special case: batch_size=1 means sequential processing (backward compatible)
+        if batch_size == 1:
+            return self._process_assets_sequential(
+                asset_ids, min_confidence, min_face_size, progress_callback
+            )
+
+        # Producer-consumer pattern: ThreadPoolExecutor pre-loads images
+        # while GPU processes them sequentially
+        def load_asset_data(asset_id: int) -> tuple[int, ImageAsset | None, str | None]:
+            """Load asset from DB and return (id, asset, error)."""
+            try:
+                asset = self.db.get(ImageAsset, asset_id)
+                if not asset:
+                    return (asset_id, None, f"Asset not found: {asset_id}")
+                return (asset_id, asset, None)
+            except Exception as e:
+                return (asset_id, None, f"Error loading asset: {e}")
+
+        # Use ThreadPoolExecutor to parallelize DB lookups
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            # Submit all asset loading tasks
+            future_to_id = {
+                executor.submit(load_asset_data, asset_id): asset_id
+                for asset_id in asset_ids
+            }
+
+            # Process results as they complete
+            for future in as_completed(future_to_id):
+                asset_id, asset, error = future.result()
+
+                if error:
+                    logger.warning(error)
+                    errors += 1
+                    error_details.append({"asset_id": asset_id, "error": error})
+                    continue
+
+                if not asset:
+                    logger.warning(f"Asset not found: {asset_id}")
+                    errors += 1
+                    error_details.append(
+                        {"asset_id": asset_id, "error": "Asset not found"}
+                    )
+                    continue
+
+                # Process face detection (GPU-bound, runs sequentially)
+                try:
+                    faces = self.process_asset(asset, min_confidence, min_face_size)
+                    total_faces += len(faces)
+                    processed += 1
+                    if progress_callback:
+                        progress_callback(1)
+                except Exception as e:
+                    logger.error(f"Error processing asset {asset_id}: {e}")
+                    errors += 1
+                    error_details.append(
+                        {"asset_id": asset_id, "error": str(e)}
+                    )
+                    if progress_callback:
+                        progress_callback(1)
+
+        elapsed_time = time.time() - start_time
+        throughput = processed / elapsed_time if elapsed_time > 0 else 0.0
+
+        return {
+            "processed": processed,
+            "total_faces": total_faces,
+            "errors": errors,
+            "error_details": error_details,
+            "throughput": throughput,
+            "elapsed_time": elapsed_time,
+        }
+
+    def _process_assets_sequential(
+        self,
+        asset_ids: list[int],
+        min_confidence: float = 0.5,
+        min_face_size: int = 20,
+        progress_callback: Any = None,
+    ) -> dict[str, Any]:
+        """Sequential processing for batch_size=1 (backward compatible)."""
+        total_faces = 0
+        processed = 0
+        errors = 0
+        error_details: list[dict[str, Any]] = []
+        start_time = time.time()
 
         for asset_id in asset_ids:
             asset = self.db.get(ImageAsset, asset_id)
             if not asset:
                 logger.warning(f"Asset not found: {asset_id}")
                 errors += 1
+                error_details.append({"asset_id": asset_id, "error": "Asset not found"})
+                if progress_callback:
+                    progress_callback(1)
                 continue
 
             try:
                 faces = self.process_asset(asset, min_confidence, min_face_size)
                 total_faces += len(faces)
                 processed += 1
+                if progress_callback:
+                    progress_callback(1)
             except Exception as e:
                 logger.error(f"Error processing asset {asset_id}: {e}")
                 errors += 1
+                error_details.append({"asset_id": asset_id, "error": str(e)})
+                if progress_callback:
+                    progress_callback(1)
+
+        elapsed_time = time.time() - start_time
+        throughput = processed / elapsed_time if elapsed_time > 0 else 0.0
 
         return {
             "processed": processed,
             "total_faces": total_faces,
             "errors": errors,
+            "error_details": error_details,
+            "throughput": throughput,
+            "elapsed_time": elapsed_time,
         }
 
     def _resolve_asset_path(self, asset: ImageAsset) -> str | None:

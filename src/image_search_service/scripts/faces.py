@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 
 import typer
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +16,13 @@ def backfill_faces(
     limit: int = typer.Option(1000, help="Number of assets to process"),
     offset: int = typer.Option(0, help="Starting offset"),
     min_confidence: float = typer.Option(0.5, help="Detection confidence threshold"),
+    batch_size: int = typer.Option(8, help="Number of images to pre-load for GPU pipeline"),
     queue: bool = typer.Option(False, help="Run as background job instead of directly"),
 ) -> None:
     """Backfill face detection for existing assets without faces.
 
     Example:
-        faces backfill --limit 500 --min-confidence 0.6
+        faces backfill --limit 500 --min-confidence 0.6 --batch-size 16
     """
     if queue:
         from redis import Redis
@@ -38,6 +40,7 @@ def backfill_faces(
             limit=limit,
             offset=offset,
             min_confidence=min_confidence,
+            batch_size=batch_size,
         )
         typer.echo(f"Queued backfill job: {job.id}")
     else:
@@ -61,15 +64,21 @@ def backfill_faces(
 
             typer.echo(f"Processing {len(assets)} assets...")
 
-            service = get_face_service(db_session)
-            result = service.process_assets_batch(
-                asset_ids=[a.id for a in assets],
-                min_confidence=min_confidence,
-            )
+            # Setup progress bar
+            with tqdm(total=len(assets), desc="Face detection", unit="img") as pbar:
+                service = get_face_service(db_session)
+                result = service.process_assets_batch(
+                    asset_ids=[a.id for a in assets],
+                    min_confidence=min_confidence,
+                    batch_size=batch_size,
+                    progress_callback=pbar.update,
+                )
 
-            typer.echo(f"Processed: {result['processed']} assets")
+            typer.echo(f"\nProcessed: {result['processed']} assets")
             typer.echo(f"Faces detected: {result['total_faces']}")
             typer.echo(f"Errors: {result['errors']}")
+            if result.get('throughput'):
+                typer.echo(f"Throughput: {result['throughput']:.2f} images/second")
         finally:
             db_session.close()
 

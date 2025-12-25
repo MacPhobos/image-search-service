@@ -48,8 +48,8 @@ ingest: ## Ingest images from directory (usage: make ingest DIR=/path/to/images)
 
 # Face detection and recognition targets
 faces-backfill: ## Backfill face detection for assets without faces
-	@echo "Running face backfill (limit=$(or $(LIMIT),1000))..."
-	uv run python -m image_search_service.scripts.cli faces backfill --limit $(or $(LIMIT),5000)
+	@echo "Running face backfill (limit=$(or $(LIMIT),1000), batch-size=$(or $(BATCH_SIZE),8))..."
+	uv run python -m image_search_service.scripts.cli faces backfill --limit $(or $(LIMIT),5000) --batch-size $(or $(BATCH_SIZE),8)
 
 faces-cluster: ## Cluster unlabeled faces using HDBSCAN
 	@echo "Running face clustering (max-faces=$(or $(MAX_FACES),50000))..."
@@ -123,32 +123,23 @@ faces-pipeline-full: ## Run complete pipeline with training (detect → cluster 
 	@echo "  FULL FACE PIPELINE WITH TRAINING"
 	@echo "=========================================="
 	@echo ""
-	@echo "Step 1/6: Ensuring Qdrant collection..."
-	@$(MAKE) faces-ensure-collection
-	@echo ""
-	@echo "Step 2/6: Detecting faces in images..."
-	@$(MAKE) faces-backfill LIMIT=$(or $(LIMIT),5000)
-	@echo ""
-	@echo "Step 3/6: Running initial dual-mode clustering..."
-	@$(MAKE) faces-cluster-dual \
-		PERSON_THRESHOLD=$(or $(PERSON_THRESHOLD),0.7) \
-		UNKNOWN_METHOD=$(or $(UNKNOWN_METHOD),hdbscan)
-	@echo ""
-	@echo "Step 4/6: Training face matching model..."
-	@$(MAKE) faces-train-matching \
-		EPOCHS=$(or $(EPOCHS),20) \
-		MARGIN=$(or $(MARGIN),0.2) \
-		MIN_FACES=$(or $(MIN_FACES),5)
-	@echo ""
-	@echo "Step 5/6: Re-clustering with trained model..."
-	@$(MAKE) faces-cluster-dual \
-		PERSON_THRESHOLD=$(or $(PERSON_THRESHOLD),0.7) \
-		UNKNOWN_METHOD=$(or $(UNKNOWN_METHOD),hdbscan)
-	@echo ""
-	@echo "Step 6/6: Showing final statistics..."
-	@$(MAKE) faces-stats
-	@echo ""
+	@time_step() { \
+	step_num=$$1; shift; \
+	step_name=$$1; shift; \
+	echo "Step $$step_num: $$step_name..."; \
+	start=$$(date +%s); \
+	"$$@"; \
+	end=$$(date +%s); \
+	echo "✓ Step $$step_num completed in $$((end - start))s"; \
+	echo ""; \
+	}; \
+	time_step "1/6" "Ensuring Qdrant collection" $(MAKE) faces-ensure-collection; \
+	time_step "2/6" "Detecting faces in images" $(MAKE) faces-backfill LIMIT=$(or $(LIMIT),5000); \
+	time_step "3/6" "Running initial dual-mode clustering" $(MAKE) faces-cluster-dual PERSON_THRESHOLD=$(or $(PERSON_THRESHOLD),0.7) UNKNOWN_METHOD=$(or $(UNKNOWN_METHOD),hdbscan); \
+	time_step "4/6" "Training face matching model" $(MAKE) faces-train-matching EPOCHS=$(or $(EPOCHS),20) MARGIN=$(or $(MARGIN),0.2) MIN_FACES=$(or $(MIN_FACES),5); \
+	time_step "5/6" "Re-clustering with trained model" $(MAKE) faces-cluster-dual PERSON_THRESHOLD=$(or $(PERSON_THRESHOLD),0.7) UNKNOWN_METHOD=$(or $(UNKNOWN_METHOD),hdbscan); \
+	time_step "6/6" "Showing final statistics" $(MAKE) faces-stats
 	@echo "=========================================="
 	@echo "  FULL PIPELINE COMPLETE"
 	@echo "=========================================="
-	@echo ""
+	@echo ""}

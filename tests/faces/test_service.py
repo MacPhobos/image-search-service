@@ -80,10 +80,12 @@ class TestFaceProcessingService:
 
             service = FaceProcessingService(mock_session)
 
-            with patch.object(service, "_resolve_asset_path") as mock_resolve:
-                mock_resolve.return_value = "/valid/path.jpg"
+            # Patch Path.exists() and detect_faces_from_path at module level
+            # This is critical for ThreadPoolExecutor compatibility
+            with patch("image_search_service.faces.service.Path") as mock_path:
+                mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.detector.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
                     mock_detect.return_value = [mock_detected_face]
                     faces = service.process_asset(mock_image_asset)
 
@@ -115,10 +117,11 @@ class TestFaceProcessingService:
 
             service = FaceProcessingService(mock_session)
 
-            with patch.object(service, "_resolve_asset_path") as mock_resolve:
-                mock_resolve.return_value = "/valid/path.jpg"
+            # Patch Path.exists() and detect_faces_from_path at module level
+            with patch("image_search_service.faces.service.Path") as mock_path:
+                mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.detector.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
                     mock_detect.return_value = [mock_detected_face]
                     service.process_asset(mock_image_asset)
 
@@ -136,6 +139,8 @@ class TestFaceProcessingService:
         """Test that reprocessing same asset doesn't duplicate faces."""
         from image_search_service.db.models import FaceInstance
         from image_search_service.faces.service import FaceProcessingService
+
+        mock_image_asset.path = "/valid/path.jpg"
 
         # Create an existing face instance
         existing_face = FaceInstance(
@@ -164,10 +169,11 @@ class TestFaceProcessingService:
 
             service = FaceProcessingService(mock_session)
 
-            with patch.object(service, "_resolve_asset_path") as mock_resolve:
-                mock_resolve.return_value = "/valid/path.jpg"
+            # Patch Path.exists() and detect_faces_from_path at module level
+            with patch("image_search_service.faces.service.Path") as mock_path:
+                mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.detector.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
                     mock_detect.return_value = [mock_detected_face]
                     faces = service.process_asset(mock_image_asset)
 
@@ -198,10 +204,11 @@ class TestFaceProcessingService:
 
             service = FaceProcessingService(mock_session)
 
-            with patch.object(service, "_resolve_asset_path") as mock_resolve:
-                mock_resolve.return_value = "/valid/path.jpg"
+            # Patch Path.exists() and detect_faces_from_path at module level
+            with patch("image_search_service.faces.service.Path") as mock_path:
+                mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.detector.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
                     mock_detect.return_value = [mock_detected_face]
                     result = service.process_assets_batch([mock_image_asset.id])
 
@@ -258,3 +265,148 @@ class TestFaceProcessingService:
 
         path = service._resolve_asset_path(mock_asset)
         assert path is None
+
+    @pytest.mark.asyncio
+    async def test_process_assets_batch_empty_list(self, mock_qdrant_client):
+        """Test batch processing with empty asset list."""
+        from image_search_service.faces.service import FaceProcessingService
+
+        with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
+            mock_get_qdrant.return_value = mock_qdrant_client
+
+            mock_session = MagicMock()
+            service = FaceProcessingService(mock_session)
+            result = service.process_assets_batch([])
+
+        assert result["processed"] == 0
+        assert result["total_faces"] == 0
+        assert result["errors"] == 0
+        assert result["throughput"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_process_assets_batch_with_batch_size_one(
+        self, mock_image_asset, mock_qdrant_client, mock_detected_face
+    ):
+        """Test batch processing with batch_size=1 (sequential mode)."""
+        from image_search_service.faces.service import FaceProcessingService
+
+        mock_image_asset.path = "/valid/path.jpg"
+
+        with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
+            mock_get_qdrant.return_value = mock_qdrant_client
+
+            mock_session = MagicMock()
+            mock_session.get = MagicMock(return_value=mock_image_asset)
+            mock_session.add = MagicMock()
+            mock_session.commit = MagicMock()
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+
+            service = FaceProcessingService(mock_session)
+
+            # Patch Path.exists() and detect_faces_from_path at module level
+            with patch("image_search_service.faces.service.Path") as mock_path:
+                mock_path.return_value.exists.return_value = True
+
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
+                    mock_detect.return_value = [mock_detected_face]
+                    result = service.process_assets_batch(
+                        [mock_image_asset.id],
+                        batch_size=1
+                    )
+
+        assert result["processed"] == 1
+        assert result["total_faces"] == 1
+        assert result["errors"] == 0
+        assert "throughput" in result
+
+    @pytest.mark.asyncio
+    async def test_process_assets_batch_all_failures(self, mock_qdrant_client):
+        """Test batch processing when all assets fail."""
+        from image_search_service.faces.service import FaceProcessingService
+
+        with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
+            mock_get_qdrant.return_value = mock_qdrant_client
+
+            mock_session = MagicMock()
+            # All assets not found
+            mock_session.get = MagicMock(return_value=None)
+
+            service = FaceProcessingService(mock_session)
+            result = service.process_assets_batch([1, 2, 3])
+
+        assert result["processed"] == 0
+        assert result["errors"] == 3
+        assert len(result["error_details"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_process_assets_batch_with_progress_callback(
+        self, mock_image_asset, mock_qdrant_client, mock_detected_face
+    ):
+        """Test batch processing with progress callback."""
+        from image_search_service.faces.service import FaceProcessingService
+
+        mock_image_asset.path = "/valid/path.jpg"
+        progress_updates = []
+
+        def progress_callback(steps: int):
+            progress_updates.append(steps)
+
+        with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
+            mock_get_qdrant.return_value = mock_qdrant_client
+
+            mock_session = MagicMock()
+            mock_session.get = MagicMock(return_value=mock_image_asset)
+            mock_session.add = MagicMock()
+            mock_session.commit = MagicMock()
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+
+            service = FaceProcessingService(mock_session)
+
+            # Patch detect_faces_from_path at the module level
+            with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
+                mock_detect.return_value = [mock_detected_face]
+                result = service.process_assets_batch(
+                    [mock_image_asset.id, mock_image_asset.id],
+                    progress_callback=progress_callback
+                )
+
+        assert result["processed"] == 2
+        # Verify progress callback was called twice
+        assert len(progress_updates) == 2
+        assert sum(progress_updates) == 2
+
+    @pytest.mark.asyncio
+    async def test_process_assets_batch_parallel_loading(
+        self, mock_image_asset, mock_qdrant_client, mock_detected_face
+    ):
+        """Test batch processing with batch_size > 1 (parallel mode)."""
+        from image_search_service.faces.service import FaceProcessingService
+
+        mock_image_asset.path = "/valid/path.jpg"
+
+        with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
+            mock_get_qdrant.return_value = mock_qdrant_client
+
+            mock_session = MagicMock()
+            mock_session.get = MagicMock(return_value=mock_image_asset)
+            mock_session.add = MagicMock()
+            mock_session.commit = MagicMock()
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+
+            service = FaceProcessingService(mock_session)
+
+            # Patch Path.exists() and detect_faces_from_path at module level
+            with patch("image_search_service.faces.service.Path") as mock_path:
+                mock_path.return_value.exists.return_value = True
+
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
+                    mock_detect.return_value = [mock_detected_face]
+                    result = service.process_assets_batch(
+                        [mock_image_asset.id] * 5,
+                        batch_size=4
+                    )
+
+        assert result["processed"] == 5
+        assert result["total_faces"] == 5
+        assert result["errors"] == 0
+        assert result["throughput"] > 0

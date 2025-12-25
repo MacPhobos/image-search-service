@@ -189,6 +189,7 @@ def backfill_faces_job(
     limit: int = 1000,
     offset: int = 0,
     min_confidence: float = 0.5,
+    batch_size: int = 8,
 ) -> dict[str, Any]:
     """RQ job to backfill face detection for existing assets without faces.
 
@@ -196,6 +197,7 @@ def backfill_faces_job(
         limit: Number of assets to process
         offset: Starting offset for pagination
         min_confidence: Detection confidence threshold
+        batch_size: Number of images to pre-load in parallel
 
     Returns:
         Backfill statistics
@@ -203,7 +205,10 @@ def backfill_faces_job(
     job = get_current_job()
     job_id = job.id if job else "no-job"
 
-    logger.info(f"[{job_id}] Starting face backfill (limit={limit}, offset={offset})")
+    logger.info(
+        f"[{job_id}] Starting face backfill "
+        f"(limit={limit}, offset={offset}, batch_size={batch_size})"
+    )
 
     from sqlalchemy import select
 
@@ -228,11 +233,13 @@ def backfill_faces_job(
         result = service.process_assets_batch(
             asset_ids=[a.id for a in assets],
             min_confidence=min_confidence,
+            batch_size=batch_size,
         )
 
         logger.info(
             f"[{job_id}] Backfill complete: "
-            f"{result['processed']} assets, {result['total_faces']} faces"
+            f"{result['processed']} assets, {result['total_faces']} faces, "
+            f"throughput={result.get('throughput', 0):.2f} img/s"
         )
 
         return result
