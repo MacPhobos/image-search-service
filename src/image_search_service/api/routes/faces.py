@@ -870,8 +870,16 @@ async def assign_face_to_person(
     face.person_id = person.id
 
     try:
-        # Update Qdrant payload with new person_id
+        # Check if Qdrant point exists before trying to update
         qdrant = get_face_qdrant_client()
+        if not qdrant.point_exists(face.qdrant_point_id):
+            await db.rollback()
+            raise HTTPException(
+                status_code=404,
+                detail=f"Face embedding not found in vector database. The face may need to be re-detected.",
+            )
+
+        # Update Qdrant payload with new person_id
         qdrant.update_person_ids([face.qdrant_point_id], person.id)
 
         # Create audit event

@@ -689,6 +689,29 @@ class FaceQdrantClient:
             logger.error(f"Failed to delete face instance {face_instance_id}: {e}")
             raise
 
+    def point_exists(self, point_id: uuid.UUID) -> bool:
+        """Check if a point exists in the collection.
+
+        Args:
+            point_id: Face point ID to check
+
+        Returns:
+            True if point exists, False otherwise
+        """
+        try:
+            # Retrieve the specific point by ID
+            points = self.client.retrieve(
+                collection_name=FACE_COLLECTION_NAME,
+                ids=[str(point_id)],
+                with_payload=False,
+                with_vectors=False,
+            )
+            return len(points) > 0
+
+        except Exception as e:
+            logger.error(f"Failed to check if point {point_id} exists: {e}")
+            return False
+
     def get_collection_info(self) -> dict[str, Any] | None:
         """Get collection statistics and configuration.
 
@@ -701,7 +724,7 @@ class FaceQdrantClient:
             return {
                 "name": FACE_COLLECTION_NAME,
                 "points_count": collection_info.points_count,
-                "vectors_count": collection_info.vectors_count,
+                "vectors_count": collection_info.points_count,  # Use points_count (vectors_count removed in qdrant-client 1.12+)
                 "indexed_vectors_count": collection_info.indexed_vectors_count,
                 "vector_dim": FACE_VECTOR_DIM,
                 "distance": "cosine",

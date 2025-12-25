@@ -103,13 +103,19 @@ class FaceProcessingService:
 
             qdrant_points.append(qdrant_point)
 
-        # Commit DB changes
-        self.db.commit()
-
-        # Batch upsert to Qdrant
+        # Batch upsert to Qdrant FIRST (before commit)
         if qdrant_points:
-            self.qdrant.upsert_faces_batch(qdrant_points)
-            logger.info(f"Stored {len(qdrant_points)} new faces for asset {asset.id}")
+            try:
+                self.qdrant.upsert_faces_batch(qdrant_points)
+                logger.info(f"Stored {len(qdrant_points)} new faces for asset {asset.id}")
+            except Exception as e:
+                # Rollback DB if Qdrant fails
+                self.db.rollback()
+                logger.error(f"Failed to upsert faces to Qdrant for asset {asset.id}: {e}")
+                raise RuntimeError(f"Face detection failed: Qdrant upsert error: {e}") from e
+
+        # Commit DB changes ONLY if Qdrant succeeded
+        self.db.commit()
 
         return face_instances
 
