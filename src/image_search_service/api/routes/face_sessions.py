@@ -1,9 +1,13 @@
 """Face detection session API routes."""
 
+import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -196,6 +200,72 @@ async def cancel_session(
     logger.info(f"Cancelled face detection session {session_id}")
 
     return {"status": "cancelled"}
+
+
+@router.get("/{session_id}/events")
+async def stream_session_events(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """
+    Stream real-time progress updates for a face detection session.
+
+    Uses Server-Sent Events (SSE) format.
+    Sends updates every 2 seconds while session is processing.
+    Closes connection when session completes or fails.
+    """
+
+    async def event_generator() -> AsyncIterator[str]:
+        while True:
+            # Get current session state
+            result = await db.execute(
+                select(FaceDetectionSession).where(FaceDetectionSession.id == session_id)
+            )
+            session = result.scalar_one_or_none()
+
+            if not session:
+                # Send error and close
+                yield f"event: error\ndata: {json.dumps({'error': 'Session not found'})}\n\n"
+                break
+
+            # Build progress data
+            progress_data = {
+                "session_id": str(session.id),
+                "status": session.status,
+                "total_images": session.total_images,
+                "processed_images": session.processed_images,
+                "failed_images": session.failed_images,
+                "faces_detected": session.faces_detected,
+                "faces_assigned": session.faces_assigned,
+                "progress_percent": (
+                    (session.processed_images / session.total_images * 100)
+                    if session.total_images > 0
+                    else 0
+                ),
+                "last_error": session.last_error,
+            }
+
+            # Send progress event
+            yield f"event: progress\ndata: {json.dumps(progress_data)}\n\n"
+
+            # Check if session is done
+            if session.status in ["completed", "failed", "cancelled"]:
+                # Send final event and close
+                yield f"event: complete\ndata: {json.dumps(progress_data)}\n\n"
+                break
+
+            # Wait before next update
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
 
 
 # ============ Helper Functions ============
