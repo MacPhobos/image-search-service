@@ -54,6 +54,8 @@ Python 3.12 image search service with vector similarity using Qdrant.
 | `make migrate` | Run database migrations |
 | `make makemigrations` | Create new migration |
 | `make worker` | Start RQ background worker |
+| `make faces-cluster-dual` | Run dual-mode face clustering |
+| `make faces-train-matching` | Train face matching model |
 
 ## Environment Variables
 
@@ -156,6 +158,104 @@ make faces-pipeline
 
 This runs: ensure-collection → backfill → cluster → assign → centroids → stats
 
+## Face Recognition & Clustering
+
+The service includes advanced face recognition with dual-mode clustering and training capabilities.
+
+### Quick Start - Face Pipeline
+
+```bash
+# 1. Detect faces in images
+make faces-backfill LIMIT=1000
+
+# 2. Run dual-mode clustering (supervised + unsupervised)
+make faces-cluster-dual
+
+# 3. View statistics
+make faces-stats
+
+# 4. Label clusters via API
+curl -X POST http://localhost:8000/api/v1/faces/clusters/{cluster_id}/label \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Alice"}'
+
+# 5. Train model to improve accuracy (after labeling)
+make faces-train-matching EPOCHS=20
+
+# 6. Re-cluster with improved model
+make faces-cluster-dual
+```
+
+### Dual-Mode Clustering
+
+Combines two approaches for optimal face organization:
+
+| Mode | Purpose | Output |
+|------|---------|--------|
+| **Supervised** | Match faces to known people | `person_*` clusters |
+| **Unsupervised** | Group unknown faces by similarity | `unknown_cluster_*` groups |
+
+**CLI Usage:**
+```bash
+# Default settings
+make faces-cluster-dual
+
+# Custom thresholds
+make faces-cluster-dual PERSON_THRESHOLD=0.8 UNKNOWN_METHOD=hdbscan
+
+# Limit faces processed
+make faces-cluster-dual MAX_FACES=1000
+```
+
+**API Usage:**
+```bash
+# Synchronous (small batches)
+curl -X POST http://localhost:8000/api/v1/faces/cluster/dual \
+  -H "Content-Type: application/json" \
+  -d '{"person_threshold": 0.7, "unknown_method": "hdbscan", "queue": false}'
+
+# Background job (large batches)
+curl -X POST http://localhost:8000/api/v1/faces/cluster/dual \
+  -H "Content-Type: application/json" \
+  -d '{"person_threshold": 0.7, "queue": true}'
+```
+
+### Training (Triplet Loss)
+
+Improve person separation by training on labeled faces:
+
+```bash
+# Default training (20 epochs)
+make faces-train-matching
+
+# Custom training
+make faces-train-matching EPOCHS=50 MARGIN=0.3 MIN_FACES=10
+```
+
+**API Usage:**
+```bash
+curl -X POST http://localhost:8000/api/v1/faces/train \
+  -H "Content-Type: application/json" \
+  -d '{"epochs": 20, "margin": 0.2, "queue": true}'
+```
+
+### Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FACE_PERSON_MATCH_THRESHOLD` | Similarity threshold for person assignment | `0.7` |
+| `FACE_UNKNOWN_CLUSTERING_METHOD` | Algorithm: hdbscan, dbscan, agglomerative | `hdbscan` |
+| `FACE_UNKNOWN_MIN_CLUSTER_SIZE` | Minimum faces per cluster | `3` |
+| `FACE_TRIPLET_MARGIN` | Training margin for triplet loss | `0.2` |
+| `FACE_TRAINING_EPOCHS` | Default training epochs | `20` |
+
+### Workflow Recommendations
+
+1. **Initial Setup**: Run `faces-backfill` → `faces-cluster-dual`
+2. **Labeling**: Use API or UI to label large clusters
+3. **Training**: After 5+ people labeled, run `faces-train-matching`
+4. **Re-clustering**: Run `faces-cluster-dual` to apply improvements
+5. **Iterate**: Label more → Train → Re-cluster for best accuracy
 
 ## License
 
