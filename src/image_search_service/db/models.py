@@ -629,6 +629,15 @@ class FaceDetectionSessionStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class FaceSuggestionStatus(str, Enum):
+    """Status for face suggestions."""
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
 class FaceDetectionSession(Base):
     """Face detection session for tracking batch face detection operations."""
 
@@ -686,4 +695,52 @@ class FaceDetectionSession(Base):
         return (
             f"<FaceDetectionSession(id={self.id}, status={self.status}, "
             f"total_images={self.total_images}, faces_detected={self.faces_detected})>"
+        )
+
+
+class FaceSuggestion(Base):
+    """Suggested face-to-person assignment based on similarity."""
+
+    __tablename__ = "face_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    face_instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("face_instances.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    suggested_person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("persons.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, nullable=False
+    )  # Cosine similarity score
+    source_face_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("face_instances.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default=FaceSuggestionStatus.PENDING.value, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Indexes for efficient querying
+    __table_args__ = (
+        Index("ix_face_suggestions_face_instance_id", "face_instance_id"),
+        Index("ix_face_suggestions_suggested_person_id", "suggested_person_id"),
+        Index("ix_face_suggestions_status", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<FaceSuggestion(id={self.id}, face_instance_id={self.face_instance_id}, "
+            f"suggested_person_id={self.suggested_person_id}, confidence={self.confidence})>"
         )
