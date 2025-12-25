@@ -616,3 +616,74 @@ class FaceAssignmentEvent(Base):
             f"<FaceAssignmentEvent(id={self.id}, operation={self.operation}, "
             f"face_count={self.face_count})>"
         )
+
+
+class FaceDetectionSessionStatus(str, Enum):
+    """Status enum for face detection sessions."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+
+
+class FaceDetectionSession(Base):
+    """Face detection session for tracking batch face detection operations."""
+
+    __tablename__ = "face_detection_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    training_session_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("training_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=FaceDetectionSessionStatus.PENDING.value
+    )
+
+    # Progress tracking
+    total_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    faces_detected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    faces_assigned: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )  # Auto-assigned to known persons
+
+    # Detection configuration
+    min_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    min_face_size: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False, default=16)
+
+    # Error tracking
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Background job reference
+    job_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )  # RQ job ID
+
+    __table_args__ = (
+        Index("ix_face_detection_sessions_status", "status"),
+        Index("ix_face_detection_sessions_training_session_id", "training_session_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<FaceDetectionSession(id={self.id}, status={self.status}, "
+            f"total_images={self.total_images}, faces_detected={self.faces_detected})>"
+        )

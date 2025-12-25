@@ -383,3 +383,227 @@ def recluster_after_training_job(
         person_threshold=person_threshold,
         unknown_method=unknown_method,
     )
+
+
+def detect_faces_for_session_job(
+    session_id: str,
+) -> dict[str, Any]:
+    """Process face detection for an entire session.
+
+    This job:
+    1. Updates session status to PROCESSING
+    2. Gets assets to process (either from linked training session or all unprocessed)
+    3. Processes images in batches using the existing FaceProcessingService
+    4. Updates progress after each batch
+    5. Auto-assigns faces to known persons using the existing assigner
+    6. Marks session as COMPLETED or FAILED
+
+    Args:
+        session_id: UUID string of the FaceDetectionSession
+
+    Returns:
+        dict with session results
+    """
+    import uuid as uuid_lib
+
+    from sqlalchemy import select
+
+    from image_search_service.db.models import (
+        FaceDetectionSession,
+        FaceDetectionSessionStatus,
+        TrainingEvidence,
+    )
+    from image_search_service.faces.assigner import get_face_assigner
+    from image_search_service.faces.service import get_face_service
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    session_uuid = uuid_lib.UUID(session_id)
+
+    logger.info(f"[{job_id}] Starting face detection for session {session_id}")
+
+    db_session = get_sync_session()
+    try:
+        # Get session and update status to PROCESSING
+        session = db_session.get(FaceDetectionSession, session_uuid)
+        if not session:
+            logger.error(f"[{job_id}] Session {session_id} not found")
+            return {
+                "session_id": session_id,
+                "status": "failed",
+                "error": "Session not found",
+            }
+
+        session.status = FaceDetectionSessionStatus.PROCESSING.value
+        session.started_at = datetime.now()
+        db_session.commit()
+
+        # Get assets to process
+        logger.info(f"[{job_id}] Getting assets to process")
+
+        # Get asset IDs that already have faces
+        processed_subquery = select(FaceInstance.asset_id).distinct()
+
+        # Get assets without faces
+        query = select(ImageAsset).where(~ImageAsset.id.in_(processed_subquery))
+
+        # If linked to training session, filter further
+        if session.training_session_id:
+            logger.info(
+                f"[{job_id}] Filtering to training session {session.training_session_id}"
+            )
+            # Get assets from this training session via TrainingEvidence
+            training_assets = select(TrainingEvidence.asset_id).where(
+                TrainingEvidence.session_id == session.training_session_id
+            )
+            query = query.where(ImageAsset.id.in_(training_assets))
+
+        assets = db_session.execute(query).scalars().all()
+
+        if not assets:
+            logger.info(f"[{job_id}] No assets to process")
+            session.status = FaceDetectionSessionStatus.COMPLETED.value
+            session.completed_at = datetime.now()
+            session.total_images = 0
+            db_session.commit()
+            return {
+                "session_id": session_id,
+                "status": "completed",
+                "total_images": 0,
+                "processed_images": 0,
+                "failed_images": 0,
+                "faces_detected": 0,
+                "faces_assigned": 0,
+            }
+
+        total_assets = len(assets)
+        session.total_images = total_assets
+        db_session.commit()
+
+        logger.info(f"[{job_id}] Processing {total_assets} assets")
+
+        # Process in batches
+        face_service = get_face_service(db_session)
+        batch_size = session.batch_size
+        total_faces_detected = 0
+        total_failed = 0
+        last_error = None
+
+        for i in range(0, len(assets), batch_size):
+            batch = assets[i : i + batch_size]
+            asset_ids = [a.id for a in batch]
+
+            logger.info(
+                f"[{job_id}] Processing batch {i // batch_size + 1} "
+                f"({len(asset_ids)} assets)"
+            )
+
+            try:
+                result = face_service.process_assets_batch(
+                    asset_ids=asset_ids,
+                    min_confidence=session.min_confidence,
+                    min_face_size=session.min_face_size,
+                    batch_size=session.batch_size,
+                )
+
+                # Update session progress
+                total_faces_detected += result["total_faces"]
+                total_failed += result["errors"]
+
+                session.processed_images += result["processed"]
+                session.faces_detected = total_faces_detected
+                session.failed_images = total_failed
+
+                if result.get("error_details"):
+                    last_error = f"Batch errors: {result['error_details'][0]['error']}"
+                    session.last_error = last_error
+
+                db_session.commit()
+
+                logger.info(
+                    f"[{job_id}] Batch complete: "
+                    f"{result['processed']} processed, {result['total_faces']} faces, "
+                    f"{result['errors']} errors"
+                )
+
+            except Exception as e:
+                logger.error(f"[{job_id}] Batch processing error: {e}")
+                total_failed += len(batch)
+                last_error = str(e)
+                session.failed_images = total_failed
+                session.last_error = last_error
+                db_session.commit()
+
+        # Auto-assign faces to known persons
+        logger.info(f"[{job_id}] Auto-assigning faces to known persons")
+        faces_assigned = 0
+
+        try:
+            assigner = get_face_assigner(
+                db_session=db_session,
+                similarity_threshold=0.6,  # Use default threshold
+            )
+
+            # Assign faces created during this session
+            assignment_result = assigner.assign_new_faces(
+                since=session.started_at,
+                max_faces=10000,  # Process all new faces
+            )
+
+            faces_assigned = assignment_result.get("assigned", 0)
+            session.faces_assigned = faces_assigned
+
+            logger.info(
+                f"[{job_id}] Auto-assignment complete: {faces_assigned} faces assigned"
+            )
+
+        except Exception as e:
+            logger.error(f"[{job_id}] Auto-assignment error: {e}")
+            # Don't fail the whole session for assignment errors
+            session.last_error = f"Assignment error: {e}"
+
+        # Mark session as complete
+        session.status = FaceDetectionSessionStatus.COMPLETED.value
+        session.completed_at = datetime.now()
+        db_session.commit()
+
+        logger.info(
+            f"[{job_id}] Session {session_id} complete: "
+            f"{session.processed_images} processed, {total_faces_detected} faces, "
+            f"{faces_assigned} assigned, {total_failed} failed"
+        )
+
+        return {
+            "session_id": session_id,
+            "status": "completed",
+            "total_images": session.total_images,
+            "processed_images": session.processed_images,
+            "failed_images": session.failed_images,
+            "faces_detected": session.faces_detected,
+            "faces_assigned": session.faces_assigned,
+            "last_error": session.last_error,
+        }
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Fatal error processing session {session_id}: {e}")
+
+        # Mark session as failed
+        try:
+            session = db_session.get(FaceDetectionSession, session_uuid)
+            if session:
+                session.status = FaceDetectionSessionStatus.FAILED.value
+                session.last_error = str(e)
+                session.completed_at = datetime.now()
+                db_session.commit()
+        except Exception as commit_error:
+            logger.error(f"[{job_id}] Failed to update session status: {commit_error}")
+
+        return {
+            "session_id": session_id,
+            "status": "failed",
+            "error": str(e),
+        }
+
+    finally:
+        db_session.close()

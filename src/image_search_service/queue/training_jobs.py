@@ -124,6 +124,76 @@ def train_session(session_id: int) -> dict[str, object]:
             f"elapsed: {elapsed:.2f}s, rate: {rate} img/min"
         )
 
+        # Mark training session as completed
+        from image_search_service.db.models import SessionStatus
+        from image_search_service.db.sync_operations import get_session_by_id_sync
+
+        training_session = get_session_by_id_sync(db_session, session_id)
+        if training_session and processed_count > 0:
+            training_session.status = SessionStatus.COMPLETED.value
+            training_session.completed_at = datetime.now(UTC)
+            db_session.commit()
+            logger.info(f"Marked training session {session_id} as completed")
+
+            # Auto-trigger face detection if we successfully processed images
+            try:
+                # Check if face detection session already exists for this training session
+                from image_search_service.db.models import (
+                    FaceDetectionSession,
+                    FaceDetectionSessionStatus,
+                )
+                from image_search_service.queue.worker import get_queue
+
+                existing_query = select(FaceDetectionSession).where(
+                    FaceDetectionSession.training_session_id == session_id
+                )
+                existing_result = db_session.execute(existing_query)
+                existing_face_session = existing_result.scalar_one_or_none()
+
+                if existing_face_session:
+                    logger.info(
+                        f"Face detection session {existing_face_session.id} already exists "
+                        f"for training session {session_id}, skipping auto-trigger"
+                    )
+                else:
+                    # Create face detection session
+                    face_session = FaceDetectionSession(
+                        training_session_id=session_id,
+                        status=FaceDetectionSessionStatus.PENDING.value,
+                        min_confidence=0.5,
+                        min_face_size=20,
+                        batch_size=16,
+                    )
+                    db_session.add(face_session)
+                    db_session.commit()
+                    db_session.refresh(face_session)
+
+                    # Enqueue face detection job
+                    from image_search_service.queue.face_jobs import (
+                        detect_faces_for_session_job,
+                    )
+
+                    queue = get_queue("default")
+                    face_job = queue.enqueue(
+                        detect_faces_for_session_job,
+                        str(face_session.id),
+                        job_timeout=86400,  # 24 hours
+                    )
+
+                    face_session.job_id = face_job.id
+                    db_session.commit()
+
+                    logger.info(
+                        f"Auto-triggered face detection session {face_session.id} "
+                        f"(job {face_job.id}) for completed training session {session_id}"
+                    )
+
+            except Exception as e:
+                # Don't fail the training completion if face detection trigger fails
+                logger.error(
+                    f"Failed to auto-trigger face detection for training session {session_id}: {e}"
+                )
+
         return {
             "status": "completed",
             "session_id": session_id,
