@@ -1,7 +1,6 @@
 """Fixtures for face pipeline tests."""
 
 import uuid
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import numpy as np

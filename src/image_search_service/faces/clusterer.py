@@ -2,7 +2,6 @@
 
 import logging
 import uuid
-from typing import Optional
 
 import numpy as np
 from qdrant_client.models import FieldCondition, Filter, IsEmptyCondition, PayloadField, Range
@@ -42,7 +41,7 @@ class FaceClusterer:
         self,
         quality_threshold: float = 0.5,
         max_faces: int = 50000,
-        time_bucket: Optional[str] = None,  # e.g., "2024-01" for filtering by year-month
+        time_bucket: str | None = None,  # e.g., "2024-01" for filtering by year-month
     ) -> dict:
         """Cluster all unlabeled faces into identity clusters.
 

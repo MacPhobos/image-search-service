@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 
 
@@ -31,8 +30,8 @@ class TestFaceAssigner:
     @pytest.mark.asyncio
     async def test_assign_no_new_faces(self, db_session, mock_person):
         """Test assignment when no unassigned faces exist."""
-        from image_search_service.faces.assigner import FaceAssigner
         from image_search_service.db.models import PersonPrototype, PrototypeRole
+        from image_search_service.faces.assigner import FaceAssigner
 
         # Create a prototype
         prototype = PersonPrototype(
@@ -68,8 +67,8 @@ class TestFaceAssigner:
     @pytest.mark.asyncio
     async def test_assign_face_to_person(self, db_session, mock_person, mock_face_instance):
         """Test successful face assignment to person."""
-        from image_search_service.faces.assigner import FaceAssigner
         from image_search_service.db.models import PersonPrototype, PrototypeRole
+        from image_search_service.faces.assigner import FaceAssigner
 
         # Create a prototype
         prototype = PersonPrototype(
@@ -118,8 +117,8 @@ class TestFaceAssigner:
     @pytest.mark.asyncio
     async def test_assign_filters_by_since(self, db_session, mock_person, mock_face_instance):
         """Test assignment filters faces by creation date."""
-        from image_search_service.faces.assigner import FaceAssigner
         from image_search_service.db.models import PersonPrototype, PrototypeRole
+        from image_search_service.faces.assigner import FaceAssigner
 
         # Create a prototype
         prototype = PersonPrototype(

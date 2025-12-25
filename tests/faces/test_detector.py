@@ -1,8 +1,8 @@
 """Tests for face detection module."""
 
-import numpy as np
-import pytest
 from unittest.mock import MagicMock
+
+import numpy as np
 
 
 class TestDetectedFace:
@@ -206,8 +206,9 @@ class TestDetectFacesFromPath:
 
     def test_detect_faces_from_path_valid_image(self, mock_insightface, tmp_path):
         """Test detection from valid image path."""
-        from image_search_service.faces.detector import detect_faces_from_path
         from PIL import Image
+
+        from image_search_service.faces.detector import detect_faces_from_path
 
         # Create a test image
         image_path = tmp_path / "test.jpg"

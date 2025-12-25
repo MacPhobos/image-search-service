@@ -54,7 +54,6 @@ class TestClusterEndpoints:
     @pytest.mark.asyncio
     async def test_get_cluster_success(self, test_client, db_session, mock_face_instance):
         """Test getting existing cluster."""
-        from image_search_service.db.models import FaceInstance
 
         # Set cluster_id for the mock face
         mock_face_instance.cluster_id = "test_cluster_123"
@@ -479,8 +478,9 @@ class TestBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_remove_success(self, test_client, db_session, mock_person, mock_image_asset):
         """Test successful bulk remove operation."""
-        from image_search_service.db.models import FaceInstance
         from unittest.mock import patch
+
+        from image_search_service.db.models import FaceInstance
 
         # Create 2 faces for the person
         face1 = FaceInstance(
@@ -581,8 +581,9 @@ class TestBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_move_create_new_person(self, test_client, db_session, mock_person, mock_image_asset):
         """Test bulk move creating a new person."""
-        from image_search_service.db.models import FaceInstance
         from unittest.mock import patch
+
+        from image_search_service.db.models import FaceInstance
 
         # Create a face for the source person
         face = FaceInstance(
@@ -619,8 +620,9 @@ class TestBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_move_to_existing_person(self, test_client, db_session, mock_person, mock_image_asset):
         """Test bulk move to existing person."""
-        from image_search_service.db.models import FaceInstance, Person
         from unittest.mock import patch
+
+        from image_search_service.db.models import FaceInstance, Person
 
         # Create target person
         target_person = Person(name="Target Person")

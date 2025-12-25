@@ -1,6 +1,6 @@
 """Asset discovery service for scanning directories and creating asset records."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -139,7 +139,7 @@ class AssetDiscoveryService:
         asset = ImageAsset(
             path=path,
             file_size=file_stat.st_size,
-            file_modified_at=datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.utc),
+            file_modified_at=datetime.fromtimestamp(file_stat.st_mtime, tz=UTC),
         )
 
         db.add(asset)

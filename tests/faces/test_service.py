@@ -1,7 +1,6 @@
 """Tests for face processing service."""
 
 import uuid
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -58,8 +57,8 @@ class TestFaceProcessingService:
         self, db_session, mock_image_asset, mock_qdrant_client, mock_detected_face
     ):
         """Test that processing creates FaceInstance records."""
-        from image_search_service.faces.service import FaceProcessingService
         from image_search_service.db.models import FaceInstance
+        from image_search_service.faces.service import FaceProcessingService
 
         mock_image_asset.path = "/valid/path.jpg"
         await db_session.commit()
@@ -135,8 +134,8 @@ class TestFaceProcessingService:
         self, db_session, mock_image_asset, mock_qdrant_client, mock_detected_face
     ):
         """Test that reprocessing same asset doesn't duplicate faces."""
-        from image_search_service.faces.service import FaceProcessingService
         from image_search_service.db.models import FaceInstance
+        from image_search_service.faces.service import FaceProcessingService
 
         # Create an existing face instance
         existing_face = FaceInstance(
@@ -232,8 +231,8 @@ class TestFaceProcessingService:
 
     def test_resolve_asset_path_from_path_attribute(self):
         """Test path resolution from 'path' attribute."""
-        from image_search_service.faces.service import FaceProcessingService
         from image_search_service.db.models import ImageAsset
+        from image_search_service.faces.service import FaceProcessingService
 
         mock_asset = MagicMock(spec=ImageAsset)
         mock_asset.path = "/test/image.jpg"

@@ -17,7 +17,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.types import Enum as SQLEnum
@@ -27,6 +28,10 @@ class Base(DeclarativeBase):
     """Base class for all database models."""
 
     pass
+
+
+# Use JSONB for PostgreSQL, JSON for SQLite compatibility in tests
+JSONB = JSON().with_variant(PG_JSONB(astext_type=Text()), "postgresql")
 
 
 class TrainingStatus(str, Enum):

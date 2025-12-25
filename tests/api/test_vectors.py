@@ -15,7 +15,6 @@ from image_search_service.db.models import (
 from image_search_service.vector.qdrant import upsert_vector
 from tests.conftest import MockEmbeddingService
 
-
 # Fixtures
 
 

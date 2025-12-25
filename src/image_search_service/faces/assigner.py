@@ -3,7 +3,6 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Optional
 
 import numpy as np
 from sqlalchemy import select, update
@@ -34,7 +33,7 @@ class FaceAssigner:
 
     def assign_new_faces(
         self,
-        since: Optional[datetime] = None,
+        since: datetime | None = None,
         max_faces: int = 1000,
     ) -> dict:
         """Assign new/unlabeled faces to known persons using prototype matching.
@@ -190,7 +189,7 @@ class FaceAssigner:
             "status": "completed",
         }
 
-    def _get_face_embedding(self, qdrant_point_id: uuid.UUID) -> Optional[list[float]]:
+    def _get_face_embedding(self, qdrant_point_id: uuid.UUID) -> list[float] | None:
         """Get face embedding from Qdrant by point ID.
 
         Args:
@@ -227,7 +226,12 @@ class FaceAssigner:
         Returns:
             Summary of centroids computed
         """
-        from image_search_service.db.models import FaceInstance, Person, PersonPrototype, PrototypeRole
+        from image_search_service.db.models import (
+            FaceInstance,
+            Person,
+            PersonPrototype,
+            PrototypeRole,
+        )
         from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
         qdrant = get_face_qdrant_client()
