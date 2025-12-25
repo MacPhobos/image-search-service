@@ -16,6 +16,8 @@ from image_search_service.api.face_schemas import (
     BulkRemoveRequest,
     BulkRemoveResponse,
     ClusterDetailResponse,
+    ClusterDualRequest,
+    ClusterDualResponse,
     ClusteringResultResponse,
     ClusterListResponse,
     ClusterSummary,
@@ -36,6 +38,8 @@ from image_search_service.api.face_schemas import (
     PersonResponse,
     SplitClusterRequest,
     SplitClusterResponse,
+    TrainMatchingRequest,
+    TrainMatchingResponse,
     TriggerClusteringRequest,
 )
 from image_search_service.db.models import (
@@ -898,6 +902,103 @@ async def assign_face_to_person(
         await db.rollback()
         logger.error(f"Failed to assign face {face_id} to person {request.person_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to assign face: {str(e)}")
+
+
+# ============ Dual-Mode Clustering Endpoints ============
+
+
+@router.post("/cluster/dual", response_model=ClusterDualResponse)
+async def cluster_faces_dual(
+    request: ClusterDualRequest,
+) -> ClusterDualResponse:
+    """Run dual-mode face clustering (supervised + unsupervised).
+
+    - Phase 1: Assigns unlabeled faces to known people (supervised matching)
+    - Phase 2: Clusters remaining unknown faces (unsupervised clustering)
+
+    Can run as background job (default) or synchronously.
+    """
+    from redis import Redis
+    from rq import Queue
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.queue.face_jobs import cluster_dual_job
+
+    if request.queue:
+        # Queue as background job
+        settings = get_settings()
+        redis = Redis.from_url(settings.redis_url)
+        q = Queue("default", connection=redis)
+
+        job = q.enqueue(
+            cluster_dual_job,
+            person_threshold=request.person_threshold,
+            unknown_method=request.unknown_method,
+            unknown_min_size=request.unknown_min_size,
+            unknown_eps=request.unknown_eps,
+            max_faces=request.max_faces,
+        )
+        logger.info(f"Queued dual-mode clustering job: {job.id}")
+        return ClusterDualResponse(job_id=job.id, status="queued")
+    else:
+        # Run synchronously (not recommended for large datasets)
+        logger.warning("Running dual-mode clustering synchronously (may be slow)")
+        result = cluster_dual_job(
+            person_threshold=request.person_threshold,
+            unknown_method=request.unknown_method,
+            unknown_min_size=request.unknown_min_size,
+            unknown_eps=request.unknown_eps,
+            max_faces=request.max_faces,
+        )
+        return ClusterDualResponse(status="completed", result=result)
+
+
+@router.post("/train", response_model=TrainMatchingResponse)
+async def train_face_matching(
+    request: TrainMatchingRequest,
+) -> TrainMatchingResponse:
+    """Train face matching model using triplet loss.
+
+    Improves person separation for better clustering accuracy by fine-tuning
+    embeddings using labeled face data.
+
+    Can run as background job (default) or synchronously.
+    """
+    from redis import Redis
+    from rq import Queue
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.queue.face_jobs import train_person_matching_job
+
+    if request.queue:
+        # Queue as background job
+        settings = get_settings()
+        redis = Redis.from_url(settings.redis_url)
+        q = Queue("default", connection=redis)
+
+        job = q.enqueue(
+            train_person_matching_job,
+            epochs=request.epochs,
+            margin=request.margin,
+            batch_size=request.batch_size,
+            learning_rate=request.learning_rate,
+            min_faces_per_person=request.min_faces,
+            checkpoint_path=request.checkpoint_path,
+        )
+        logger.info(f"Queued face training job: {job.id}")
+        return TrainMatchingResponse(job_id=job.id, status="queued")
+    else:
+        # Run synchronously (not recommended - training can be slow)
+        logger.warning("Running face training synchronously (may be very slow)")
+        result = train_person_matching_job(
+            epochs=request.epochs,
+            margin=request.margin,
+            batch_size=request.batch_size,
+            learning_rate=request.learning_rate,
+            min_faces_per_person=request.min_faces,
+            checkpoint_path=request.checkpoint_path,
+        )
+        return TrainMatchingResponse(status="completed", result=result)
 
 
 # ============ Helper Functions ============

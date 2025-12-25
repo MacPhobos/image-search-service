@@ -1,9 +1,8 @@
 """RQ background jobs for face detection, clustering, and assignment."""
 
 import logging
-import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any
 
 from rq import get_current_job
 
@@ -17,11 +16,11 @@ def detect_faces_job(
     asset_ids: list[str],
     min_confidence: float = 0.5,
     min_face_size: int = 20,
-) -> dict:
+) -> dict[str, Any]:
     """RQ job to detect and embed faces for a batch of assets.
 
     Args:
-        asset_ids: List of asset UUID strings to process
+        asset_ids: List of asset ID strings to process
         min_confidence: Minimum detection confidence
         min_face_size: Minimum face size in pixels
 
@@ -31,10 +30,10 @@ def detect_faces_job(
     job = get_current_job()
     job_id = job.id if job else "no-job"
 
-    # Convert string UUIDs to UUID objects
-    uuids = [uuid.UUID(aid) for aid in asset_ids]
+    # Convert string asset IDs to integers
+    asset_id_ints = [int(aid) for aid in asset_ids]
 
-    logger.info(f"[{job_id}] Starting face detection for {len(uuids)} assets")
+    logger.info(f"[{job_id}] Starting face detection for {len(asset_id_ints)} assets")
 
     from image_search_service.faces.service import get_face_service
 
@@ -42,7 +41,7 @@ def detect_faces_job(
     try:
         service = get_face_service(db_session)
         result = service.process_assets_batch(
-            asset_ids=uuids,
+            asset_ids=asset_id_ints,
             min_confidence=min_confidence,
             min_face_size=min_face_size,
         )
@@ -63,8 +62,8 @@ def cluster_faces_job(
     max_faces: int = 50000,
     min_cluster_size: int = 5,
     min_samples: int = 3,
-    time_bucket: Optional[str] = None,
-) -> dict:
+    time_bucket: str | None = None,
+) -> dict[str, Any]:
     """RQ job to cluster unlabeled faces using HDBSCAN.
 
     Args:
@@ -108,10 +107,10 @@ def cluster_faces_job(
 
 
 def assign_faces_job(
-    since: Optional[str] = None,
+    since: str | None = None,
     max_faces: int = 1000,
     similarity_threshold: float = 0.6,
-) -> dict:
+) -> dict[str, Any]:
     """RQ job to assign new faces to known persons via prototype matching.
 
     Args:
@@ -158,7 +157,7 @@ def assign_faces_job(
         db_session.close()
 
 
-def compute_centroids_job() -> dict:
+def compute_centroids_job() -> dict[str, Any]:
     """RQ job to compute/update person centroids.
 
     Returns:
@@ -190,7 +189,7 @@ def backfill_faces_job(
     limit: int = 1000,
     offset: int = 0,
     min_confidence: float = 0.5,
-) -> dict:
+) -> dict[str, Any]:
     """RQ job to backfill face detection for existing assets without faces.
 
     Args:
@@ -239,3 +238,141 @@ def backfill_faces_job(
         return result
     finally:
         db_session.close()
+
+
+# ============ Dual-Mode Clustering Jobs ============
+
+
+def cluster_dual_job(
+    person_threshold: float = 0.7,
+    unknown_method: str = "hdbscan",
+    unknown_min_size: int = 3,
+    unknown_eps: float = 0.5,
+    max_faces: int | None = None,
+) -> dict[str, Any]:
+    """RQ job for dual-mode face clustering (supervised + unsupervised).
+
+    Args:
+        person_threshold: Minimum similarity for assignment to person (0-1)
+        unknown_method: Clustering method for unknown faces (hdbscan, dbscan, agglomerative)
+        unknown_min_size: Minimum cluster size for unknown faces
+        unknown_eps: Distance threshold for DBSCAN/Agglomerative
+        max_faces: Optional limit on number of faces to process
+
+    Returns:
+        Result dict with clustering statistics
+    """
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    logger.info(
+        f"[{job_id}] Starting dual-mode clustering: "
+        f"threshold={person_threshold}, method={unknown_method}"
+    )
+
+    from image_search_service.faces.dual_clusterer import get_dual_mode_clusterer
+
+    db_session = get_sync_session()
+    try:
+        clusterer = get_dual_mode_clusterer(
+            db_session=db_session,
+            person_match_threshold=person_threshold,
+            unknown_min_cluster_size=unknown_min_size,
+            unknown_method=unknown_method,
+            unknown_eps=unknown_eps,
+        )
+        result = clusterer.cluster_all_faces(max_faces=max_faces)
+
+        logger.info(
+            f"[{job_id}] Dual-mode clustering complete: "
+            f"{result.get('total_processed', 0)} faces processed, "
+            f"{result.get('assigned_to_people', 0)} assigned, "
+            f"{result.get('unknown_clusters', 0)} unknown clusters"
+        )
+
+        return result
+    finally:
+        db_session.close()
+
+
+def train_person_matching_job(
+    epochs: int = 20,
+    margin: float = 0.2,
+    batch_size: int = 32,
+    learning_rate: float = 0.0001,
+    min_faces_per_person: int = 5,
+    checkpoint_path: str | None = None,
+) -> dict[str, Any]:
+    """RQ job for training face matching model using triplet loss.
+
+    Args:
+        epochs: Number of training epochs
+        margin: Triplet loss margin
+        batch_size: Batch size for training
+        learning_rate: Learning rate
+        min_faces_per_person: Minimum faces required per person for training
+        checkpoint_path: Optional path to save checkpoint
+
+    Returns:
+        Result dict with training statistics
+    """
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    logger.info(
+        f"[{job_id}] Starting face matching training: "
+        f"epochs={epochs}, margin={margin}, batch_size={batch_size}"
+    )
+
+    from image_search_service.faces.trainer import get_face_trainer
+
+    db_session = get_sync_session()
+    try:
+        trainer = get_face_trainer(
+            db_session=db_session,
+            margin=margin,
+            epochs=epochs,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+        )
+        result = trainer.fine_tune_for_person_clustering(
+            min_faces_per_person=min_faces_per_person,
+            checkpoint_path=checkpoint_path,
+        )
+
+        logger.info(
+            f"[{job_id}] Training complete: "
+            f"{result.get('persons_used', 0)} persons, "
+            f"{result.get('total_triplets', 0)} triplets, "
+            f"final_loss={result.get('final_loss', 0):.4f}"
+        )
+
+        return result
+    finally:
+        db_session.close()
+
+
+def recluster_after_training_job(
+    person_threshold: float = 0.7,
+    unknown_method: str = "hdbscan",
+) -> dict[str, Any]:
+    """RQ job to recluster faces after training.
+
+    Runs clustering with potentially improved embeddings.
+
+    Args:
+        person_threshold: Minimum similarity for assignment to person
+        unknown_method: Clustering method for unknown faces
+
+    Returns:
+        Result dict with clustering statistics
+    """
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    logger.info(f"[{job_id}] Starting post-training reclustering")
+
+    return cluster_dual_job(
+        person_threshold=person_threshold,
+        unknown_method=unknown_method,
+    )

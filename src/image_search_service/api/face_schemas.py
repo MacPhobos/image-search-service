@@ -295,3 +295,48 @@ class AssignFaceResponse(CamelCaseModel):
     face_id: UUID
     person_id: UUID
     person_name: str
+
+
+# ============ Dual-Mode Clustering Schemas ============
+
+
+class ClusterDualRequest(CamelCaseModel):
+    """Request to run dual-mode clustering (supervised + unsupervised)."""
+
+    person_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    unknown_method: str = Field(default="hdbscan", pattern="^(hdbscan|dbscan|agglomerative)$")
+    unknown_min_size: int = Field(default=3, ge=1)
+    unknown_eps: float = Field(default=0.5, ge=0.0, le=2.0)
+    max_faces: int | None = Field(default=None, ge=1)
+    queue: bool = Field(default=True, description="Run as background job")
+
+
+class ClusterDualResponse(CamelCaseModel):
+    """Response from dual-mode clustering."""
+
+    job_id: str | None = None
+    status: str
+    result: dict[str, int] | None = None
+
+
+# ============ Face Training Schemas ============
+
+
+class TrainMatchingRequest(CamelCaseModel):
+    """Request to train face matching model using triplet loss."""
+
+    epochs: int = Field(default=20, ge=1, le=1000)
+    margin: float = Field(default=0.2, ge=0.0, le=1.0)
+    batch_size: int = Field(default=32, ge=1, le=256)
+    learning_rate: float = Field(default=0.0001, ge=0.00001, le=0.1)
+    min_faces: int = Field(default=5, ge=1)
+    checkpoint_path: str | None = Field(default=None)
+    queue: bool = Field(default=True, description="Run as background job")
+
+
+class TrainMatchingResponse(CamelCaseModel):
+    """Response from face training."""
+
+    job_id: str | None = None
+    status: str
+    result: dict[str, int | float] | None = None
