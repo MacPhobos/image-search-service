@@ -1,5 +1,6 @@
 .PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
-	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection faces-cluster-dual faces-train-matching faces-pipeline
+	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection \
+	faces-cluster-dual faces-train-matching faces-pipeline faces-pipeline-dual faces-pipeline-full
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -85,5 +86,69 @@ faces-train-matching: ## Train face matching model with triplet loss
 		--batch-size $(or $(BATCH_SIZE),32) \
 		--min-faces $(or $(MIN_FACES),5)
 
-faces-pipeline: faces-ensure-collection faces-backfill faces-cluster faces-assign faces-centroids faces-stats ## Run full face detection pipeline
+faces-pipeline: faces-ensure-collection faces-backfill faces-cluster faces-assign faces-centroids faces-stats ## Run full face detection pipeline (legacy)
 	@echo "Face pipeline complete!"
+
+faces-pipeline-dual: ## Run dual-mode face pipeline (detect → cluster → stats)
+	@echo "=========================================="
+	@echo "  DUAL-MODE FACE PIPELINE"
+	@echo "=========================================="
+	@echo ""
+	@echo "Step 1/4: Ensuring Qdrant collection..."
+	@$(MAKE) faces-ensure-collection
+	@echo ""
+	@echo "Step 2/4: Detecting faces in images..."
+	@$(MAKE) faces-backfill LIMIT=$(or $(LIMIT),5000)
+	@echo ""
+	@echo "Step 3/4: Running dual-mode clustering..."
+	@$(MAKE) faces-cluster-dual \
+		PERSON_THRESHOLD=$(or $(PERSON_THRESHOLD),0.7) \
+		UNKNOWN_METHOD=$(or $(UNKNOWN_METHOD),hdbscan)
+	@echo ""
+	@echo "Step 4/4: Showing statistics..."
+	@$(MAKE) faces-stats
+	@echo ""
+	@echo "=========================================="
+	@echo "  PIPELINE COMPLETE"
+	@echo "=========================================="
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Label clusters: curl -X POST localhost:8000/api/v1/faces/clusters/{id}/label"
+	@echo "  2. Train model:    make faces-train-matching EPOCHS=20"
+	@echo "  3. Re-cluster:     make faces-cluster-dual"
+	@echo ""
+
+faces-pipeline-full: ## Run complete pipeline with training (detect → cluster → train → re-cluster)
+	@echo "=========================================="
+	@echo "  FULL FACE PIPELINE WITH TRAINING"
+	@echo "=========================================="
+	@echo ""
+	@echo "Step 1/6: Ensuring Qdrant collection..."
+	@$(MAKE) faces-ensure-collection
+	@echo ""
+	@echo "Step 2/6: Detecting faces in images..."
+	@$(MAKE) faces-backfill LIMIT=$(or $(LIMIT),5000)
+	@echo ""
+	@echo "Step 3/6: Running initial dual-mode clustering..."
+	@$(MAKE) faces-cluster-dual \
+		PERSON_THRESHOLD=$(or $(PERSON_THRESHOLD),0.7) \
+		UNKNOWN_METHOD=$(or $(UNKNOWN_METHOD),hdbscan)
+	@echo ""
+	@echo "Step 4/6: Training face matching model..."
+	@$(MAKE) faces-train-matching \
+		EPOCHS=$(or $(EPOCHS),20) \
+		MARGIN=$(or $(MARGIN),0.2) \
+		MIN_FACES=$(or $(MIN_FACES),5)
+	@echo ""
+	@echo "Step 5/6: Re-clustering with trained model..."
+	@$(MAKE) faces-cluster-dual \
+		PERSON_THRESHOLD=$(or $(PERSON_THRESHOLD),0.7) \
+		UNKNOWN_METHOD=$(or $(UNKNOWN_METHOD),hdbscan)
+	@echo ""
+	@echo "Step 6/6: Showing final statistics..."
+	@$(MAKE) faces-stats
+	@echo ""
+	@echo "=========================================="
+	@echo "  FULL PIPELINE COMPLETE"
+	@echo "=========================================="
+	@echo ""
