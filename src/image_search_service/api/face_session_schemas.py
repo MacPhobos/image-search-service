@@ -76,3 +76,55 @@ class FaceDetectionSessionListResponse(CamelCaseModel):
     total: int
     page: int
     page_size: int
+
+
+class FaceSuggestionResponse(CamelCaseModel):
+    """Response schema for a face suggestion."""
+
+    id: int
+    face_instance_id: str  # UUID as string
+    suggested_person_id: str  # UUID as string
+    confidence: float
+    source_face_id: str  # UUID as string
+    status: str
+    created_at: datetime
+    reviewed_at: datetime | None
+    # Include face thumbnail URL for UI
+    face_thumbnail_url: str | None = None
+    person_name: str | None = None
+
+
+class FaceSuggestionListResponse(CamelCaseModel):
+    """Paginated list of face suggestions."""
+
+    items: list[FaceSuggestionResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class AcceptSuggestionRequest(CamelCaseModel):
+    """Request to accept a suggestion."""
+
+    pass  # No additional fields needed
+
+
+class RejectSuggestionRequest(CamelCaseModel):
+    """Request to reject a suggestion."""
+
+    pass  # No additional fields needed
+
+
+class BulkSuggestionActionRequest(CamelCaseModel):
+    """Request for bulk accept/reject of suggestions."""
+
+    suggestion_ids: list[int]
+    action: str = Field(..., pattern="^(accept|reject)$")
+
+
+class BulkSuggestionActionResponse(CamelCaseModel):
+    """Response for bulk suggestion action."""
+
+    processed: int
+    failed: int
+    errors: list[str] = []
