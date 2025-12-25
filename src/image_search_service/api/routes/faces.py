@@ -72,13 +72,24 @@ async def list_clusters(
 ) -> ClusterListResponse:
     """List face clusters with pagination."""
     # Build subquery for cluster aggregation
+    # Note: array_agg is PostgreSQL-specific, group_concat for SQLite
+    # In production we use Postgres; for tests we detect SQLite
+    is_sqlite = db.bind and "sqlite" in str(db.bind.dialect.name)
+
+    if is_sqlite:
+        # SQLite: use group_concat (returns string, we'll split it)
+        face_ids_expr = func.group_concat(FaceInstance.id).label("face_ids")
+    else:
+        # PostgreSQL: use array_agg (returns array)
+        face_ids_expr = func.array_agg(FaceInstance.id).label("face_ids")
+
     cluster_query = (
         select(
             FaceInstance.cluster_id,
             FaceInstance.person_id,
             func.count(FaceInstance.id).label("face_count"),
             func.avg(FaceInstance.quality_score).label("avg_quality"),
-            func.array_agg(FaceInstance.id).label("face_ids"),
+            face_ids_expr,
         )
         .where(FaceInstance.cluster_id.isnot(None))
         .group_by(FaceInstance.cluster_id, FaceInstance.person_id)
@@ -106,11 +117,19 @@ async def list_clusters(
             person = await db.get(Person, row.person_id)
             person_name = person.name if person else None
 
+        # Handle face_ids based on database type
+        if is_sqlite and isinstance(row.face_ids, str):
+            # SQLite returns comma-separated string of UUIDs
+            face_ids_list = [UUID(x.strip()) for x in row.face_ids.split(",")] if row.face_ids else []
+        else:
+            # PostgreSQL returns array of UUIDs
+            face_ids_list = list(row.face_ids) if row.face_ids else []
+
         items.append(
             ClusterSummary(
                 cluster_id=row.cluster_id,
                 face_count=row.face_count,
-                sample_face_ids=row.face_ids[:5] if row.face_ids else [],
+                sample_face_ids=face_ids_list[:5],
                 avg_quality=row.avg_quality,
                 person_id=row.person_id,
                 person_name=person_name,

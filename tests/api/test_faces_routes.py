@@ -30,7 +30,7 @@ class TestClusterEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["page"] == 2
-        assert data["page_size"] == 10
+        assert data["pageSize"] == 10
 
     @pytest.mark.asyncio
     async def test_list_clusters_invalid_page(self, test_client, db_session):
@@ -111,7 +111,7 @@ class TestPersonEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["page"] == 1
-        assert data["page_size"] == 20
+        assert data["pageSize"] == 20
 
     @pytest.mark.asyncio
     async def test_get_person_not_found(self, test_client):
@@ -348,7 +348,7 @@ class TestFaceDetectionEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["page"] == 1
-        assert data["page_size"] == 50
+        assert data["pageSize"] == 50
 
     @pytest.mark.asyncio
     async def test_get_face_instance_not_found(self, test_client):
