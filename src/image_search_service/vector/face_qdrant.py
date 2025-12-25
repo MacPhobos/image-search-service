@@ -51,7 +51,7 @@ class FaceQdrantClient:
     """
 
     _instance: Optional["FaceQdrantClient"] = None
-    _client: Optional[QdrantClient] = None
+    _client: QdrantClient | None = None
 
     def __init__(self) -> None:
         """Initialize client with lazy loading."""
@@ -156,11 +156,11 @@ class FaceQdrantClient:
         asset_id: uuid.UUID,
         face_instance_id: uuid.UUID,
         detection_confidence: float,
-        quality_score: Optional[float] = None,
-        bbox: Optional[dict[str, float]] = None,
-        person_id: Optional[uuid.UUID] = None,
-        cluster_id: Optional[str] = None,
-        taken_at: Optional[datetime] = None,
+        quality_score: float | None = None,
+        bbox: dict[str, float] | None = None,
+        person_id: uuid.UUID | None = None,
+        cluster_id: str | None = None,
+        taken_at: datetime | None = None,
         is_prototype: bool = False,
     ) -> None:
         """Upsert a single face embedding with metadata payload.
@@ -381,9 +381,9 @@ class FaceQdrantClient:
         query_embedding: list[float],
         limit: int = 10,
         score_threshold: float = 0.5,
-        filter_person_id: Optional[uuid.UUID] = None,
-        filter_cluster_id: Optional[str] = None,
-        filter_is_prototype: Optional[bool] = None,
+        filter_person_id: uuid.UUID | None = None,
+        filter_cluster_id: str | None = None,
+        filter_is_prototype: bool | None = None,
     ) -> list[ScoredPoint]:
         """Search for similar faces with optional filters.
 
@@ -462,11 +462,11 @@ class FaceQdrantClient:
     def scroll_faces(
         self,
         limit: int = 100,
-        offset: Optional[str] = None,
-        filter_person_id: Optional[uuid.UUID] = None,
-        filter_cluster_id: Optional[str] = None,
+        offset: str | None = None,
+        filter_person_id: uuid.UUID | None = None,
+        filter_cluster_id: str | None = None,
         include_vectors: bool = False,
-    ) -> tuple[list[Record], Optional[str]]:
+    ) -> tuple[list[Record], str | None]:
         """Scroll through faces with optional filters.
 
         Args:
@@ -689,7 +689,7 @@ class FaceQdrantClient:
             logger.error(f"Failed to delete face instance {face_instance_id}: {e}")
             raise
 
-    def get_collection_info(self) -> Optional[dict[str, Any]]:
+    def get_collection_info(self) -> dict[str, Any] | None:
         """Get collection statistics and configuration.
 
         Returns:
@@ -710,6 +710,40 @@ class FaceQdrantClient:
         except Exception as e:
             logger.warning(f"Failed to get collection info for '{FACE_COLLECTION_NAME}': {e}")
             return None
+
+    def reset_collection(self) -> int:
+        """Delete all vectors in the faces collection and recreate it.
+
+        WARNING: This is destructive and cannot be undone.
+
+        Returns:
+            Total number of vectors deleted
+        """
+        try:
+            # Get count before deletion
+            vector_count = 0
+            try:
+                collection_info = self.client.get_collection(collection_name=FACE_COLLECTION_NAME)
+                vector_count = collection_info.points_count or 0
+            except Exception:
+                # Collection might not exist yet
+                logger.info(f"Collection '{FACE_COLLECTION_NAME}' does not exist, nothing to reset")
+                return 0
+
+            # Delete the entire collection
+            self.client.delete_collection(collection_name=FACE_COLLECTION_NAME)
+            logger.warning(f"Deleted collection '{FACE_COLLECTION_NAME}'")
+
+            # Recreate empty collection with same configuration
+            self.ensure_collection()
+            logger.info(f"Recreated collection '{FACE_COLLECTION_NAME}' with dim={FACE_VECTOR_DIM}")
+
+            logger.warning(f"Reset face collection: deleted {vector_count} vectors")
+            return vector_count
+
+        except Exception as e:
+            logger.error(f"Failed to reset face collection: {e}")
+            raise
 
     def close(self) -> None:
         """Close Qdrant client and cleanup resources."""
