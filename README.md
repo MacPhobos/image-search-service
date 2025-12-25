@@ -54,6 +54,8 @@ Python 3.12 image search service with vector similarity using Qdrant.
 | `make migrate` | Run database migrations |
 | `make makemigrations` | Create new migration |
 | `make worker` | Start RQ background worker |
+| `make faces-pipeline-dual` | Run dual-mode face pipeline (detect → cluster → stats) |
+| `make faces-pipeline-full` | Full pipeline with training (detect → cluster → train → re-cluster) |
 | `make faces-cluster-dual` | Run dual-mode face clustering |
 | `make faces-train-matching` | Train face matching model |
 
@@ -164,26 +166,48 @@ The service includes advanced face recognition with dual-mode clustering and tra
 
 ### Quick Start - Face Pipeline
 
+**One-command pipelines:**
+
 ```bash
-# 1. Detect faces in images
-make faces-backfill LIMIT=1000
+# Quick pipeline: detect → cluster → stats (recommended for first run)
+make faces-pipeline-dual
 
-# 2. Run dual-mode clustering (supervised + unsupervised)
-make faces-cluster-dual
+# Full pipeline with training: detect → cluster → train → re-cluster → stats
+make faces-pipeline-full EPOCHS=20
+```
 
-# 3. View statistics
-make faces-stats
+**Step-by-step workflow:**
 
-# 4. Label clusters via API
+```bash
+# 1. Run dual-mode pipeline (detects faces and clusters them)
+make faces-pipeline-dual
+
+# 2. Label clusters via API (identify who's who)
 curl -X POST http://localhost:8000/api/v1/faces/clusters/{cluster_id}/label \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice"}'
 
-# 5. Train model to improve accuracy (after labeling)
+# 3. Train model to improve accuracy (after labeling 5+ people)
 make faces-train-matching EPOCHS=20
 
-# 6. Re-cluster with improved model
+# 4. Re-cluster with improved model
 make faces-cluster-dual
+
+# 5. View statistics
+make faces-stats
+```
+
+**Pipeline options:**
+
+```bash
+# Custom face detection limit
+make faces-pipeline-dual LIMIT=10000
+
+# Custom clustering threshold (higher = more conservative)
+make faces-pipeline-dual PERSON_THRESHOLD=0.8
+
+# Full pipeline with custom training
+make faces-pipeline-full EPOCHS=50 MARGIN=0.3
 ```
 
 ### Dual-Mode Clustering
