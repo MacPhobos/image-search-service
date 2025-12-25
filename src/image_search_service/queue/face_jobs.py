@@ -5,8 +5,14 @@ from datetime import datetime
 from typing import Any
 
 from rq import get_current_job
+from sqlalchemy import select
 
-from image_search_service.db.models import FaceInstance, ImageAsset
+from image_search_service.db.models import (
+    FaceInstance,
+    FaceSuggestion,
+    FaceSuggestionStatus,
+    ImageAsset,
+)
 from image_search_service.db.sync_operations import get_sync_session
 
 logger = logging.getLogger(__name__)
@@ -605,5 +611,151 @@ def detect_faces_for_session_job(
             "error": str(e),
         }
 
+    finally:
+        db_session.close()
+
+
+def propagate_person_label_job(
+    source_face_id: str,
+    person_id: str,
+    min_confidence: float = 0.7,
+    max_suggestions: int = 50,
+) -> dict[str, Any]:
+    """Find similar faces and create suggestions when a face is labeled to a person.
+
+    This job is triggered when a user assigns a face to a person. It searches for
+    similar unassigned faces and creates FaceSuggestion records for user review.
+
+    Args:
+        source_face_id: UUID string of the face that was just labeled
+        person_id: UUID string of the person the face was assigned to
+        min_confidence: Minimum cosine similarity to create suggestion (default 0.7)
+        max_suggestions: Maximum number of suggestions to create (default 50)
+
+    Returns:
+        Dictionary with job results
+    """
+    import uuid as uuid_lib
+
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    # Convert string UUIDs to UUID objects
+    source_face_uuid = uuid_lib.UUID(source_face_id)
+    person_uuid = uuid_lib.UUID(person_id)
+
+    logger.info(f"[{job_id}] Starting propagation for face {source_face_id} → person {person_id}")
+
+    db_session = get_sync_session()
+
+    try:
+        # 1. Get the source face instance
+        source_face = db_session.get(FaceInstance, source_face_uuid)
+        if not source_face:
+            logger.error(f"[{job_id}] Face {source_face_id} not found")
+            return {"status": "error", "message": f"Face {source_face_id} not found"}
+
+        # 2. Get face vector from Qdrant
+        face_client = get_face_qdrant_client()
+
+        # Retrieve the source face vector
+        points = face_client.client.retrieve(
+            collection_name="faces",
+            ids=[str(source_face.qdrant_point_id)],
+            with_vectors=True,
+        )
+
+        if not points or not points[0].vector:
+            logger.error(f"[{job_id}] No vector found for face {source_face_id}")
+            return {
+                "status": "error",
+                "message": f"No vector found for face {source_face_id}",
+            }
+
+        # Extract vector - handle both dict and list formats
+        raw_vector = points[0].vector
+        if isinstance(raw_vector, dict):
+            source_vector: list[float] = list(raw_vector.values())[0]  # type: ignore[assignment]
+        else:
+            source_vector = raw_vector  # type: ignore[assignment]
+
+        # 3. Search for similar faces (unassigned ones)
+        search_results = face_client.client.query_points(
+            collection_name="faces",
+            query=source_vector,
+            limit=max_suggestions + 10,  # Get extra to filter assigned ones
+            score_threshold=min_confidence,
+            with_payload=True,
+        )
+
+        # 4. Filter to unassigned faces and create suggestions
+        suggestions_created = 0
+        faces_checked = 0
+
+        for result in search_results.points:
+            face_id = uuid_lib.UUID(str(result.id))
+            confidence = result.score
+
+            # Skip the source face itself
+            if face_id == source_face_uuid:
+                continue
+
+            faces_checked += 1
+
+            # Get the face instance
+            face = db_session.get(FaceInstance, face_id)
+            if not face:
+                continue
+
+            # Skip if already assigned to a person
+            if face.person_id is not None:
+                continue
+
+            # Skip if suggestion already exists
+            existing = db_session.execute(
+                select(FaceSuggestion).where(
+                    FaceSuggestion.face_instance_id == face_id,
+                    FaceSuggestion.suggested_person_id == person_uuid,
+                    FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+                )
+            ).scalar_one_or_none()
+
+            if existing:
+                continue
+
+            # Create suggestion
+            suggestion = FaceSuggestion(
+                face_instance_id=face_id,
+                suggested_person_id=person_uuid,
+                confidence=confidence,
+                source_face_id=source_face_uuid,
+                status=FaceSuggestionStatus.PENDING.value,
+            )
+            db_session.add(suggestion)
+            suggestions_created += 1
+
+            if suggestions_created >= max_suggestions:
+                break
+
+        db_session.commit()
+
+        logger.info(
+            f"[{job_id}] Propagation complete for face {source_face_id} → person {person_id}: "
+            f"checked {faces_checked} faces, created {suggestions_created} suggestions"
+        )
+
+        return {
+            "status": "completed",
+            "source_face_id": source_face_id,
+            "person_id": person_id,
+            "faces_checked": faces_checked,
+            "suggestions_created": suggestions_created,
+        }
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Error in propagation job: {e}")
+        return {"status": "error", "message": str(e)}
     finally:
         db_session.close()
