@@ -569,6 +569,39 @@ def detect_faces_for_session_job(
             # Don't fail the whole session for assignment errors
             session.last_error = f"Assignment error: {e}"
 
+        # Run clustering for unlabeled faces
+        if total_faces_detected > 0:
+            logger.info(f"[{job_id}] Running clustering for unlabeled faces")
+            try:
+                from image_search_service.faces.clusterer import get_face_clusterer
+
+                clusterer = get_face_clusterer(
+                    db_session,
+                    min_cluster_size=3,  # Minimum faces per cluster
+                )
+
+                # Cluster faces that don't have a person_id (unlabeled)
+                cluster_result = clusterer.cluster_unlabeled_faces(
+                    quality_threshold=0.3,  # Include most detected faces
+                    max_faces=10000,  # Process up to 10k faces
+                )
+
+                logger.info(
+                    f"[{job_id}] Clustering complete: "
+                    f"{cluster_result.get('clusters_found', 0)} clusters, "
+                    f"{cluster_result.get('noise_count', 0)} noise"
+                )
+
+                # Update session with clustering stats (add to faces_assigned count)
+                clusters_found = cluster_result.get("clusters_found", 0)
+                if clusters_found > 0:
+                    session.faces_assigned = (session.faces_assigned or 0) + clusters_found
+                    db_session.commit()
+
+            except Exception as e:
+                logger.error(f"[{job_id}] Clustering error (non-fatal): {e}")
+                # Don't fail the whole job if clustering fails
+
         # Mark session as complete
         session.status = FaceDetectionSessionStatus.COMPLETED.value
         session.completed_at = datetime.now()
