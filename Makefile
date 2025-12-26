@@ -1,4 +1,5 @@
 .PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
+	bootstrap-qdrant verify-qdrant \
 	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection \
 	faces-cluster-dual faces-train-matching faces-pipeline faces-pipeline-dual faces-pipeline-full
 
@@ -45,6 +46,15 @@ ingest: ## Ingest images from directory (usage: make ingest DIR=/path/to/images)
 	curl -X POST http://localhost:8000/api/v1/assets/ingest \
 		-H "Content-Type: application/json" \
 		-d '{"rootPath": "$(DIR)", "recursive": true}'
+
+# Qdrant bootstrap targets
+bootstrap-qdrant: ## Initialize Qdrant collections for fresh install
+	@echo "Initializing Qdrant collections..."
+	uv run python -m image_search_service.scripts.bootstrap_qdrant init
+
+verify-qdrant: ## Verify Qdrant collections are properly configured
+	@echo "Verifying Qdrant collections..."
+	uv run python -m image_search_service.scripts.bootstrap_qdrant verify
 
 # Face detection and recognition targets
 faces-backfill: ## Backfill face detection for assets without faces

@@ -27,12 +27,17 @@ Python 3.12 image search service with vector similarity using Qdrant.
    make db-up
    ```
 
-4. **Run migrations:**
+4. **Bootstrap Qdrant collections:**
+   ```bash
+   make bootstrap-qdrant
+   ```
+
+5. **Run migrations:**
    ```bash
    make migrate
    ```
 
-5. **Start development server:**
+6. **Start development server:**
    ```bash
    make dev
    ```
@@ -51,6 +56,8 @@ Python 3.12 image search service with vector similarity using Qdrant.
 | `make test` | Run pytest tests |
 | `make db-up` | Start Postgres, Redis, and Qdrant containers |
 | `make db-down` | Stop all containers |
+| `make bootstrap-qdrant` | Initialize Qdrant collections for fresh install |
+| `make verify-qdrant` | Verify Qdrant collections are properly configured |
 | `make migrate` | Run database migrations |
 | `make makemigrations` | Create new migration |
 | `make worker` | Start RQ background worker |
@@ -58,6 +65,28 @@ Python 3.12 image search service with vector similarity using Qdrant.
 | `make faces-pipeline-full` | Full pipeline with training (detect → cluster → train → re-cluster) |
 | `make faces-cluster-dual` | Run dual-mode face clustering |
 | `make faces-train-matching` | Train face matching model |
+
+## Qdrant Setup
+
+The service requires two Qdrant collections to be initialized before use. Run the bootstrap command after starting Qdrant:
+
+```bash
+# Initialize collections (idempotent - safe to run multiple times)
+make bootstrap-qdrant
+
+# Verify collections are configured correctly
+make verify-qdrant
+```
+
+**What it creates:**
+
+1. **`image_assets` collection**: Stores image embeddings (512-dim, COSINE distance)
+2. **`faces` collection**: Stores face embeddings with payload indexes for:
+   - `person_id` (KEYWORD)
+   - `cluster_id` (KEYWORD)
+   - `is_prototype` (BOOL)
+   - `asset_id` (KEYWORD)
+   - `face_instance_id` (KEYWORD)
 
 ## Environment Variables
 
@@ -67,6 +96,8 @@ Python 3.12 image search service with vector similarity using Qdrant.
 | `REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
 | `QDRANT_URL` | Qdrant server URL | `http://localhost:6333` |
 | `QDRANT_API_KEY` | Qdrant API key (optional) | - |
+| `QDRANT_COLLECTION` | Image assets collection name | `image_assets` |
+| `EMBEDDING_DIM` | Embedding vector dimension | `512` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 
 ## Project Structure
