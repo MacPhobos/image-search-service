@@ -1,7 +1,7 @@
 """RQ background jobs for face detection, clustering, and assignment."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from rq import get_current_job
@@ -756,6 +756,61 @@ def propagate_person_label_job(
 
     except Exception as e:
         logger.exception(f"[{job_id}] Error in propagation job: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        db_session.close()
+
+
+def expire_old_suggestions_job(
+    days_threshold: int = 30,
+) -> dict[str, Any]:
+    """Expire pending suggestions older than the threshold.
+
+    This job should be run periodically (e.g., daily) to clean up
+    stale suggestions that were never reviewed.
+
+    Args:
+        days_threshold: Number of days after which to expire suggestions
+
+    Returns:
+        Dictionary with job results
+    """
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    logger.info(f"[{job_id}] Expiring suggestions older than {days_threshold} days")
+
+    db_session = get_sync_session()
+
+    try:
+        cutoff_date = datetime.now(UTC) - timedelta(days=days_threshold)
+
+        # Find pending suggestions older than cutoff
+        query = select(FaceSuggestion).where(
+            FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+            FaceSuggestion.created_at < cutoff_date,
+        )
+        result = db_session.execute(query)
+        old_suggestions = result.scalars().all()
+
+        expired_count = 0
+        for suggestion in old_suggestions:
+            suggestion.status = FaceSuggestionStatus.EXPIRED.value
+            suggestion.reviewed_at = datetime.now(UTC)
+            expired_count += 1
+
+        db_session.commit()
+
+        logger.info(f"[{job_id}] Expired {expired_count} old suggestions")
+
+        return {
+            "status": "completed",
+            "expired_count": expired_count,
+            "threshold_days": days_threshold,
+        }
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Error expiring suggestions: {e}")
         return {"status": "error", "message": str(e)}
     finally:
         db_session.close()

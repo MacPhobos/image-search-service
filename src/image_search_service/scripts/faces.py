@@ -549,5 +549,30 @@ def show_stats() -> None:
         typer.echo("Collection not found or empty")
 
 
+@faces_app.command("expire-suggestions")
+def expire_suggestions(
+    days: int = typer.Option(30, help="Expire suggestions older than this many days"),
+    queue: bool = typer.Option(False, help="Run as background job"),
+) -> None:
+    """Expire old pending face suggestions."""
+    if queue:
+        from redis import Redis
+        from rq import Queue
+
+        from image_search_service.core.config import get_settings
+        from image_search_service.queue.face_jobs import expire_old_suggestions_job
+
+        settings = get_settings()
+        redis_conn = Redis.from_url(settings.redis_url)
+        q = Queue("default", connection=redis_conn)
+        job = q.enqueue(expire_old_suggestions_job, days_threshold=days)
+        typer.echo(f"Queued expiration job: {job.id}")
+    else:
+        from image_search_service.queue.face_jobs import expire_old_suggestions_job
+
+        result = expire_old_suggestions_job(days_threshold=days)
+        typer.echo(f"Expired {result.get('expired_count', 0)} suggestions")
+
+
 if __name__ == "__main__":
     faces_app()
