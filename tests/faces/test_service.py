@@ -3,6 +3,7 @@
 import uuid
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 
@@ -193,6 +194,9 @@ class TestFaceProcessingService:
         mock_image_asset.path = "/valid/path.jpg"
         await db_session.commit()
 
+        # Create fake image array for _load_image
+        fake_image = np.zeros((100, 100, 3), dtype=np.uint8)
+
         with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
             mock_get_qdrant.return_value = mock_qdrant_client
 
@@ -204,13 +208,20 @@ class TestFaceProcessingService:
 
             service = FaceProcessingService(mock_session)
 
-            # Patch Path.exists() and detect_faces_from_path at module level
+            # Patch Path.exists() to return True, _load_image, and detect_faces
             with patch("image_search_service.faces.service.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
-                    mock_detect.return_value = [mock_detected_face]
-                    result = service.process_assets_batch([mock_image_asset.id])
+                with patch("image_search_service.faces.service._load_image") as mock_load_image:
+                    # _load_image returns (path, image_array) for each call
+                    def load_image_side_effect(path):
+                        return (path, fake_image)
+                    mock_load_image.side_effect = load_image_side_effect
+
+                    # Mock detect_faces (not detect_faces_from_path - Phase 4 uses detect_faces)
+                    with patch("image_search_service.faces.detector.detect_faces") as mock_detect:
+                        mock_detect.return_value = [mock_detected_face]
+                        result = service.process_assets_batch([mock_image_asset.id])
 
         assert result["processed"] == 1
         assert result["total_faces"] == 1
@@ -343,32 +354,59 @@ class TestFaceProcessingService:
         self, mock_image_asset, mock_qdrant_client, mock_detected_face
     ):
         """Test batch processing with progress callback."""
+        from image_search_service.db.models import ImageAsset
         from image_search_service.faces.service import FaceProcessingService
 
-        mock_image_asset.path = "/valid/path.jpg"
+        # Create two assets with different paths (to avoid deduplication)
+        mock_asset1 = MagicMock(spec=ImageAsset)
+        mock_asset1.id = 1
+        mock_asset1.path = "/valid/path1.jpg"
+
+        mock_asset2 = MagicMock(spec=ImageAsset)
+        mock_asset2.id = 2
+        mock_asset2.path = "/valid/path2.jpg"
+
         progress_updates = []
 
         def progress_callback(steps: int):
             progress_updates.append(steps)
 
+        # Create fake image array for _load_image
+        fake_image = np.zeros((100, 100, 3), dtype=np.uint8)
+
         with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
             mock_get_qdrant.return_value = mock_qdrant_client
 
             mock_session = MagicMock()
-            mock_session.get = MagicMock(return_value=mock_image_asset)
+            # Return different assets based on ID
+            def get_asset(model_class, asset_id):
+                if asset_id == 1:
+                    return mock_asset1
+                return mock_asset2
+            mock_session.get = get_asset
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
             mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
 
             service = FaceProcessingService(mock_session)
 
-            # Patch detect_faces_from_path at the module level
-            with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
-                mock_detect.return_value = [mock_detected_face]
-                result = service.process_assets_batch(
-                    [mock_image_asset.id, mock_image_asset.id],
-                    progress_callback=progress_callback
-                )
+            # Patch Path.exists() to return True, _load_image, and detect_faces
+            with patch("image_search_service.faces.service.Path") as mock_path:
+                mock_path.return_value.exists.return_value = True
+
+                with patch("image_search_service.faces.service._load_image") as mock_load_image:
+                    # _load_image returns (path, image_array) for each call
+                    def load_image_side_effect(path):
+                        return (path, fake_image)
+                    mock_load_image.side_effect = load_image_side_effect
+
+                    # Mock detect_faces (not detect_faces_from_path - Phase 4 uses detect_faces)
+                    with patch("image_search_service.faces.detector.detect_faces") as mock_detect:
+                        mock_detect.return_value = [mock_detected_face]
+                        result = service.process_assets_batch(
+                            [mock_asset1.id, mock_asset2.id],
+                            progress_callback=progress_callback
+                        )
 
         assert result["processed"] == 2
         # Verify progress callback was called twice
@@ -380,31 +418,54 @@ class TestFaceProcessingService:
         self, mock_image_asset, mock_qdrant_client, mock_detected_face
     ):
         """Test batch processing with batch_size > 1 (parallel mode)."""
+        from image_search_service.db.models import ImageAsset
         from image_search_service.faces.service import FaceProcessingService
 
-        mock_image_asset.path = "/valid/path.jpg"
+        # Create 5 assets with different paths (to avoid deduplication)
+        mock_assets = []
+        for i in range(1, 6):
+            asset = MagicMock(spec=ImageAsset)
+            asset.id = i
+            asset.path = f"/valid/path{i}.jpg"
+            mock_assets.append(asset)
+
+        # Create fake image array for _load_image
+        fake_image = np.zeros((100, 100, 3), dtype=np.uint8)
 
         with patch("image_search_service.faces.service.get_face_qdrant_client") as mock_get_qdrant:
             mock_get_qdrant.return_value = mock_qdrant_client
 
             mock_session = MagicMock()
-            mock_session.get = MagicMock(return_value=mock_image_asset)
+            # Return correct asset based on ID
+            def get_asset(model_class, asset_id):
+                for asset in mock_assets:
+                    if asset.id == asset_id:
+                        return asset
+                return None
+            mock_session.get = get_asset
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
             mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
 
             service = FaceProcessingService(mock_session)
 
-            # Patch Path.exists() and detect_faces_from_path at module level
+            # Patch Path.exists() to return True, _load_image, and detect_faces
             with patch("image_search_service.faces.service.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
-                    mock_detect.return_value = [mock_detected_face]
-                    result = service.process_assets_batch(
-                        [mock_image_asset.id] * 5,
-                        prefetch_batch_size=4
-                    )
+                with patch("image_search_service.faces.service._load_image") as mock_load_image:
+                    # _load_image returns (path, image_array) for each call
+                    def load_image_side_effect(path):
+                        return (path, fake_image)
+                    mock_load_image.side_effect = load_image_side_effect
+
+                    # Mock detect_faces (not detect_faces_from_path - Phase 4 uses detect_faces)
+                    with patch("image_search_service.faces.detector.detect_faces") as mock_detect:
+                        mock_detect.return_value = [mock_detected_face]
+                        result = service.process_assets_batch(
+                            [asset.id for asset in mock_assets],
+                            prefetch_batch_size=4
+                        )
 
         assert result["processed"] == 5
         assert result["total_faces"] == 5
