@@ -1288,6 +1288,72 @@ Vectors: 1234
 
 ---
 
+### `faces find-orphans`
+
+Find and optionally fix orphaned faces (faces in PostgreSQL without Qdrant embeddings).
+
+Orphan faces occur when the database commit succeeds but the Qdrant upsert fails, leaving face metadata in PostgreSQL without the corresponding vector embedding in Qdrant.
+
+**Options**:
+- `--limit INTEGER`: Maximum faces to check (default: 100)
+- `--fix`: Re-detect assets with orphaned faces (default: false)
+
+**Examples**:
+```bash
+# Check for orphaned faces
+uv run python -m image_search_service.scripts.cli faces find-orphans --limit 1000
+
+# Find and automatically fix orphans
+uv run python -m image_search_service.scripts.cli faces find-orphans --fix
+```
+
+**Output** (without --fix):
+```
+Checking 100 faces for orphaned embeddings...
+
+==================================================
+ORPHAN DETECTION RESULTS:
+==================================================
+Total faces checked: 100
+Orphaned faces found: 5
+Affected assets: 3
+
+Sample orphaned faces:
+  - Face abc-123 (asset_id=456, qdrant_point_id=xyz-789)
+  ... and 4 more
+
+Affected assets (asset_id: orphan_count):
+  - Asset 456: 3 orphaned face(s)
+  - Asset 789: 2 orphaned face(s)
+
+TIP: Use --fix to re-detect faces for affected assets
+```
+
+**Output** (with --fix):
+```
+==================================================
+RE-DETECTING FACES FOR AFFECTED ASSETS:
+==================================================
+Re-detecting faces for 3 assets...
+
+==================================================
+RE-DETECTION RESULTS:
+==================================================
+Assets processed: 3
+Errors: 0
+Total faces re-detected: 5
+
+NOTE: Re-run 'faces find-orphans' to verify fix
+```
+
+**When to Use**:
+- After Qdrant connection failures during face detection
+- After database migrations or recovery operations
+- When face counts don't match between PostgreSQL and Qdrant
+- As part of routine data integrity checks
+
+---
+
 ## Background Jobs
 
 All face processing operations can run as background jobs via RQ (Redis Queue).

@@ -574,5 +574,147 @@ def expire_suggestions(
         typer.echo(f"Expired {result.get('expired_count', 0)} suggestions")
 
 
+@faces_app.command("find-orphans")
+def find_orphan_faces(
+    limit: int = typer.Option(100, help="Maximum faces to check"),
+    fix: bool = typer.Option(False, "--fix", help="Re-detect assets with orphaned faces"),
+) -> None:
+    """Find faces that exist in PostgreSQL but not in Qdrant.
+
+    These "orphan" faces were created when DB commit succeeded but Qdrant upsert failed.
+    Use --fix to automatically re-run face detection on affected assets.
+
+    Example:
+        faces find-orphans --limit 1000
+        faces find-orphans --fix
+    """
+    from collections import defaultdict
+
+    from sqlalchemy import select
+
+    from image_search_service.db.models import FaceInstance, ImageAsset
+    from image_search_service.db.sync_operations import get_sync_session
+    from image_search_service.faces.service import get_face_service
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    db_session = get_sync_session()
+    try:
+        # Get face instances from PostgreSQL
+        query = select(FaceInstance).limit(limit)
+        faces = db_session.execute(query).scalars().all()
+
+        typer.echo(f"Checking {len(faces)} faces for orphaned embeddings...")
+        typer.echo("")
+
+        # Initialize Qdrant client
+        qdrant_client = get_face_qdrant_client()
+
+        # Check each face for Qdrant point existence
+        orphaned_faces: list[FaceInstance] = []
+        asset_orphan_counts: dict[int, int] = defaultdict(int)
+
+        with tqdm(total=len(faces), desc="Checking faces", unit="face") as pbar:
+            for face in faces:
+                exists = qdrant_client.point_exists(face.qdrant_point_id)
+                if not exists:
+                    orphaned_faces.append(face)
+                    asset_orphan_counts[face.asset_id] += 1
+                pbar.update(1)
+
+        # Report results
+        typer.echo("")
+        typer.echo("=" * 50)
+        typer.echo("ORPHAN DETECTION RESULTS:")
+        typer.echo("=" * 50)
+        typer.echo(f"Total faces checked: {len(faces)}")
+        typer.echo(f"Orphaned faces found: {len(orphaned_faces)}")
+        typer.echo(f"Affected assets: {len(asset_orphan_counts)}")
+        typer.echo("")
+
+        if orphaned_faces:
+            # Show sample of orphaned faces
+            typer.echo("Sample orphaned faces:")
+            for face in orphaned_faces[:10]:
+                typer.echo(
+                    f"  - Face {face.id} (asset_id={face.asset_id}, "
+                    f"qdrant_point_id={face.qdrant_point_id})"
+                )
+            if len(orphaned_faces) > 10:
+                typer.echo(f"  ... and {len(orphaned_faces) - 10} more")
+            typer.echo("")
+
+            # Show affected assets
+            typer.echo("Affected assets (asset_id: orphan_count):")
+            sorted_assets = sorted(asset_orphan_counts.items(), key=lambda x: x[1], reverse=True)
+            for asset_id, count in sorted_assets[:10]:
+                typer.echo(f"  - Asset {asset_id}: {count} orphaned face(s)")
+            if len(sorted_assets) > 10:
+                typer.echo(f"  ... and {len(sorted_assets) - 10} more assets")
+            typer.echo("")
+
+            # Fix if requested
+            if fix:
+                typer.echo("=" * 50)
+                typer.echo("RE-DETECTING FACES FOR AFFECTED ASSETS:")
+                typer.echo("=" * 50)
+
+                # Get unique asset IDs
+                unique_asset_ids = list(asset_orphan_counts.keys())
+                typer.echo(f"Re-detecting faces for {len(unique_asset_ids)} assets...")
+                typer.echo("")
+
+                # Get face service
+                service = get_face_service(db_session)
+
+                # Process each asset
+                processed = 0
+                errors = 0
+                total_faces = 0
+
+                with tqdm(total=len(unique_asset_ids), desc="Re-detecting", unit="asset") as pbar:
+                    for asset_id in unique_asset_ids:
+                        try:
+                            # Get asset
+                            asset = db_session.get(ImageAsset, asset_id)
+                            if not asset:
+                                typer.echo(f"Warning: Asset {asset_id} not found")
+                                errors += 1
+                                pbar.update(1)
+                                continue
+
+                            # Process asset
+                            face_instances = service.process_asset(
+                                asset=asset,
+                                min_confidence=0.5,
+                            )
+
+                            processed += 1
+                            total_faces += len(face_instances)
+
+                        except Exception as e:
+                            typer.echo(f"Error processing asset {asset_id}: {e}")
+                            errors += 1
+
+                        pbar.update(1)
+
+                typer.echo("")
+                typer.echo("=" * 50)
+                typer.echo("RE-DETECTION RESULTS:")
+                typer.echo("=" * 50)
+                typer.echo(f"Assets processed: {processed}")
+                typer.echo(f"Errors: {errors}")
+                typer.echo(f"Total faces re-detected: {total_faces}")
+                typer.echo("")
+                typer.echo("NOTE: Re-run 'faces find-orphans' to verify fix")
+
+            else:
+                typer.echo("TIP: Use --fix to re-detect faces for affected assets")
+        else:
+            typer.echo("✓ No orphaned faces found!")
+
+    finally:
+        db_session.close()
+
+
 if __name__ == "__main__":
     faces_app()
