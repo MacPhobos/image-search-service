@@ -41,6 +41,7 @@ from image_search_service.api.face_schemas import (
     TrainMatchingRequest,
     TrainMatchingResponse,
     TriggerClusteringRequest,
+    UnassignFaceResponse,
 )
 from image_search_service.db.models import (
     FaceAssignmentEvent,
@@ -120,7 +121,9 @@ async def list_clusters(
         # Handle face_ids based on database type
         if is_sqlite and isinstance(row.face_ids, str):
             # SQLite returns comma-separated string of UUIDs
-            face_ids_list = [UUID(x.strip()) for x in row.face_ids.split(",")] if row.face_ids else []
+            face_ids_list = (
+                [UUID(x.strip()) for x in row.face_ids.split(",")] if row.face_ids else []
+            )
         else:
             # PostgreSQL returns array of UUIDs
             face_ids_list = list(row.face_ids) if row.face_ids else []
@@ -310,9 +313,7 @@ async def split_cluster(
 async def list_persons(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status: str | None = Query(
-        None, description="Filter by status: active, merged, hidden"
-    ),
+    status: str | None = Query(None, description="Filter by status: active, merged, hidden"),
     db: AsyncSession = Depends(get_db),
 ) -> PersonListResponse:
     """List persons with pagination."""
@@ -337,9 +338,7 @@ async def list_persons(
         face_count_query = select(func.count()).where(FaceInstance.person_id == person.id)
         face_count = (await db.execute(face_count_query)).scalar() or 0
 
-        proto_count_query = select(func.count()).where(
-            PersonPrototype.person_id == person.id
-        )
+        proto_count_query = select(func.count()).where(PersonPrototype.person_id == person.id)
         proto_count = (await db.execute(proto_count_query)).scalar() or 0
 
         items.append(
@@ -943,9 +942,7 @@ async def assign_face_to_person(
     # Get target person from DB
     person = await db.get(Person, request.person_id)
     if not person:
-        raise HTTPException(
-            status_code=404, detail=f"Person {request.person_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Person {request.person_id} not found")
 
     # Track previous assignment for audit log
     previous_person_id = face.person_id
@@ -1019,6 +1016,80 @@ async def assign_face_to_person(
         await db.rollback()
         logger.error(f"Failed to assign face {face_id} to person {request.person_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to assign face: {str(e)}")
+
+
+@router.delete("/faces/{face_id}/person", response_model=UnassignFaceResponse)
+async def unassign_face_from_person(
+    face_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> UnassignFaceResponse:
+    """Unassign a face instance from its currently assigned person."""
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # Get face instance from DB
+    face = await db.get(FaceInstance, face_id)
+    if not face:
+        raise HTTPException(status_code=404, detail=f"Face {face_id} not found")
+
+    # Check if face is assigned to any person
+    if face.person_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Face is not assigned to any person",
+        )
+
+    # Store previous person info before clearing
+    previous_person_id = face.person_id
+    person = await db.get(Person, previous_person_id)
+    if not person:
+        # Edge case: person was deleted but face still references it
+        # Proceed with unassignment but log warning
+        logger.warning(f"Face {face_id} references non-existent person {previous_person_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Person {previous_person_id} not found",
+        )
+
+    previous_person_name = person.name
+
+    # Clear person assignment
+    face.person_id = None
+
+    try:
+        # Update Qdrant payload (remove person_id)
+        qdrant = get_face_qdrant_client()
+        qdrant.update_person_ids([face.qdrant_point_id], None)
+
+        # Create audit event
+        event = FaceAssignmentEvent(
+            operation="UNASSIGN_FROM_PERSON",
+            from_person_id=previous_person_id,
+            to_person_id=None,
+            affected_photo_ids=[face.asset_id],
+            affected_face_instance_ids=[str(face.id)],
+            face_count=1,
+            photo_count=1,
+            actor=None,
+            note=f"Unassigned face from {previous_person_name}",
+        )
+        db.add(event)
+
+        await db.commit()
+
+        logger.info(
+            f"Unassigned face {face_id} from person {previous_person_name} ({previous_person_id})"
+        )
+
+        return UnassignFaceResponse(
+            face_id=face.id,
+            previous_person_id=previous_person_id,
+            previous_person_name=previous_person_name,
+        )
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to unassign face {face_id} from person {previous_person_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to unassign face: {str(e)}")
 
 
 # ============ Dual-Mode Clustering Endpoints ============
@@ -1126,9 +1197,7 @@ def _face_to_response(face: FaceInstance) -> FaceInstanceResponse:
     return FaceInstanceResponse(
         id=face.id,
         asset_id=face.asset_id,
-        bbox=BoundingBox(
-            x=face.bbox_x, y=face.bbox_y, width=face.bbox_w, height=face.bbox_h
-        ),
+        bbox=BoundingBox(x=face.bbox_x, y=face.bbox_y, width=face.bbox_w, height=face.bbox_h),
         detection_confidence=face.detection_confidence,
         quality_score=face.quality_score,
         cluster_id=face.cluster_id,

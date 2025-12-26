@@ -247,8 +247,8 @@ class BulkMoveRequest(CamelCaseModel):
     to_person_id: UUID | None = None  # existing person
     to_person_name: str | None = None  # create new person if provided
 
-    @model_validator(mode='after')
-    def validate_destination(self) -> 'BulkMoveRequest':
+    @model_validator(mode="after")
+    def validate_destination(self) -> "BulkMoveRequest":
         """Validate that either to_person_id or to_person_name is provided."""
         if not self.to_person_id and not self.to_person_name:
             raise ValueError("Either to_person_id or to_person_name must be provided")
@@ -295,6 +295,14 @@ class AssignFaceResponse(CamelCaseModel):
     face_id: UUID
     person_id: UUID
     person_name: str
+
+
+class UnassignFaceResponse(CamelCaseModel):
+    """Response from unassigning a face from a person."""
+
+    face_id: UUID
+    previous_person_id: UUID
+    previous_person_name: str
 
 
 # ============ Dual-Mode Clustering Schemas ============

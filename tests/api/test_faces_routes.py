@@ -1,8 +1,89 @@
 """Tests for face API routes."""
 
 import uuid
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+# Fixtures for face tests
+@pytest.fixture
+async def mock_image_asset(db_session):
+    """Create a mock ImageAsset in the database."""
+    from image_search_service.db.models import ImageAsset, TrainingStatus
+
+    asset = ImageAsset(
+        path="/test/images/photo.jpg",
+        training_status=TrainingStatus.PENDING.value,
+        width=640,
+        height=480,
+        file_size=102400,
+        mime_type="image/jpeg",
+    )
+    db_session.add(asset)
+    await db_session.commit()
+    await db_session.refresh(asset)
+    return asset
+
+
+@pytest.fixture
+async def mock_face_instance(db_session, mock_image_asset):
+    """Create a mock FaceInstance in the database."""
+    from image_search_service.db.models import FaceInstance
+
+    face = FaceInstance(
+        id=uuid.uuid4(),
+        asset_id=mock_image_asset.id,
+        bbox_x=100,
+        bbox_y=150,
+        bbox_w=80,
+        bbox_h=80,
+        detection_confidence=0.95,
+        quality_score=0.75,
+        qdrant_point_id=uuid.uuid4(),
+    )
+    db_session.add(face)
+    await db_session.commit()
+    await db_session.refresh(face)
+    return face
+
+
+@pytest.fixture
+async def mock_person(db_session):
+    """Create a mock Person in the database."""
+    from image_search_service.db.models import Person, PersonStatus
+
+    person = Person(
+        id=uuid.uuid4(),
+        name="Test Person",
+        status=PersonStatus.ACTIVE.value,
+    )
+    db_session.add(person)
+    await db_session.commit()
+    await db_session.refresh(person)
+    return person
+
+
+@pytest.fixture
+def mock_qdrant_client(monkeypatch):
+    """Create a mock FaceQdrantClient."""
+    mock_client = MagicMock()
+    mock_client.ensure_collection.return_value = None
+    mock_client.upsert_face.return_value = None
+    mock_client.upsert_faces_batch.return_value = None
+    mock_client.search_similar_faces.return_value = []
+    mock_client.search_against_prototypes.return_value = []
+    mock_client.update_cluster_ids.return_value = None
+    mock_client.update_person_ids.return_value = None
+
+    def get_mock_client():
+        return mock_client
+
+    monkeypatch.setattr(
+        "image_search_service.vector.face_qdrant.get_face_qdrant_client",
+        get_mock_client,
+    )
+    return mock_client
 
 
 class TestClusterEndpoints:
@@ -393,6 +474,65 @@ class TestAssignmentEndpoints:
 
         # Should return validation error
         assert response.status_code == 422
+
+
+class TestUnassignFaceEndpoint:
+    """Tests for unassigning faces from persons."""
+
+    @pytest.mark.asyncio
+    async def test_unassign_face_not_found(self, test_client):
+        """Test unassigning non-existent face."""
+        fake_id = str(uuid.uuid4())
+        response = await test_client.delete(f"/api/v1/faces/faces/{fake_id}/person")
+
+        assert response.status_code == 404
+        data = response.json()
+        assert "not found" in data["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_unassign_face_not_assigned(
+        self, test_client, db_session, mock_face_instance, mock_qdrant_client
+    ):
+        """Test unassigning face that has no person assigned."""
+        # Ensure face has no person_id
+        mock_face_instance.person_id = None
+        await db_session.commit()
+
+        response = await test_client.delete(
+            f"/api/v1/faces/faces/{mock_face_instance.id}/person"
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "not assigned" in data["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_unassign_face_success(
+        self, test_client, db_session, mock_face_instance, mock_person, mock_qdrant_client
+    ):
+        """Test successful face unassignment."""
+        # Assign face to person
+        mock_face_instance.person_id = mock_person.id
+        await db_session.commit()
+
+        response = await test_client.delete(
+            f"/api/v1/faces/faces/{mock_face_instance.id}/person"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["faceId"] == str(mock_face_instance.id)
+        assert data["previousPersonId"] == str(mock_person.id)
+        assert data["previousPersonName"] == mock_person.name
+
+        # Verify Qdrant was updated (person_id removed)
+        mock_qdrant_client.update_person_ids.assert_called_once_with(
+            [mock_face_instance.qdrant_point_id], None
+        )
+
+        # Verify database was updated
+        await db_session.refresh(mock_face_instance)
+        assert mock_face_instance.person_id is None
 
 
 class TestPrototypeEndpoints:
