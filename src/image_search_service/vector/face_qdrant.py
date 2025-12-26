@@ -459,6 +459,52 @@ class FaceQdrantClient:
             filter_is_prototype=True,
         )
 
+    def get_embedding_by_point_id(self, point_id: uuid.UUID) -> list[float] | None:
+        """Retrieve the embedding vector for a specific face point.
+
+        Args:
+            point_id: Face point ID (qdrant_point_id from FaceInstance)
+
+        Returns:
+            512-dim embedding vector, or None if not found
+        """
+        try:
+            points = self.client.retrieve(
+                collection_name=FACE_COLLECTION_NAME,
+                ids=[str(point_id)],
+                with_payload=False,
+                with_vectors=True,
+            )
+
+            if not points:
+                logger.warning(f"Face point {point_id} not found in Qdrant")
+                return None
+
+            # Handle both dict and list vector formats
+            vector = points[0].vector
+            if vector is None:
+                return None
+
+            if isinstance(vector, dict):
+                # Named vector case - get the first vector
+                first_value = next(iter(vector.values()))
+                # Ensure it's a list[float], not a SparseVector or nested list
+                if isinstance(first_value, list) and all(isinstance(x, float) for x in first_value):
+                    return first_value
+                return None
+            elif isinstance(vector, list):
+                # Direct list case - verify it's list[float]
+                if all(isinstance(x, float) for x in vector):
+                    return vector
+                return None
+            else:
+                # Unsupported vector type
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to retrieve embedding for point {point_id}: {e}")
+            return None
+
     def scroll_faces(
         self,
         limit: int = 100,
@@ -577,7 +623,8 @@ class FaceQdrantClient:
                 offset = next_offset
 
             logger.info(
-                f"Retrieved {len(face_embeddings)} unlabeled faces with quality >= {quality_threshold}"
+                f"Retrieved {len(face_embeddings)} unlabeled faces "
+                f"with quality >= {quality_threshold}"
             )
             return face_embeddings[:limit]
 
@@ -724,7 +771,8 @@ class FaceQdrantClient:
             return {
                 "name": FACE_COLLECTION_NAME,
                 "points_count": collection_info.points_count,
-                "vectors_count": collection_info.points_count,  # Use points_count (vectors_count removed in qdrant-client 1.12+)
+                # Use points_count (vectors_count removed in qdrant-client 1.12+)
+                "vectors_count": collection_info.points_count,
                 "indexed_vectors_count": collection_info.indexed_vectors_count,
                 "vector_dim": FACE_VECTOR_DIM,
                 "distance": "cosine",

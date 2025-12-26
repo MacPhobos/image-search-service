@@ -348,3 +348,22 @@ class TrainMatchingResponse(CamelCaseModel):
     job_id: str | None = None
     status: str
     result: dict[str, int | float] | None = None
+
+
+# ============ Face Suggestion Schemas ============
+
+
+class FaceSuggestionItem(CamelCaseModel):
+    """A single person suggestion for a face."""
+
+    person_id: UUID
+    person_name: str
+    confidence: float = Field(ge=0.0, le=1.0, description="Similarity confidence score (0.0-1.0)")
+
+
+class FaceSuggestionsResponse(CamelCaseModel):
+    """Response with person suggestions for a face."""
+
+    face_id: UUID
+    suggestions: list[FaceSuggestionItem]
+    threshold_used: float

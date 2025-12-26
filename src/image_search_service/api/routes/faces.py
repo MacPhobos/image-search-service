@@ -28,6 +28,8 @@ from image_search_service.api.face_schemas import (
     FaceInPhoto,
     FaceInstanceListResponse,
     FaceInstanceResponse,
+    FaceSuggestionItem,
+    FaceSuggestionsResponse,
     LabelClusterRequest,
     LabelClusterResponse,
     MergePersonsRequest,
@@ -1090,6 +1092,120 @@ async def unassign_face_from_person(
         await db.rollback()
         logger.error(f"Failed to unassign face {face_id} from person {previous_person_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to unassign face: {str(e)}")
+
+
+@router.get("/faces/{face_id}/suggestions", response_model=FaceSuggestionsResponse)
+async def get_face_suggestions(
+    face_id: UUID,
+    min_confidence: float = Query(0.7, ge=0.0, le=1.0, description="Minimum confidence threshold"),
+    limit: int = Query(5, ge=1, le=10, description="Maximum number of suggestions"),
+    db: AsyncSession = Depends(get_db),
+) -> FaceSuggestionsResponse:
+    """Get person suggestions for a face based on similarity to person prototypes.
+
+    This endpoint compares the face's embedding against all person prototype embeddings
+    in Qdrant and returns the most similar persons above the confidence threshold.
+
+    Args:
+        face_id: UUID of the face instance
+        min_confidence: Minimum cosine similarity score (0.0-1.0, default 0.7)
+        limit: Maximum number of suggestions to return (1-10, default 5)
+        db: Database session
+
+    Returns:
+        List of person suggestions with confidence scores
+    """
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # Step 1: Get face instance from database
+    face = await db.get(FaceInstance, face_id)
+    if not face:
+        raise HTTPException(status_code=404, detail=f"Face {face_id} not found")
+
+    # Step 2: Get face embedding from Qdrant
+    qdrant = get_face_qdrant_client()
+    embedding = qdrant.get_embedding_by_point_id(face.qdrant_point_id)
+
+    if embedding is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Face embedding not found in vector database. "
+                "The face may need to be re-detected."
+            ),
+        )
+
+    # Step 3: Search for similar person prototypes
+    try:
+        similar_prototypes = qdrant.search_against_prototypes(
+            query_embedding=embedding,
+            limit=limit * 3,  # Get more candidates to deduplicate by person
+            score_threshold=min_confidence,
+        )
+    except Exception as e:
+        logger.error(f"Failed to search for similar prototypes for face {face_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search for similar faces")
+
+    # Step 4: Group by person_id and get person details
+    # Use dict to deduplicate by person and keep highest confidence
+    person_suggestions: dict[UUID, tuple[str, float]] = {}
+
+    for proto in similar_prototypes:
+        if proto.payload is None:
+            continue
+
+        person_id_str = proto.payload.get("person_id")
+        if not person_id_str:
+            # Skip prototypes without person assignment (shouldn't happen)
+            continue
+
+        try:
+            person_id = UUID(person_id_str)
+        except ValueError:
+            logger.warning(f"Invalid person_id in prototype payload: {person_id_str}")
+            continue
+
+        # Get person from database
+        person = await db.get(Person, person_id)
+        if not person:
+            logger.warning(f"Person {person_id} not found in database")
+            continue
+
+        # Only include active persons
+        if person.status != PersonStatus.ACTIVE:
+            continue
+
+        # Keep highest confidence for each person
+        confidence = proto.score
+        if person_id not in person_suggestions or confidence > person_suggestions[person_id][1]:
+            person_suggestions[person_id] = (person.name, confidence)
+
+    # Step 5: Build response sorted by confidence (highest first)
+    suggestions = [
+        FaceSuggestionItem(
+            person_id=person_id,
+            person_name=name,
+            confidence=confidence,
+        )
+        for person_id, (name, confidence) in person_suggestions.items()
+    ]
+
+    # Sort by confidence descending
+    suggestions.sort(key=lambda x: x.confidence, reverse=True)
+
+    # Limit to requested number
+    suggestions = suggestions[:limit]
+
+    logger.info(
+        f"Found {len(suggestions)} person suggestions for face {face_id} "
+        f"(threshold={min_confidence})"
+    )
+
+    return FaceSuggestionsResponse(
+        face_id=face_id,
+        suggestions=suggestions,
+        threshold_used=min_confidence,
+    )
 
 
 # ============ Dual-Mode Clustering Endpoints ============

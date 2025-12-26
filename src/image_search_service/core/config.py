@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     )
     face_unknown_eps: float = Field(default=0.5, alias="FACE_UNKNOWN_EPS")
 
+    # Face suggestion settings
+    face_suggestion_min_confidence: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        alias="FACE_SUGGESTION_MIN_CONFIDENCE",
+        description="Minimum confidence threshold for face suggestions (0.0-1.0)",
+    )
+    face_suggestion_max_results: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        alias="FACE_SUGGESTION_MAX_RESULTS",
+        description="Maximum number of face suggestions to return",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
