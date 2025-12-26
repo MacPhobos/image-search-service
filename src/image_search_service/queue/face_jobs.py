@@ -239,7 +239,7 @@ def backfill_faces_job(
         result = service.process_assets_batch(
             asset_ids=[a.id for a in assets],
             min_confidence=min_confidence,
-            batch_size=batch_size,
+            prefetch_batch_size=batch_size,
         )
 
         logger.info(
@@ -510,7 +510,7 @@ def detect_faces_for_session_job(
                     asset_ids=asset_ids,
                     min_confidence=session.min_confidence,
                     min_face_size=session.min_face_size,
-                    batch_size=session.batch_size,
+                    prefetch_batch_size=session.batch_size,
                 )
 
                 # Update session progress
