@@ -728,18 +728,21 @@ def propagate_person_label_job(
         faces_checked = 0
 
         for result in search_results.points:
-            face_id = uuid_lib.UUID(str(result.id))
+            qdrant_point_id = uuid_lib.UUID(str(result.id))
             confidence = result.score
-
-            # Skip the source face itself
-            if face_id == source_face_uuid:
-                continue
 
             faces_checked += 1
 
-            # Get the face instance
-            face = db_session.get(FaceInstance, face_id)
+            # Get the face instance by qdrant_point_id (NOT by primary key)
+            face = db_session.execute(
+                select(FaceInstance).where(FaceInstance.qdrant_point_id == qdrant_point_id)
+            ).scalar_one_or_none()
+
             if not face:
+                continue
+
+            # Skip the source face itself
+            if face.id == source_face_uuid:
                 continue
 
             # Skip if already assigned to a person
@@ -749,7 +752,7 @@ def propagate_person_label_job(
             # Skip if suggestion already exists
             existing = db_session.execute(
                 select(FaceSuggestion).where(
-                    FaceSuggestion.face_instance_id == face_id,
+                    FaceSuggestion.face_instance_id == face.id,
                     FaceSuggestion.suggested_person_id == person_uuid,
                     FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
                 )
@@ -760,7 +763,7 @@ def propagate_person_label_job(
 
             # Create suggestion
             suggestion = FaceSuggestion(
-                face_instance_id=face_id,
+                face_instance_id=face.id,
                 suggested_person_id=person_uuid,
                 confidence=confidence,
                 source_face_id=source_face_uuid,
