@@ -312,6 +312,59 @@ curl -X POST http://localhost:8000/api/v1/faces/train \
 4. **Re-clustering**: Run `faces-cluster-dual` to apply improvements
 5. **Iterate**: Label more → Train → Re-cluster for best accuracy
 
+## Troubleshooting
+
+### Orphaned Faces (Face Embedding Not Found)
+
+**Symptom:** When assigning a face to a person or fetching suggestions, you see:
+```
+Face embedding not found in vector database. The face may need to be re-detected.
+```
+
+**Cause:** The face record exists in PostgreSQL but its embedding is missing from Qdrant. This can happen if:
+1. Faces were detected before a bug fix that ensured atomic database/Qdrant operations
+2. Qdrant was reset or lost data while PostgreSQL retained face records
+3. Network errors during face detection caused partial writes
+
+**Diagnosis:** Find orphaned faces using the CLI:
+```bash
+# Check for orphaned faces (dry run)
+uv run python -m image_search_service.scripts.cli faces find-orphans --limit 1000
+```
+
+Example output:
+```
+Checking for orphaned faces...
+Checked: 100 faces
+Orphaned: 3 faces (3.0%)
+
+Orphaned faces:
+  • 5a70e1d9-52f3-440b-b25c-ff2ac644d043 (asset 1234)
+  • 7b82f3a1-... (asset 1234)
+  • 9c93d4b2-... (asset 5678)
+
+Affected assets:
+  • Asset 1234: 2 orphaned faces
+  • Asset 5678: 1 orphaned face
+```
+
+**Solution:** Re-detect faces on affected assets:
+```bash
+# Automatically fix orphaned faces by re-running face detection
+uv run python -m image_search_service.scripts.cli faces find-orphans --fix
+```
+
+This will:
+1. Identify all orphaned faces
+2. Group them by asset
+3. Re-run face detection on each affected asset
+4. Regenerate the missing Qdrant embeddings
+
+**Prevention:** This issue was fixed in commit `9e08c23`. The fix ensures:
+- Qdrant upsert happens **before** database commit
+- If Qdrant fails, the database transaction is rolled back
+- No orphaned faces can be created going forward
+
 ## License
 
 See LICENSE file.
