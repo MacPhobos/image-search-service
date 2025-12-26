@@ -66,6 +66,14 @@ async def list_suggestions(
         # Get person info
         person = await db.get(Person, suggestion.suggested_person_id)
 
+        # Get face instance for thumbnail URL
+        face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
+        thumbnail_url = (
+            f"/api/v1/images/{face_instance.asset_id}/thumbnail"
+            if face_instance
+            else None
+        )
+
         items.append(
             FaceSuggestionResponse(
                 id=suggestion.id,
@@ -76,7 +84,7 @@ async def list_suggestions(
                 status=suggestion.status,
                 created_at=suggestion.created_at,
                 reviewed_at=suggestion.reviewed_at,
-                face_thumbnail_url=None,  # TODO: Add thumbnail field to FaceInstance
+                face_thumbnail_url=thumbnail_url,
                 person_name=person.name if person else None,
             )
         )
@@ -159,6 +167,14 @@ async def get_suggestion(
 
     person = await db.get(Person, suggestion.suggested_person_id)
 
+    # Get face instance for thumbnail URL
+    face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
+    thumbnail_url = (
+        f"/api/v1/images/{face_instance.asset_id}/thumbnail"
+        if face_instance
+        else None
+    )
+
     return FaceSuggestionResponse(
         id=suggestion.id,
         face_instance_id=str(suggestion.face_instance_id),
@@ -168,7 +184,7 @@ async def get_suggestion(
         status=suggestion.status,
         created_at=suggestion.created_at,
         reviewed_at=suggestion.reviewed_at,
-        face_thumbnail_url=None,  # TODO: Add thumbnail field to FaceInstance
+        face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
     )
 
@@ -210,6 +226,9 @@ async def accept_suggestion(
     # Get person for response
     person = await db.get(Person, suggestion.suggested_person_id)
 
+    # Get thumbnail URL from face instance (already loaded)
+    thumbnail_url = f"/api/v1/images/{face.asset_id}/thumbnail"
+
     logger.info(
         f"Accepted suggestion {suggestion_id}: "
         f"face {suggestion.face_instance_id} → person {suggestion.suggested_person_id}"
@@ -224,7 +243,7 @@ async def accept_suggestion(
         status=suggestion.status,
         created_at=suggestion.created_at,
         reviewed_at=suggestion.reviewed_at,
-        face_thumbnail_url=None,  # TODO: Add thumbnail field to FaceInstance
+        face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
     )
 
@@ -257,6 +276,14 @@ async def reject_suggestion(
 
     person = await db.get(Person, suggestion.suggested_person_id)
 
+    # Get face instance for thumbnail URL
+    face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
+    thumbnail_url = (
+        f"/api/v1/images/{face_instance.asset_id}/thumbnail"
+        if face_instance
+        else None
+    )
+
     logger.info(f"Rejected suggestion {suggestion_id}")
 
     return FaceSuggestionResponse(
@@ -268,7 +295,7 @@ async def reject_suggestion(
         status=suggestion.status,
         created_at=suggestion.created_at,
         reviewed_at=suggestion.reviewed_at,
-        face_thumbnail_url=None,  # TODO: Add thumbnail field to FaceInstance
+        face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
     )
 
