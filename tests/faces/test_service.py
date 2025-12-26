@@ -287,7 +287,7 @@ class TestFaceProcessingService:
     async def test_process_assets_batch_with_batch_size_one(
         self, mock_image_asset, mock_qdrant_client, mock_detected_face
     ):
-        """Test batch processing with batch_size=1 (sequential mode)."""
+        """Test batch processing with prefetch_batch_size=1 (sequential mode)."""
         from image_search_service.faces.service import FaceProcessingService
 
         mock_image_asset.path = "/valid/path.jpg"
@@ -311,7 +311,7 @@ class TestFaceProcessingService:
                     mock_detect.return_value = [mock_detected_face]
                     result = service.process_assets_batch(
                         [mock_image_asset.id],
-                        batch_size=1
+                        prefetch_batch_size=1
                     )
 
         assert result["processed"] == 1
@@ -403,7 +403,7 @@ class TestFaceProcessingService:
                     mock_detect.return_value = [mock_detected_face]
                     result = service.process_assets_batch(
                         [mock_image_asset.id] * 5,
-                        batch_size=4
+                        prefetch_batch_size=4
                     )
 
         assert result["processed"] == 5
