@@ -5,6 +5,21 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
+def to_camel(string: str) -> str:
+    """Convert snake_case to camelCase."""
+    words = string.split("_")
+    return words[0] + "".join(word.capitalize() for word in words[1:])
+
+
+class CamelCaseModel(BaseModel):
+    """Base model with camelCase aliases for JSON serialization."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
+
+
 class DeleteAllDataRequest(BaseModel):
     """Request schema for deleting all application data.
 
@@ -53,3 +68,100 @@ class DeleteAllDataResponse(BaseModel):
     timestamp: datetime = Field(
         description="Timestamp when operation completed"
     )
+
+
+# ============ Person Metadata Export/Import Schemas ============
+
+
+class BoundingBoxExport(CamelCaseModel):
+    """Bounding box coordinates for face export/import."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class FaceMappingExport(CamelCaseModel):
+    """Face mapping data for export/import."""
+
+    image_path: str
+    bounding_box: BoundingBoxExport
+    detection_confidence: float
+    quality_score: float | None = None
+
+
+class PersonExport(CamelCaseModel):
+    """Person data for export."""
+
+    name: str
+    status: str
+    face_mappings: list[FaceMappingExport]
+
+
+class ExportMetadata(CamelCaseModel):
+    """Metadata about the export."""
+
+    total_persons: int
+    total_face_mappings: int
+    export_format: str = Field(default="seed")
+
+
+class PersonMetadataExport(CamelCaseModel):
+    """Complete person metadata export structure."""
+
+    version: str = Field(default="1.0")
+    exported_at: datetime
+    metadata: ExportMetadata
+    persons: list[PersonExport]
+
+
+class ImportOptions(CamelCaseModel):
+    """Options for importing person metadata."""
+
+    dry_run: bool = Field(default=False)
+    tolerance_pixels: int = Field(default=10, ge=1, le=50)
+    skip_missing_images: bool = Field(default=True)
+
+
+class ImportRequest(CamelCaseModel):
+    """Request to import person metadata."""
+
+    data: PersonMetadataExport
+    options: ImportOptions = Field(default_factory=ImportOptions)
+
+
+class FaceMappingResult(CamelCaseModel):
+    """Result of attempting to match a single face mapping."""
+
+    image_path: str
+    status: str  # "matched", "not_found", "image_missing", "detection_failed"
+    matched_face_id: str | None = None
+    error: str | None = None
+
+
+class PersonImportResult(CamelCaseModel):
+    """Result of importing a single person."""
+
+    name: str
+    status: str  # "created", "existing", "error"
+    person_id: str | None = None
+    faces_matched: int = Field(default=0)
+    faces_not_found: int = Field(default=0)
+    images_missing: int = Field(default=0)
+    details: list[FaceMappingResult] = Field(default_factory=list)
+
+
+class ImportResponse(CamelCaseModel):
+    """Response from person metadata import operation."""
+
+    success: bool
+    dry_run: bool
+    persons_created: int = Field(default=0)
+    persons_existing: int = Field(default=0)
+    total_faces_matched: int = Field(default=0)
+    total_faces_not_found: int = Field(default=0)
+    total_images_missing: int = Field(default=0)
+    person_results: list[PersonImportResult] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    timestamp: datetime
