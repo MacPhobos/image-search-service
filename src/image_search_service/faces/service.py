@@ -236,7 +236,7 @@ class FaceProcessingService:
                     error_details.append({"asset_id": asset.id, "error": str(e)})
 
             # Load images in parallel (I/O bound - releases GIL)
-            loaded_images: dict[str, "np.ndarray[Any, Any]"] = {}
+            loaded_images: dict[str, np.ndarray[Any, Any]] = {}
             io_start = time.time()
 
             with ThreadPoolExecutor(max_workers=io_workers) as executor:
