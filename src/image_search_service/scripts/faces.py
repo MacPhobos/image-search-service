@@ -39,16 +39,16 @@ def _print_bottleneck_analysis(
     typer.echo("")
 
     # Determine bottleneck
-    IO_BOUND_THRESHOLD = 70.0  # If I/O > 70%, it's I/O bound
-    GPU_BOUND_THRESHOLD = 70.0  # If GPU > 70%, it's GPU bound
+    io_bound_threshold = 70.0  # If I/O > 70%, it's I/O bound
+    gpu_bound_threshold = 70.0  # If GPU > 70%, it's GPU bound
 
-    if io_pct > IO_BOUND_THRESHOLD:
+    if io_pct > io_bound_threshold:
         typer.echo("⚠️  I/O BOUND - Consider:")
-        typer.echo(f"  • Increase NFS buffer size (current: likely 2KB → try 1MB)")
+        typer.echo("  • Increase NFS buffer size (current: likely 2KB → try 1MB)")
         typer.echo(f"  • Increase batch size (current: {batch_size} → try {batch_size * 2})")
         typer.echo("  • Add image prefetching with threading")
         typer.echo("  • Check NFS mount options (rsize, wsize)")
-    elif gpu_pct > GPU_BOUND_THRESHOLD:
+    elif gpu_pct > gpu_bound_threshold:
         typer.echo("✓ GPU BOUND - Processing is GPU-limited (optimal for this workload)")
         if batch_size < 8:
             typer.echo(f"  • Consider increasing batch size (current: {batch_size} → try 8)")
@@ -142,7 +142,7 @@ def backfill_faces(
                 result = service.process_assets_batch(
                     asset_ids=[a.id for a in assets],
                     min_confidence=min_confidence,
-                    batch_size=batch_size,
+                    prefetch_batch_size=batch_size,
                     progress_callback=progress_with_timing,
                 )
 
@@ -204,8 +204,6 @@ def cluster_faces(
         from image_search_service.db.sync_operations import get_sync_session
         from image_search_service.faces.clusterer import get_face_clusterer
 
-        typer.echo(f"Clustering up to {max_faces} faces...")
-
         db_session = get_sync_session()
         try:
             clusterer = get_face_clusterer(
@@ -213,13 +211,17 @@ def cluster_faces(
                 min_cluster_size=min_cluster_size,
                 min_samples=min_samples,
             )
-            result = clusterer.cluster_unlabeled_faces(
-                quality_threshold=quality_threshold,
-                max_faces=max_faces,
-                time_bucket=time_bucket,
-            )
 
-            typer.echo(f"Total faces processed: {result['total_faces']}")
+            with tqdm(desc="Clustering faces", unit="face") as pbar:
+                pbar.set_postfix_str(f"quality>={quality_threshold}, max={max_faces}")
+                result = clusterer.cluster_unlabeled_faces(
+                    quality_threshold=quality_threshold,
+                    max_faces=max_faces,
+                    time_bucket=time_bucket,
+                )
+                pbar.update(result['total_faces'])
+
+            typer.echo(f"\nTotal faces processed: {result['total_faces']}")
             typer.echo(f"Clusters found: {result['clusters_found']}")
             typer.echo(f"Noise (unclustered): {result['noise_count']}")
         finally:
@@ -269,16 +271,18 @@ def assign_faces(
         from image_search_service.db.sync_operations import get_sync_session
         from image_search_service.faces.assigner import get_face_assigner
 
-        typer.echo(f"Assigning up to {max_faces} faces...")
-
         db_session = get_sync_session()
         try:
             assigner = get_face_assigner(
                 db_session=db_session, similarity_threshold=threshold
             )
-            result = assigner.assign_new_faces(since=since_dt, max_faces=max_faces)
 
-            typer.echo(f"Processed: {result['processed']} faces")
+            with tqdm(total=max_faces, desc="Assigning faces", unit="face") as pbar:
+                pbar.set_postfix_str(f"threshold={threshold:.2f}")
+                result = assigner.assign_new_faces(since=since_dt, max_faces=max_faces)
+                pbar.update(result['processed'])
+
+            typer.echo(f"\nProcessed: {result['processed']} faces")
             typer.echo(f"Assigned: {result['assigned']}")
             typer.echo(f"Unassigned: {result['unassigned']}")
             typer.echo(f"Status: {result['status']}")
@@ -312,14 +316,15 @@ def compute_centroids(
         from image_search_service.db.sync_operations import get_sync_session
         from image_search_service.faces.assigner import get_face_assigner
 
-        typer.echo("Computing centroids...")
-
         db_session = get_sync_session()
         try:
             assigner = get_face_assigner(db_session=db_session)
-            result = assigner.compute_person_centroids()
 
-            typer.echo(f"Persons processed: {result['persons_processed']}")
+            with tqdm(desc="Computing centroids", unit="person") as pbar:
+                result = assigner.compute_person_centroids()
+                pbar.update(result['persons_processed'])
+
+            typer.echo(f"\nPersons processed: {result['persons_processed']}")
             typer.echo(f"Centroids computed: {result['centroids_computed']}")
         finally:
             db_session.close()
@@ -371,8 +376,6 @@ def cluster_faces_dual(
         from image_search_service.db.sync_operations import get_sync_session
         from image_search_service.faces.dual_clusterer import get_dual_mode_clusterer
 
-        typer.echo("Running dual-mode clustering...")
-
         db_session = get_sync_session()
         try:
             clusterer = get_dual_mode_clusterer(
@@ -383,9 +386,12 @@ def cluster_faces_dual(
                 unknown_eps=unknown_eps,
             )
 
-            result = clusterer.cluster_all_faces(max_faces=max_faces)
+            with tqdm(desc="Dual-mode clustering", unit="face") as pbar:
+                pbar.set_postfix_str(f"method={unknown_method}, threshold={person_threshold:.2f}")
+                result = clusterer.cluster_all_faces(max_faces=max_faces)
+                pbar.update(result['total_processed'])
 
-            typer.echo(f"Assigned to people: {result['assigned_to_people']}")
+            typer.echo(f"\nAssigned to people: {result['assigned_to_people']}")
             typer.echo(f"Unknown clusters: {result['unknown_clusters']}")
             typer.echo(f"Total processed: {result['total_processed']}")
         finally:
@@ -430,13 +436,15 @@ def train_person_matching(
                 learning_rate=learning_rate,
             )
 
-            result = trainer.fine_tune_for_person_clustering(
-                min_faces_per_person=min_faces,
-                checkpoint_path=checkpoint,
-            )
+            with tqdm(total=epochs, desc="Training epochs", unit="epoch") as pbar:
+                pbar.set_postfix_str(f"margin={margin}, lr={learning_rate}")
+                result = trainer.fine_tune_for_person_clustering(
+                    min_faces_per_person=min_faces,
+                    checkpoint_path=checkpoint,
+                )
+                pbar.update(result['epochs'])
 
-            typer.echo("")
-            typer.echo("=== Training Results ===")
+            typer.echo("\n=== Training Results ===")
             typer.echo(f"Epochs completed: {result['epochs']}")
             typer.echo(f"Final loss: {result['final_loss']:.4f}")
             typer.echo(f"Persons trained: {result['persons_trained']}")
