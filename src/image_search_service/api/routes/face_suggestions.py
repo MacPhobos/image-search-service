@@ -89,6 +89,62 @@ async def list_suggestions(
     )
 
 
+@router.get("/stats")
+async def get_suggestion_stats(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Get suggestion statistics including acceptance rates."""
+    # Count by status
+    status_query = select(
+        FaceSuggestion.status,
+        func.count(FaceSuggestion.id).label("count"),
+    ).group_by(FaceSuggestion.status)
+
+    status_result = await db.execute(status_query)
+    status_counts: dict[str, int] = {status: count for status, count in status_result.all()}
+
+    # Calculate totals
+    total = sum(status_counts.values())
+    pending = status_counts.get(FaceSuggestionStatus.PENDING.value, 0)
+    accepted = status_counts.get(FaceSuggestionStatus.ACCEPTED.value, 0)
+    rejected = status_counts.get(FaceSuggestionStatus.REJECTED.value, 0)
+    expired = status_counts.get(FaceSuggestionStatus.EXPIRED.value, 0)
+
+    reviewed = accepted + rejected
+    acceptance_rate = (accepted / reviewed * 100) if reviewed > 0 else 0.0
+
+    # Get suggestions by person (top 10)
+    person_query = (
+        select(
+            FaceSuggestion.suggested_person_id,
+            Person.name,
+            func.count(FaceSuggestion.id).label("count"),
+        )
+        .join(Person, FaceSuggestion.suggested_person_id == Person.id)
+        .where(FaceSuggestion.status == FaceSuggestionStatus.PENDING.value)
+        .group_by(FaceSuggestion.suggested_person_id, Person.name)
+        .order_by(func.count(FaceSuggestion.id).desc())
+        .limit(10)
+    )
+
+    person_result = await db.execute(person_query)
+    top_persons = [
+        {"person_id": str(person_id), "name": name, "pending_count": count}
+        for person_id, name, count in person_result.all()
+    ]
+
+    return {
+        "total": total,
+        "pending": pending,
+        "accepted": accepted,
+        "rejected": rejected,
+        "expired": expired,
+        "reviewed": reviewed,
+        "acceptance_rate": round(acceptance_rate, 1),
+        "top_persons_with_pending": top_persons,
+    }
+
+
 @router.get("/{suggestion_id}", response_model=FaceSuggestionResponse)
 async def get_suggestion(
     suggestion_id: int,
@@ -267,59 +323,3 @@ async def bulk_suggestion_action(
         failed=failed,
         errors=errors[:10],  # Limit errors to first 10
     )
-
-
-@router.get("/stats")
-async def get_suggestion_stats(
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    """Get suggestion statistics including acceptance rates."""
-    # Count by status
-    status_query = select(
-        FaceSuggestion.status,
-        func.count(FaceSuggestion.id).label("count"),
-    ).group_by(FaceSuggestion.status)
-
-    status_result = await db.execute(status_query)
-    status_counts: dict[str, int] = {status: count for status, count in status_result.all()}
-
-    # Calculate totals
-    total = sum(status_counts.values())
-    pending = status_counts.get(FaceSuggestionStatus.PENDING.value, 0)
-    accepted = status_counts.get(FaceSuggestionStatus.ACCEPTED.value, 0)
-    rejected = status_counts.get(FaceSuggestionStatus.REJECTED.value, 0)
-    expired = status_counts.get(FaceSuggestionStatus.EXPIRED.value, 0)
-
-    reviewed = accepted + rejected
-    acceptance_rate = (accepted / reviewed * 100) if reviewed > 0 else 0.0
-
-    # Get suggestions by person (top 10)
-    person_query = (
-        select(
-            FaceSuggestion.suggested_person_id,
-            Person.name,
-            func.count(FaceSuggestion.id).label("count"),
-        )
-        .join(Person, FaceSuggestion.suggested_person_id == Person.id)
-        .where(FaceSuggestion.status == FaceSuggestionStatus.PENDING.value)
-        .group_by(FaceSuggestion.suggested_person_id, Person.name)
-        .order_by(func.count(FaceSuggestion.id).desc())
-        .limit(10)
-    )
-
-    person_result = await db.execute(person_query)
-    top_persons = [
-        {"person_id": str(person_id), "name": name, "pending_count": count}
-        for person_id, name, count in person_result.all()
-    ]
-
-    return {
-        "total": total,
-        "pending": pending,
-        "accepted": accepted,
-        "rejected": rejected,
-        "expired": expired,
-        "reviewed": reviewed,
-        "acceptance_rate": round(acceptance_rate, 1),
-        "top_persons_with_pending": top_persons,
-    }
