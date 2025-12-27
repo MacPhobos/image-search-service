@@ -116,6 +116,68 @@ class EmbeddingService:
         result: list[float] = image_features[0].cpu().numpy().tolist()
         return result
 
+    def embed_image_from_pil(self, image: "Image.Image") -> list[float]:
+        """Embed a pre-loaded PIL image using CLIP.
+
+        Args:
+            image: PIL Image object (already loaded)
+
+        Returns:
+            Normalized embedding vector as list of floats
+        """
+        import torch
+
+        model, preprocess, _ = _load_model()
+
+        image_rgb = image.convert("RGB")
+        image_tensor = preprocess(image_rgb).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            image_features = model.encode_image(image_tensor)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+        result: list[float] = image_features[0].cpu().numpy().tolist()
+        return result
+
+    def embed_images_batch(
+        self, images: list["Image.Image"]
+    ) -> list[list[float]]:
+        """Embed multiple pre-loaded PIL images in a single GPU batch.
+
+        This is significantly faster than calling embed_image() multiple times
+        as it batches the GPU inference.
+
+        Args:
+            images: List of PIL Image objects (already loaded)
+
+        Returns:
+            List of normalized embedding vectors
+        """
+        import torch
+
+        if not images:
+            return []
+
+        model, preprocess, _ = _load_model()
+
+        # Preprocess all images and stack into batch tensor
+        tensors = []
+        for img in images:
+            img_rgb = img.convert("RGB")
+            tensor = preprocess(img_rgb)
+            tensors.append(tensor)
+
+        # Stack into batch: (N, C, H, W)
+        batch_tensor = torch.stack(tensors).to(self.device)
+
+        with torch.no_grad():
+            image_features = model.encode_image(batch_tensor)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+        # Convert to list of lists
+        results: list[list[float]] = image_features.cpu().numpy().tolist()
+        return results
+
 
 @lru_cache(maxsize=1)
 def get_embedding_service() -> EmbeddingService:

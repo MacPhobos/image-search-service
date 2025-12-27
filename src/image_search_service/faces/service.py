@@ -1,9 +1,12 @@
 """High-level face processing service."""
 
 import logging
+import queue
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,44 @@ from image_search_service.faces.detector import detect_faces, detect_faces_from_
 from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
 logger = logging.getLogger(__name__)
+
+
+# Sentinel value to signal producer completion
+_SENTINEL = object()
+
+
+@dataclass
+class LoadedBatch:
+    """A batch of images loaded from disk, ready for GPU processing."""
+
+    # Map of image_path -> (asset, loaded_image)
+    images: dict[str, tuple["ImageAsset", "np.ndarray[Any, Any]"]] = field(
+        default_factory=dict
+    )
+    # Errors encountered during loading
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    # Time spent loading this batch (I/O time)
+    io_time: float = 0.0
+    # Batch index for ordering
+    batch_index: int = 0
+
+
+@dataclass
+class ProcessedBatch:
+    """Results from GPU processing a batch."""
+
+    # Number of assets successfully processed
+    processed: int = 0
+    # Total faces detected
+    total_faces: int = 0
+    # Errors encountered during processing
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    # GPU processing time for this batch
+    gpu_time: float = 0.0
+    # Qdrant points to buffer
+    qdrant_points: list[dict[str, Any]] = field(default_factory=list)
+    # FaceInstance records created (for DB commit)
+    face_instances: list["FaceInstance"] = field(default_factory=list)
 
 
 def _load_image(image_path: str) -> tuple[str, "np.ndarray[Any, Any] | None"]:
@@ -147,20 +188,27 @@ class FaceProcessingService:
         io_workers: int = 4,
         qdrant_batch_size: int = 100,
         progress_callback: Any = None,
+        pipeline_queue_size: int = 2,
     ) -> dict[str, Any]:
-        """Process multiple assets with parallel image loading and cross-asset Qdrant batching.
+        """Process multiple assets with pipelined I/O and GPU processing.
 
-        Uses ThreadPoolExecutor to prefetch images while GPU processes previous batch.
-        This overlaps disk I/O with GPU inference for better throughput.
+        Uses a producer-consumer pattern where I/O runs in background thread:
+        - Background thread: loads images in parallel using ThreadPoolExecutor
+        - Main thread: processes loaded batches through GPU inference + DB operations
+        - Bounded queue ensures GPU never starves while limiting memory usage
+
+        This achieves true overlap: while GPU processes batch N, I/O loads batch N+1.
+        DB operations stay in main thread for SQLAlchemy thread-safety.
 
         Args:
             asset_ids: List of asset IDs to process
             min_confidence: Minimum detection confidence threshold
             min_face_size: Minimum face width/height in pixels
-            prefetch_batch_size: Number of images to prefetch in parallel (default: 8)
+            prefetch_batch_size: Number of images per batch (default: 8)
             io_workers: Number of I/O threads for parallel image loading (default: 4)
             qdrant_batch_size: Buffer size for cross-asset Qdrant upserts (default: 100)
             progress_callback: Optional callable(step: int) to report progress
+            pipeline_queue_size: Number of batches to buffer between I/O and GPU (default: 2)
 
         Returns:
             Summary dict with counts, throughput, and timing metrics:
@@ -171,6 +219,7 @@ class FaceProcessingService:
             - elapsed_time: Total wall clock time
             - io_time: Total I/O time (loading images from disk)
             - gpu_time: Total GPU time (face detection)
+            - pipeline_efficiency: Ratio of overlapped time (higher is better)
         """
         if not asset_ids:
             return {
@@ -181,107 +230,191 @@ class FaceProcessingService:
                 "io_time": 0.0,
                 "gpu_time": 0.0,
                 "elapsed_time": 0.0,
+                "pipeline_efficiency": 0.0,
             }
-
-        total_faces = 0
-        processed = 0
-        errors = 0
-        error_details: list[dict[str, Any]] = []
-        start_time = time.time()
-
-        # Timing tracking
-        total_io_time = 0.0
-        total_gpu_time = 0.0
-
-        # Qdrant buffer for cross-asset batching
-        qdrant_buffer: list[dict[str, Any]] = []
 
         # Special case: prefetch_batch_size=1 means sequential processing (backward compatible)
         if prefetch_batch_size == 1:
-            return self._process_assets_sequential(
+            result = self._process_assets_sequential(
                 asset_ids, min_confidence, min_face_size, progress_callback
             )
+            result["pipeline_efficiency"] = 0.0
+            return result
+
+        start_time = time.time()
 
         # Pre-fetch all assets from database (relatively fast, not the bottleneck)
         assets: list[ImageAsset] = []
+        db_errors: list[dict[str, Any]] = []
         for asset_id in asset_ids:
             asset = self.db.get(ImageAsset, asset_id)
             if asset:
                 assets.append(asset)
             else:
-                errors += 1
-                error_details.append({"asset_id": asset_id, "error": "Asset not found"})
+                db_errors.append({"asset_id": asset_id, "error": "Asset not found"})
                 logger.warning(f"Asset {asset_id} not found")
 
-        # Process in batches with prefetching
-        for batch_start in range(0, len(assets), prefetch_batch_size):
-            batch_assets = assets[batch_start : batch_start + prefetch_batch_size]
+        if not assets:
+            elapsed_time = time.time() - start_time
+            return {
+                "processed": 0,
+                "total_faces": 0,
+                "errors": len(db_errors),
+                "error_details": db_errors,
+                "throughput": 0.0,
+                "elapsed_time": elapsed_time,
+                "io_time": 0.0,
+                "gpu_time": 0.0,
+                "pipeline_efficiency": 0.0,
+            }
 
-            # Prepare image paths and map them to assets
-            path_to_asset: dict[str, ImageAsset] = {}
-            for asset in batch_assets:
-                try:
-                    image_path = self._resolve_asset_path(asset)
-                    if not image_path or not Path(image_path).exists():
-                        logger.warning(f"Asset {asset.id} has no valid image path")
-                        errors += 1
-                        error_details.append(
-                            {"asset_id": asset.id, "error": "Invalid image path"}
-                        )
-                        continue
-                    path_to_asset[str(image_path)] = asset
-                except Exception as e:
-                    logger.error(f"Cannot resolve path for asset {asset.id}: {e}")
-                    errors += 1
-                    error_details.append({"asset_id": asset.id, "error": str(e)})
+        # Create batches of assets with their paths
+        batches: list[list[tuple[ImageAsset, str]]] = []
+        current_batch: list[tuple[ImageAsset, str]] = []
 
-            # Load images in parallel (I/O bound - releases GIL)
-            loaded_images: dict[str, np.ndarray[Any, Any]] = {}
-            io_start = time.time()
+        for asset in assets:
+            try:
+                image_path = self._resolve_asset_path(asset)
+                if not image_path or not Path(image_path).exists():
+                    db_errors.append({"asset_id": asset.id, "error": "Invalid image path"})
+                    logger.warning(f"Asset {asset.id} has no valid image path")
+                    continue
+                current_batch.append((asset, str(image_path)))
+                if len(current_batch) >= prefetch_batch_size:
+                    batches.append(current_batch)
+                    current_batch = []
+            except Exception as e:
+                db_errors.append({"asset_id": asset.id, "error": str(e)})
+                logger.error(f"Cannot resolve path for asset {asset.id}: {e}")
 
-            with ThreadPoolExecutor(max_workers=io_workers) as executor:
-                futures = {
-                    executor.submit(_load_image, path): path for path in path_to_asset.keys()
-                }
+        if current_batch:
+            batches.append(current_batch)
 
-                for future in as_completed(futures):
-                    path = futures[future]
-                    try:
-                        _, image = future.result()
-                        if image is not None:
-                            loaded_images[path] = image
-                        else:
+        if not batches:
+            elapsed_time = time.time() - start_time
+            return {
+                "processed": 0,
+                "total_faces": 0,
+                "errors": len(db_errors),
+                "error_details": db_errors,
+                "throughput": 0.0,
+                "elapsed_time": elapsed_time,
+                "io_time": 0.0,
+                "gpu_time": 0.0,
+                "pipeline_efficiency": 0.0,
+            }
+
+        # Bounded queue for loaded batches (controls memory usage)
+        batch_queue: queue.Queue[LoadedBatch | object] = queue.Queue(
+            maxsize=pipeline_queue_size
+        )
+
+        # Shared state for error handling and shutdown
+        shutdown_event = threading.Event()
+        producer_error: list[Exception] = []  # List to store exception from producer
+        io_time_accumulator: list[float] = []  # Thread-safe accumulator for I/O times
+
+        def io_producer() -> None:
+            """Background thread: loads batches of images from disk."""
+            try:
+                with ThreadPoolExecutor(max_workers=io_workers) as executor:
+                    for batch_idx, batch in enumerate(batches):
+                        if shutdown_event.is_set():
+                            break
+
+                        io_start = time.time()
+                        loaded_batch = LoadedBatch(batch_index=batch_idx)
+
+                        # Submit all image loads for this batch
+                        path_to_asset = {path: asset for asset, path in batch}
+                        futures = {
+                            executor.submit(_load_image, path): path
+                            for path in path_to_asset.keys()
+                        }
+
+                        # Collect results as they complete
+                        for future in as_completed(futures):
+                            if shutdown_event.is_set():
+                                break
+                            path = futures[future]
                             asset = path_to_asset[path]
-                            errors += 1
-                            error_details.append(
-                                {"asset_id": asset.id, "error": f"Failed to load image: {path}"}
-                            )
-                            logger.warning(f"Failed to load image: {path}")
-                    except Exception as e:
-                        asset = path_to_asset[path]
-                        errors += 1
-                        error_details.append({"asset_id": asset.id, "error": str(e)})
-                        logger.error(f"Error loading {path}: {e}")
+                            try:
+                                _, image = future.result()
+                                if image is not None:
+                                    loaded_batch.images[path] = (asset, image)
+                                else:
+                                    loaded_batch.errors.append(
+                                        {
+                                            "asset_id": asset.id,
+                                            "error": f"Failed to load image: {path}",
+                                        }
+                                    )
+                            except Exception as e:
+                                loaded_batch.errors.append(
+                                    {"asset_id": asset.id, "error": str(e)}
+                                )
 
-            io_elapsed = time.time() - io_start
-            total_io_time += io_elapsed
+                        loaded_batch.io_time = time.time() - io_start
+                        io_time_accumulator.append(loaded_batch.io_time)
 
-            # Process loaded images through GPU (sequential - GPU bound)
-            for path, image in loaded_images.items():
-                asset = path_to_asset[path]
+                        # Put batch in queue (blocks if queue is full - backpressure)
+                        if not shutdown_event.is_set():
+                            batch_queue.put(loaded_batch)
+
+            except Exception as e:
+                logger.error(f"Producer thread error: {e}")
+                producer_error.append(e)
+                shutdown_event.set()
+            finally:
+                # Signal completion to consumer
+                batch_queue.put(_SENTINEL)
+
+        # Start I/O producer in background
+        producer_thread = threading.Thread(target=io_producer, name="io-producer")
+        producer_thread.start()
+
+        # Process batches in main thread (GPU + DB operations)
+        total_gpu_time = 0.0
+        total_processed = 0
+        total_faces = 0
+        all_errors: list[dict[str, Any]] = list(db_errors)
+        qdrant_buffer: list[dict[str, Any]] = []
+
+        while True:
+            try:
+                # Get next batch (blocks until available, with timeout to check shutdown)
+                item = batch_queue.get(timeout=0.1)
+            except queue.Empty:
+                if shutdown_event.is_set() and batch_queue.empty():
+                    break
+                continue
+
+            # Check for sentinel (producer done)
+            if item is _SENTINEL:
+                break
+
+            if shutdown_event.is_set():
+                break
+
+            loaded_batch: LoadedBatch = item  # type: ignore[assignment]
+
+            # Collect errors from loading phase
+            all_errors.extend(loaded_batch.errors)
+
+            # Process each loaded image through GPU (main thread - thread-safe for DB)
+            for path, (asset, image) in loaded_batch.images.items():
+                if shutdown_event.is_set():
+                    break
+
                 try:
                     gpu_start = time.time()
-
-                    # Detect faces using pre-loaded image
-                    from image_search_service.faces.detector import detect_faces
-
                     detected = detect_faces(image, min_confidence, min_face_size)
                     gpu_elapsed = time.time() - gpu_start
                     total_gpu_time += gpu_elapsed
 
                     if not detected:
                         logger.debug(f"No faces detected in asset {asset.id}")
-                        processed += 1
+                        total_processed += 1
                         if progress_callback:
                             progress_callback(1)
                         continue
@@ -313,7 +446,7 @@ class FaceProcessingService:
                         self.db.add(face_instance)
                         total_faces += 1
 
-                        # Prepare Qdrant point and add to buffer
+                        # Prepare Qdrant point
                         qdrant_point: dict[str, Any] = {
                             "point_id": point_id,
                             "embedding": face.embedding.tolist(),
@@ -329,7 +462,6 @@ class FaceProcessingService:
                             },
                         }
 
-                        # Add optional taken_at if available
                         if hasattr(asset, "file_modified_at") and asset.file_modified_at:
                             qdrant_point["taken_at"] = asset.file_modified_at
 
@@ -345,21 +477,34 @@ class FaceProcessingService:
                             except Exception as e:
                                 self.db.rollback()
                                 logger.error(f"Failed to flush Qdrant buffer: {e}")
-                                raise RuntimeError(f"Qdrant batch upsert failed: {e}") from e
+                                shutdown_event.set()
+                                raise RuntimeError(
+                                    f"Qdrant batch upsert failed: {e}"
+                                ) from e
 
-                    processed += 1
+                    total_processed += 1
                     if progress_callback:
                         progress_callback(1)
 
                 except Exception as e:
                     logger.error(f"Error processing asset {asset.id}: {e}")
-                    errors += 1
-                    error_details.append({"asset_id": asset.id, "error": str(e)})
+                    all_errors.append({"asset_id": asset.id, "error": str(e)})
                     if progress_callback:
                         progress_callback(1)
+                    # Don't shutdown on single asset error, continue processing
+
+        # Wait for producer to finish
+        producer_thread.join()
+
+        # Check for producer errors
+        if producer_error:
+            logger.error(f"Pipeline failed due to producer error: {producer_error[0]}")
+
+        # Calculate total I/O time from accumulator
+        total_io_time = sum(io_time_accumulator)
 
         # Flush remaining Qdrant buffer at end
-        if qdrant_buffer:
+        if qdrant_buffer and not shutdown_event.is_set():
             try:
                 self.qdrant.upsert_faces_batch(qdrant_buffer)
                 logger.info(f"Flushed final {len(qdrant_buffer)} faces to Qdrant")
@@ -371,17 +516,41 @@ class FaceProcessingService:
                 raise RuntimeError(f"Final Qdrant batch upsert failed: {e}") from e
 
         elapsed_time = time.time() - start_time
-        throughput = processed / elapsed_time if elapsed_time > 0 else 0.0
+        throughput = total_processed / elapsed_time if elapsed_time > 0 else 0.0
+
+        # Calculate pipeline efficiency
+        # Efficiency measures how much I/O was hidden behind GPU processing
+        # Perfect efficiency (1.0) = elapsed_time equals max(io_time, gpu_time)
+        sequential_time = total_io_time + total_gpu_time
+        if sequential_time > 0 and elapsed_time > 0:
+            # Time saved compared to sequential execution
+            time_saved = sequential_time - elapsed_time
+            # Normalize by the time that could potentially be overlapped
+            overlap_potential = min(total_io_time, total_gpu_time)
+            if overlap_potential > 0:
+                pipeline_efficiency = min(1.0, max(0.0, time_saved / overlap_potential))
+            else:
+                pipeline_efficiency = 0.0
+        else:
+            pipeline_efficiency = 0.0
+
+        # Log pipeline performance metrics
+        logger.info(
+            f"Pipeline stats: io_time={total_io_time:.2f}s, gpu_time={total_gpu_time:.2f}s, "
+            f"elapsed={elapsed_time:.2f}s, efficiency={pipeline_efficiency:.1%}, "
+            f"throughput={throughput:.2f} img/s"
+        )
 
         return {
-            "processed": processed,
+            "processed": total_processed,
             "total_faces": total_faces,
-            "errors": errors,
-            "error_details": error_details,
+            "errors": len(all_errors),
+            "error_details": all_errors,
             "throughput": throughput,
             "elapsed_time": elapsed_time,
             "io_time": total_io_time,
             "gpu_time": total_gpu_time,
+            "pipeline_efficiency": pipeline_efficiency,
         }
 
     def _process_assets_sequential(

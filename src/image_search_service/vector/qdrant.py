@@ -39,13 +39,23 @@ def get_qdrant_client() -> QdrantClient:
     return _client
 
 
+_collection_ensured: set[str] = set()
+
+
 def ensure_collection(embedding_dim: int) -> None:
     """Create collection if it doesn't exist.
+
+    Uses module-level cache to avoid redundant API calls.
 
     Args:
         embedding_dim: Dimension of embedding vectors
     """
     settings = get_settings()
+
+    # Fast path: already ensured in this process
+    if settings.qdrant_collection in _collection_ensured:
+        return
+
     client = get_qdrant_client()
 
     collections = client.get_collections().collections
@@ -59,6 +69,9 @@ def ensure_collection(embedding_dim: int) -> None:
         logger.info(
             f"Created Qdrant collection '{settings.qdrant_collection}' with dim={embedding_dim}"
         )
+
+    # Mark as ensured
+    _collection_ensured.add(settings.qdrant_collection)
 
 
 def upsert_vector(asset_id: int, vector: list[float], payload: dict[str, str | int]) -> None:
@@ -78,6 +91,43 @@ def upsert_vector(asset_id: int, vector: list[float], payload: dict[str, str | i
             PointStruct(id=asset_id, vector=vector, payload={**payload, "asset_id": str(asset_id)})
         ],
     )
+
+
+def upsert_vectors_batch(
+    points: list[dict[str, Any]],
+    wait: bool = True,
+) -> int:
+    """Batch upsert multiple vector points into Qdrant.
+
+    Args:
+        points: List of dicts with keys: asset_id, vector, payload
+        wait: Whether to wait for operation to complete (default: True)
+
+    Returns:
+        Number of points upserted
+    """
+    if not points:
+        return 0
+
+    settings = get_settings()
+    client = get_qdrant_client()
+
+    qdrant_points = [
+        PointStruct(
+            id=p["asset_id"],
+            vector=p["vector"],
+            payload={**p.get("payload", {}), "asset_id": str(p["asset_id"])},
+        )
+        for p in points
+    ]
+
+    client.upsert(
+        collection_name=settings.qdrant_collection,
+        points=qdrant_points,
+        wait=wait,
+    )
+
+    return len(qdrant_points)
 
 
 def search_vectors(

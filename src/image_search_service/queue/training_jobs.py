@@ -1,9 +1,15 @@
 """Training job functions for RQ background processing."""
 
 import hashlib
+import queue
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
+from PIL import Image
 from sqlalchemy import select
 
 from image_search_service.core.config import get_settings
@@ -21,9 +27,45 @@ from image_search_service.db.sync_operations import (
 )
 from image_search_service.queue.progress import ProgressTracker
 from image_search_service.services.embedding import get_embedding_service
-from image_search_service.vector.qdrant import ensure_collection, upsert_vector
+from image_search_service.vector.qdrant import (
+    ensure_collection,
+    upsert_vector,
+    upsert_vectors_batch,
+)
 
 logger = get_logger(__name__)
+
+# Sentinel for producer completion
+_SENTINEL = object()
+
+
+@dataclass
+class LoadedImageBatch:
+    """A batch of images loaded from disk, ready for GPU processing."""
+
+    # List of (job, asset, pil_image) tuples
+    items: list[tuple[Any, Any, Image.Image]] = field(default_factory=list)
+    # Errors encountered during loading
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    # Time spent loading this batch
+    io_time: float = 0.0
+    # Batch index
+    batch_index: int = 0
+
+
+def _load_image_pil(path: str) -> tuple[str, Image.Image | None]:
+    """Load image from disk as PIL Image (I/O bound operation).
+
+    Returns (path, image) where image is None if loading failed.
+    """
+    try:
+        img = Image.open(path)
+        # Load image data into memory (otherwise it's lazy)
+        img.load()
+        return (path, img)
+    except Exception as e:
+        logger.warning(f"Failed to load image {path}: {e}")
+        return (path, None)
 
 
 def train_session(session_id: int) -> dict[str, object]:
@@ -215,24 +257,50 @@ def train_session(session_id: int) -> dict[str, object]:
         db_session.close()
 
 
-def train_batch(session_id: int, asset_ids: list[int], batch_num: int) -> dict[str, int]:
-    """Process a batch of images.
+def train_batch(
+    session_id: int,
+    asset_ids: list[int],
+    batch_num: int,
+    gpu_batch_size: int = 16,
+    io_workers: int = 4,
+    pipeline_queue_size: int = 2,
+) -> dict[str, int | float]:
+    """Process a batch of images with pipelined I/O and batched GPU inference.
+
+    Uses producer-consumer pattern:
+    - Background thread: loads images in parallel using ThreadPoolExecutor
+    - Main thread: batched GPU embedding + Qdrant upserts + DB operations
 
     Args:
         session_id: Training session ID
         asset_ids: List of asset IDs to process
         batch_num: Batch number for logging
+        gpu_batch_size: Number of images per GPU batch (default: 16)
+        io_workers: Number of I/O threads for parallel image loading (default: 4)
+        pipeline_queue_size: Number of batches to buffer (default: 2)
 
     Returns:
-        Dictionary with batch results
+        Dictionary with batch results including timing metrics
     """
-    logger.debug(f"Training batch {batch_num} with {len(asset_ids)} assets")
+    logger.debug(f"Training batch {batch_num} with {len(asset_ids)} assets (pipelined)")
+    start_time = time.time()
 
     db_session = get_sync_session()
     tracker = ProgressTracker(session_id)
+    embedding_service = get_embedding_service()
+    settings = get_settings()
+
+    # Ensure collection exists (cached - only hits API once per process)
+    ensure_collection(embedding_service.embedding_dim)
+
+    # Get training session for category_id
+    training_session = get_session_by_id_sync(db_session, session_id)
+    category_id = training_session.category_id if training_session else None
 
     processed = 0
     failed = 0
+    total_io_time = 0.0
+    total_gpu_time = 0.0
 
     try:
         # Get all jobs for these assets
@@ -244,34 +312,249 @@ def train_batch(session_id: int, asset_ids: list[int], batch_num: int) -> dict[s
         result = db_session.execute(query)
         jobs = list(result.scalars().all())
 
-        # Process each job
+        if not jobs:
+            return {"processed": 0, "failed": 0, "io_time": 0.0, "gpu_time": 0.0}
+
+        # Build job lookup and get assets
+        job_by_asset_id: dict[int, Any] = {}
+        asset_by_id: dict[int, Any] = {}
+        job_items: list[tuple[Any, Any, str]] = []  # (job, asset, path)
+
         for job in jobs:
-            # Check cancellation before each asset
+            asset = get_asset_by_id_sync(db_session, job.asset_id)
+            if not asset:
+                update_training_job_sync(
+                    db_session, job.id, JobStatus.FAILED.value, "Asset not found"
+                )
+                failed += 1
+                continue
+
+            job_by_asset_id[job.asset_id] = job
+            asset_by_id[job.asset_id] = asset
+            job_items.append((job, asset, asset.path))
+
+        if not job_items:
+            return {"processed": 0, "failed": failed, "io_time": 0.0, "gpu_time": 0.0}
+
+        # Create GPU-sized sub-batches
+        gpu_batches: list[list[tuple[Any, Any, str]]] = []
+        for i in range(0, len(job_items), gpu_batch_size):
+            gpu_batches.append(job_items[i : i + gpu_batch_size])
+
+        # Bounded queue for loaded batches
+        batch_queue: queue.Queue[LoadedImageBatch | object] = queue.Queue(
+            maxsize=pipeline_queue_size
+        )
+
+        shutdown_event = threading.Event()
+        io_time_accumulator: list[float] = []
+
+        def io_producer() -> None:
+            """Background thread: loads images from disk."""
+            try:
+                with ThreadPoolExecutor(max_workers=io_workers) as executor:
+                    for batch_idx, batch in enumerate(gpu_batches):
+                        if shutdown_event.is_set():
+                            break
+
+                        io_start = time.time()
+                        loaded_batch = LoadedImageBatch(batch_index=batch_idx)
+
+                        # Map paths to jobs/assets
+                        path_to_item = {path: (job, asset) for job, asset, path in batch}
+
+                        # Load images in parallel
+                        futures = {
+                            executor.submit(_load_image_pil, path): path
+                            for path in path_to_item.keys()
+                        }
+
+                        for future in as_completed(futures):
+                            if shutdown_event.is_set():
+                                break
+                            path = futures[future]
+                            job, asset = path_to_item[path]
+                            try:
+                                _, img = future.result()
+                                if img is not None:
+                                    loaded_batch.items.append((job, asset, img))
+                                else:
+                                    loaded_batch.errors.append({
+                                        "job_id": job.id,
+                                        "asset_id": asset.id,
+                                        "error": f"Failed to load: {path}",
+                                    })
+                            except Exception as e:
+                                loaded_batch.errors.append({
+                                    "job_id": job.id,
+                                    "asset_id": asset.id,
+                                    "error": str(e),
+                                })
+
+                        loaded_batch.io_time = time.time() - io_start
+                        io_time_accumulator.append(loaded_batch.io_time)
+
+                        if not shutdown_event.is_set():
+                            batch_queue.put(loaded_batch)
+
+            except Exception as e:
+                logger.error(f"I/O producer error: {e}")
+                shutdown_event.set()
+            finally:
+                batch_queue.put(_SENTINEL)
+
+        # Start I/O producer in background
+        producer_thread = threading.Thread(target=io_producer, name="io-producer")
+        producer_thread.start()
+
+        # Process batches in main thread (GPU + DB)
+        qdrant_buffer: list[dict[str, Any]] = []
+        qdrant_batch_size = 100
+
+        while True:
+            # Check cancellation
             if tracker.should_stop(db_session):
-                logger.info(f"Batch {batch_num} stopped due to session cancellation/pause")
+                logger.info(f"Batch {batch_num} stopping due to cancellation/pause")
+                shutdown_event.set()
                 break
 
             try:
-                # Train single asset
-                result_dict = train_single_asset(job.id, job.asset_id, session_id)
+                item = batch_queue.get(timeout=0.1)
+            except queue.Empty:
+                if shutdown_event.is_set() and batch_queue.empty():
+                    break
+                continue
 
-                if result_dict.get("status") == "success":
-                    processed += 1
-                else:
-                    failed += 1
+            if item is _SENTINEL:
+                break
 
-            except Exception as e:
-                logger.error(f"Error training asset {job.asset_id}: {e}")
+            loaded_batch: LoadedImageBatch = item  # type: ignore[assignment]
+
+            # Handle loading errors
+            for err in loaded_batch.errors:
+                update_training_job_sync(
+                    db_session, err["job_id"], JobStatus.FAILED.value, err["error"]
+                )
                 failed += 1
 
-                # Update job with error
-                update_training_job_sync(
-                    db_session, job.id, JobStatus.FAILED.value, str(e)
-                )
+            if not loaded_batch.items:
+                continue
 
-        logger.debug(f"Batch {batch_num} completed: {processed} success, {failed} failed")
+            # Batch GPU embedding
+            gpu_start = time.time()
+            images = [img for _, _, img in loaded_batch.items]
 
-        return {"processed": processed, "failed": failed}
+            try:
+                embeddings = embedding_service.embed_images_batch(images)
+            except Exception as e:
+                logger.error(f"Batch embedding failed: {e}")
+                for job, asset, _ in loaded_batch.items:
+                    update_training_job_sync(
+                        db_session, job.id, JobStatus.FAILED.value, str(e)
+                    )
+                    failed += 1
+                continue
+
+            gpu_elapsed = time.time() - gpu_start
+            total_gpu_time += gpu_elapsed
+
+            # Process each result
+            for (job, asset, _), embedding in zip(loaded_batch.items, embeddings):
+                try:
+                    # Calculate checksum
+                    embedding_bytes = "".join(str(v) for v in embedding).encode()
+                    checksum = hashlib.sha256(embedding_bytes).hexdigest()
+
+                    # Prepare Qdrant point
+                    payload: dict[str, str | int] = {"path": asset.path}
+                    if asset.created_at:
+                        payload["created_at"] = asset.created_at.isoformat()
+                    if category_id is not None:
+                        payload["category_id"] = category_id
+
+                    qdrant_buffer.append({
+                        "asset_id": asset.id,
+                        "vector": embedding,
+                        "payload": payload,
+                    })
+
+                    # Update job status
+                    update_training_job_sync(db_session, job.id, JobStatus.COMPLETED.value)
+                    update_asset_indexed_at_sync(db_session, asset.id)
+
+                    # Create evidence (simplified - skip detailed metadata for speed)
+                    create_evidence_sync(
+                        db_session,
+                        {
+                            "asset_id": asset.id,
+                            "session_id": session_id,
+                            "model_name": "OpenCLIP",
+                            "model_version": settings.clip_model_name,
+                            "embedding_checksum": checksum,
+                            "device": embedding_service.device,
+                            "processing_time_ms": int(gpu_elapsed * 1000 / len(images)),
+                        },
+                    )
+
+                    processed += 1
+
+                    # Flush Qdrant buffer when full
+                    if len(qdrant_buffer) >= qdrant_batch_size:
+                        upsert_vectors_batch(qdrant_buffer)
+                        logger.debug(f"Flushed {len(qdrant_buffer)} vectors to Qdrant")
+                        qdrant_buffer.clear()
+
+                except Exception as e:
+                    logger.error(f"Error processing asset {asset.id}: {e}")
+                    update_training_job_sync(
+                        db_session, job.id, JobStatus.FAILED.value, str(e)
+                    )
+                    failed += 1
+
+        # Wait for producer
+        producer_thread.join()
+
+        # Flush remaining Qdrant buffer
+        if qdrant_buffer:
+            upsert_vectors_batch(qdrant_buffer)
+            logger.debug(f"Flushed final {len(qdrant_buffer)} vectors to Qdrant")
+            qdrant_buffer.clear()
+
+        total_io_time = sum(io_time_accumulator)
+        elapsed_time = time.time() - start_time
+
+        # Calculate pipeline efficiency
+        sequential_time = total_io_time + total_gpu_time
+        if sequential_time > 0 and elapsed_time > 0:
+            time_saved = sequential_time - elapsed_time
+            overlap_potential = min(total_io_time, total_gpu_time)
+            if overlap_potential > 0:
+                efficiency = min(1.0, max(0.0, time_saved / overlap_potential))
+            else:
+                efficiency = 0.0
+        else:
+            efficiency = 0.0
+
+        throughput = processed / elapsed_time if elapsed_time > 0 else 0.0
+
+        logger.info(
+            f"Batch {batch_num} pipeline stats: io_time={total_io_time:.2f}s, "
+            f"gpu_time={total_gpu_time:.2f}s, elapsed={elapsed_time:.2f}s, "
+            f"efficiency={efficiency:.1%}, throughput={throughput:.1f} img/s"
+        )
+
+        return {
+            "processed": processed,
+            "failed": failed,
+            "io_time": total_io_time,
+            "gpu_time": total_gpu_time,
+            "elapsed_time": elapsed_time,
+            "efficiency": efficiency,
+        }
+
+    except Exception as e:
+        logger.exception(f"Error in train_batch: {e}")
+        return {"processed": processed, "failed": failed + len(asset_ids) - processed}
 
     finally:
         db_session.close()
