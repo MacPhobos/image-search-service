@@ -28,6 +28,41 @@ from image_search_service.vector.qdrant import get_qdrant_client
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
+@pytest.fixture(autouse=True)
+def clear_settings_cache():
+    """Clear settings cache before and after each test to prevent production settings leaking.
+
+    CRITICAL: This prevents tests from using cached production collection names,
+    which could cause deletion of live Qdrant data.
+    """
+    from image_search_service.core.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def use_test_settings(monkeypatch):
+    """Override settings with test-safe collection names.
+
+    CRITICAL: This ensures tests never use production collection names
+    like "image_assets" or "faces", preventing accidental data deletion.
+    """
+    from image_search_service.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    # Set environment variables for test collection names
+    monkeypatch.setenv("QDRANT_COLLECTION", "test_image_assets")
+    monkeypatch.setenv("QDRANT_FACE_COLLECTION", "test_faces")
+
+    # Clear cache again so new env vars are picked up
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 class MockEmbeddingService:
     """Mock embedding service that returns deterministic vectors without loading OpenCLIP."""
 

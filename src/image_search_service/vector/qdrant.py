@@ -1,5 +1,6 @@
 """Qdrant vector database client wrapper with lazy initialization."""
 
+import os
 from typing import Any, cast
 from uuid import UUID
 
@@ -547,27 +548,36 @@ def reset_collection(
         Total number of vectors deleted
     """
     settings = get_settings()
+    collection_name = settings.qdrant_collection
+
+    # CRITICAL SAFETY GUARD: Prevent deletion of production collections during tests
+    if os.getenv("PYTEST_CURRENT_TEST") and collection_name in ["image_assets", "faces"]:
+        raise RuntimeError(
+            f"Refusing to delete production collection '{collection_name}' during tests. "
+            "Ensure test settings are properly configured with test-safe collection names."
+        )
+
     if client is None:
         client = get_qdrant_client()
 
     try:
         # Get count before deletion
-        collection_info = client.get_collection(collection_name=settings.qdrant_collection)
+        collection_info = client.get_collection(collection_name=collection_name)
         vector_count = collection_info.points_count or 0
 
         # Delete all points by recreating the collection
         # This is more efficient than scrolling and deleting batches
-        client.delete_collection(collection_name=settings.qdrant_collection)
-        logger.warning(f"Deleted collection '{settings.qdrant_collection}'")
+        client.delete_collection(collection_name=collection_name)
+        logger.warning(f"Deleted collection '{collection_name}'")
 
         # Recreate empty collection with same parameters
         # Get vector size from the deleted collection config
         vector_size = collection_info.config.params.vectors.size  # type: ignore[union-attr]
         client.create_collection(
-            collection_name=settings.qdrant_collection,
+            collection_name=collection_name,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         )
-        logger.info(f"Recreated collection '{settings.qdrant_collection}' with dim={vector_size}")
+        logger.info(f"Recreated collection '{collection_name}' with dim={vector_size}")
 
         logger.warning(f"Reset collection: deleted {vector_count} vectors")
         return vector_count
