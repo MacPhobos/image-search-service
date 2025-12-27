@@ -263,7 +263,7 @@ def train_batch(
     batch_num: int,
     gpu_batch_size: int = 16,
     io_workers: int = 4,
-    pipeline_queue_size: int = 2,
+    pipeline_queue_size: int = 4,
 ) -> dict[str, int | float]:
     """Process a batch of images with pipelined I/O and batched GPU inference.
 

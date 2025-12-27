@@ -1,7 +1,7 @@
 """Tests for face assignment module."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -157,7 +157,7 @@ class TestFaceAssigner:
             role=PrototypeRole.EXEMPLAR.value,
         )
 
-        since_date = datetime.now(timezone.utc) - timedelta(days=1)
+        since_date = datetime.now(UTC) - timedelta(days=1)
 
         with patch(
             "image_search_service.vector.face_qdrant.get_face_qdrant_client"

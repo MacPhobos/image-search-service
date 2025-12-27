@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
@@ -22,7 +22,6 @@ from image_search_service.services.admin_service import (
     export_person_metadata,
     import_person_metadata,
 )
-
 
 # ============ Export Tests ============
 
