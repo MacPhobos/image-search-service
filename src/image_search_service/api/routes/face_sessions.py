@@ -162,6 +162,9 @@ async def resume_session(
     db: AsyncSession = Depends(get_db),
 ) -> FaceDetectionSessionResponse:
     """Resume a paused face detection session."""
+    from image_search_service.queue.face_jobs import detect_faces_for_session_job
+    from image_search_service.queue.worker import QUEUE_HIGH, get_queue
+
     session = await db.get(FaceDetectionSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
@@ -178,7 +181,18 @@ async def resume_session(
     await db.commit()
     await db.refresh(session)
 
-    logger.info(f"Resumed face detection session {session_id}")
+    # Re-enqueue the background job to continue processing
+    queue = get_queue(QUEUE_HIGH)
+    job = queue.enqueue(
+        detect_faces_for_session_job,
+        session_id=str(session.id),
+        job_timeout="24h",
+    )
+    session.job_id = job.id
+    await db.commit()
+    await db.refresh(session)
+
+    logger.info(f"Resumed face detection session {session_id} (job_id={job.id})")
 
     return _session_to_response(session)
 
@@ -237,6 +251,11 @@ async def stream_session_events(
                 "failed_images": session.failed_images,
                 "faces_detected": session.faces_detected,
                 "faces_assigned": session.faces_assigned,
+                "faces_assigned_to_persons": session.faces_assigned_to_persons,
+                "clusters_created": session.clusters_created,
+                "suggestions_created": session.suggestions_created,
+                "current_batch": session.current_batch,
+                "total_batches": session.total_batches,
                 "progress_percent": (
                     (session.processed_images / session.total_images * 100)
                     if session.total_images > 0

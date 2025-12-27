@@ -1,5 +1,6 @@
 """RQ background jobs for face detection, clustering, and assignment."""
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -136,8 +137,7 @@ def assign_faces_job(
         since_dt = datetime.fromisoformat(since)
 
     logger.info(
-        f"[{job_id}] Starting face assignment "
-        f"(max={max_faces}, threshold={similarity_threshold})"
+        f"[{job_id}] Starting face assignment (max={max_faces}, threshold={similarity_threshold})"
     )
 
     from image_search_service.faces.assigner import get_face_assigner
@@ -182,8 +182,7 @@ def compute_centroids_job() -> dict[str, Any]:
         result = assigner.compute_person_centroids()
 
         logger.info(
-            f"[{job_id}] Centroid computation complete: "
-            f"{result['centroids_computed']} centroids"
+            f"[{job_id}] Centroid computation complete: {result['centroids_computed']} centroids"
         )
 
         return result
@@ -224,12 +223,7 @@ def backfill_faces_job(
     try:
         # Get assets without any face detections
         subquery = select(FaceInstance.asset_id).distinct()
-        query = (
-            select(ImageAsset)
-            .where(~ImageAsset.id.in_(subquery))
-            .offset(offset)
-            .limit(limit)
-        )
+        query = select(ImageAsset).where(~ImageAsset.id.in_(subquery)).offset(offset).limit(limit)
         assets = db_session.execute(query).scalars().all()
 
         if not assets:
@@ -441,31 +435,69 @@ def detect_faces_for_session_job(
                 "error": "Session not found",
             }
 
-        session.status = FaceDetectionSessionStatus.PROCESSING.value
-        session.started_at = datetime.now()
-        db_session.commit()
+        # Check if this is first run or resume
+        is_first_run = session.asset_ids_json is None
 
-        # Get assets to process
-        logger.info(f"[{job_id}] Getting assets to process")
+        if is_first_run:
+            # First run: query assets and store IDs
+            logger.info(f"[{job_id}] First run: querying assets to process")
 
-        # Get asset IDs that already have faces
-        processed_subquery = select(FaceInstance.asset_id).distinct()
+            # Get asset IDs that already have faces
+            processed_subquery = select(FaceInstance.asset_id).distinct()
 
-        # Get assets without faces
-        query = select(ImageAsset).where(~ImageAsset.id.in_(processed_subquery))
+            # Get assets without faces
+            query = select(ImageAsset).where(~ImageAsset.id.in_(processed_subquery))
 
-        # If linked to training session, filter further
-        if session.training_session_id:
+            # If linked to training session, filter further
+            if session.training_session_id:
+                logger.info(
+                    f"[{job_id}] Filtering to training session {session.training_session_id}"
+                )
+                # Get assets from this training session via TrainingEvidence
+                training_assets = select(TrainingEvidence.asset_id).where(
+                    TrainingEvidence.session_id == session.training_session_id
+                )
+                query = query.where(ImageAsset.id.in_(training_assets))
+
+            assets = db_session.execute(query).scalars().all()
+
+            # Store asset IDs as JSON string
+            asset_ids = [a.id for a in assets]
+            session.asset_ids_json = json.dumps(asset_ids)
+            session.current_asset_index = 0
+            session.status = FaceDetectionSessionStatus.PROCESSING.value
+            session.started_at = datetime.now()
+            db_session.commit()
+
+            logger.info(f"[{job_id}] Stored {len(asset_ids)} asset IDs for processing")
+        else:
+            # Resume: load stored asset IDs and continue from current position
+            # asset_ids_json is guaranteed to be non-None here due to is_first_run check
+            assert session.asset_ids_json is not None
+            asset_ids = json.loads(session.asset_ids_json)
+            start_index = session.current_asset_index
+
             logger.info(
-                f"[{job_id}] Filtering to training session {session.training_session_id}"
+                f"[{job_id}] Resuming from index {start_index} of {len(asset_ids)} total assets"
             )
-            # Get assets from this training session via TrainingEvidence
-            training_assets = select(TrainingEvidence.asset_id).where(
-                TrainingEvidence.session_id == session.training_session_id
-            )
-            query = query.where(ImageAsset.id.in_(training_assets))
 
-        assets = db_session.execute(query).scalars().all()
+            # Load only the remaining assets
+            remaining_ids = asset_ids[start_index:]
+            if remaining_ids:
+                query = select(ImageAsset).where(ImageAsset.id.in_(remaining_ids))
+                assets = db_session.execute(query).scalars().all()
+
+                # Sort assets to match the order in asset_ids
+                id_to_asset = {a.id: a for a in assets}
+                assets = [id_to_asset[aid] for aid in remaining_ids if aid in id_to_asset]
+            else:
+                assets = []
+
+            # Update status to PROCESSING
+            session.status = FaceDetectionSessionStatus.PROCESSING.value
+            if session.started_at is None:
+                session.started_at = datetime.now()
+            db_session.commit()
 
         if not assets:
             logger.info(f"[{job_id}] No assets to process")
@@ -496,12 +528,59 @@ def detect_faces_for_session_job(
         total_failed = 0
         last_error = None
 
+        # Calculate total batches for progress tracking
+        import math
+
+        total_batches = math.ceil(len(assets) / batch_size) if len(assets) > 0 else 0
+        session.total_batches = total_batches
+        db_session.commit()
+
         for i in range(0, len(assets), batch_size):
+            # Check if session status changed to PAUSED or CANCELLED
+            db_session.refresh(session)
+
+            if session.status == FaceDetectionSessionStatus.PAUSED.value:
+                logger.info(
+                    f"[{job_id}] Session {session_id} paused at batch "
+                    f"{session.current_batch}/{total_batches}"
+                )
+                return {
+                    "session_id": session_id,
+                    "status": "paused",
+                    "total_images": session.total_images,
+                    "processed_images": session.processed_images,
+                    "failed_images": session.failed_images,
+                    "faces_detected": session.faces_detected,
+                    "faces_assigned": session.faces_assigned,
+                    "message": "Session paused by user",
+                }
+
+            if session.status == FaceDetectionSessionStatus.CANCELLED.value:
+                logger.info(
+                    f"[{job_id}] Session {session_id} cancelled at batch "
+                    f"{session.current_batch}/{total_batches}"
+                )
+                session.completed_at = datetime.now()
+                db_session.commit()
+                return {
+                    "session_id": session_id,
+                    "status": "cancelled",
+                    "total_images": session.total_images,
+                    "processed_images": session.processed_images,
+                    "failed_images": session.failed_images,
+                    "faces_detected": session.faces_detected,
+                    "faces_assigned": session.faces_assigned,
+                    "message": "Session cancelled by user",
+                }
+
             batch = assets[i : i + batch_size]
             asset_ids = [a.id for a in batch]
 
+            current_batch_num = (i // batch_size) + 1
+            session.current_batch = current_batch_num
+
             logger.info(
-                f"[{job_id}] Processing batch {i // batch_size + 1} "
+                f"[{job_id}] Processing batch {current_batch_num}/{total_batches} "
                 f"({len(asset_ids)} assets)"
             )
 
@@ -521,6 +600,9 @@ def detect_faces_for_session_job(
                 session.faces_detected = total_faces_detected
                 session.failed_images = total_failed
 
+                # Update current position for resume support
+                session.current_asset_index += len(batch)
+
                 if result.get("error_details"):
                     last_error = f"Batch errors: {result['error_details'][0]['error']}"
                     session.last_error = last_error
@@ -539,11 +621,13 @@ def detect_faces_for_session_job(
                 last_error = str(e)
                 session.failed_images = total_failed
                 session.last_error = last_error
+                # Still update position even on error to skip problematic batch
+                session.current_asset_index += len(batch)
                 db_session.commit()
 
         # Auto-assign faces to known persons (uses config-based thresholds)
         logger.info(f"[{job_id}] Auto-assigning faces to known persons")
-        faces_assigned = 0
+        faces_assigned_to_persons = 0
         suggestions_created = 0
 
         try:
@@ -556,12 +640,18 @@ def detect_faces_for_session_job(
                 max_faces=10000,  # Process all new faces
             )
 
-            faces_assigned = assignment_result.get("auto_assigned", 0)
+            faces_assigned_to_persons = assignment_result.get("auto_assigned", 0)
             suggestions_created = assignment_result.get("suggestions_created", 0)
-            session.faces_assigned = faces_assigned
+
+            # Update detailed tracking fields
+            session.faces_assigned_to_persons = faces_assigned_to_persons
+            session.suggestions_created = suggestions_created
+            # Update legacy field for backward compatibility
+            session.faces_assigned = faces_assigned_to_persons
 
             logger.info(
-                f"[{job_id}] Auto-assignment complete: {faces_assigned} faces auto-assigned, "
+                f"[{job_id}] Auto-assignment complete: "
+                f"{faces_assigned_to_persons} faces auto-assigned, "
                 f"{suggestions_created} suggestions created"
             )
 
@@ -587,17 +677,19 @@ def detect_faces_for_session_job(
                     max_faces=10000,  # Process up to 10k faces
                 )
 
+                clusters_found = cluster_result.get("clusters_found", 0)
+
                 logger.info(
                     f"[{job_id}] Clustering complete: "
-                    f"{cluster_result.get('clusters_found', 0)} clusters, "
+                    f"{clusters_found} clusters, "
                     f"{cluster_result.get('noise_count', 0)} noise"
                 )
 
-                # Update session with clustering stats (add to faces_assigned count)
-                clusters_found = cluster_result.get("clusters_found", 0)
-                if clusters_found > 0:
-                    session.faces_assigned = (session.faces_assigned or 0) + clusters_found
-                    db_session.commit()
+                # Update session with clustering stats
+                session.clusters_created = clusters_found
+                # Update legacy field for backward compatibility (sum of persons + clusters)
+                session.faces_assigned = (session.faces_assigned_to_persons or 0) + clusters_found
+                db_session.commit()
 
             except Exception as e:
                 logger.error(f"[{job_id}] Clustering error (non-fatal): {e}")
@@ -611,7 +703,8 @@ def detect_faces_for_session_job(
         logger.info(
             f"[{job_id}] Session {session_id} complete: "
             f"{session.processed_images} processed, {total_faces_detected} faces, "
-            f"{faces_assigned} assigned, {total_failed} failed"
+            f"{session.faces_assigned_to_persons} assigned to persons, "
+            f"{session.clusters_created} clusters, {total_failed} failed"
         )
 
         return {
@@ -663,8 +756,10 @@ def propagate_person_label_job(
     Args:
         source_face_id: UUID string of the face that was just labeled
         person_id: UUID string of the person the face was assigned to
-        min_confidence: Minimum cosine similarity (defaults to config: face_suggestion_threshold)
-        max_suggestions: Maximum suggestions to create (defaults to config: face_suggestion_max_results)
+        min_confidence: Minimum cosine similarity
+            (defaults to config: face_suggestion_threshold)
+        max_suggestions: Maximum suggestions to create
+            (defaults to config: face_suggestion_max_results)
 
     Returns:
         Dictionary with job results

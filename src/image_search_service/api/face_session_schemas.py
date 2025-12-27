@@ -60,6 +60,15 @@ class FaceDetectionSessionResponse(CamelCaseModel):
     completed_at: datetime | None
     job_id: str | None
 
+    # Detailed assignment breakdown
+    faces_assigned_to_persons: int = 0
+    clusters_created: int = 0
+    suggestions_created: int = 0
+
+    # Batch progress tracking
+    current_batch: int = 0
+    total_batches: int = 0
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def progress_percent(self) -> float:

@@ -195,18 +195,10 @@ class TrainingSession(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    paused_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    reset_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reset_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
@@ -279,9 +271,7 @@ class TrainingJob(Base):
     asset_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("image_assets.id", ondelete="CASCADE"), nullable=False
     )
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=JobStatus.PENDING.value
-    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=JobStatus.PENDING.value)
     rq_job_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -291,17 +281,11 @@ class TrainingJob(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    session: Mapped["TrainingSession"] = relationship(
-        "TrainingSession", back_populates="jobs"
-    )
+    session: Mapped["TrainingSession"] = relationship("TrainingSession", back_populates="jobs")
     asset: Mapped["ImageAsset"] = relationship("ImageAsset", back_populates="training_jobs")
 
     __table_args__ = (
@@ -339,12 +323,8 @@ class TrainingEvidence(Base):
     )
 
     # Relationships
-    asset: Mapped["ImageAsset"] = relationship(
-        "ImageAsset", back_populates="training_evidence"
-    )
-    session: Mapped["TrainingSession"] = relationship(
-        "TrainingSession", back_populates="evidence"
-    )
+    asset: Mapped["ImageAsset"] = relationship("ImageAsset", back_populates="training_evidence")
+    session: Mapped["TrainingSession"] = relationship("TrainingSession", back_populates="evidence")
 
     __table_args__ = (
         Index("idx_training_evidence_asset", "asset_id"),
@@ -354,8 +334,7 @@ class TrainingEvidence(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<TrainingEvidence(id={self.id}, "
-            f"asset_id={self.asset_id}, model={self.model_name})>"
+            f"<TrainingEvidence(id={self.id}, asset_id={self.asset_id}, model={self.model_name})>"
         )
 
 
@@ -371,9 +350,7 @@ class VectorDeletionLog(Base):
     deletion_target: Mapped[str] = mapped_column(
         Text, nullable=False
     )  # Path prefix, asset_id, session_id, etc.
-    vector_count: Mapped[int] = mapped_column(
-        Integer, nullable=False
-    )  # Number of vectors deleted
+    vector_count: Mapped[int] = mapped_column(Integer, nullable=False)  # Number of vectors deleted
     deletion_reason: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # Optional user-provided reason
@@ -401,9 +378,7 @@ class Person(Base):
 
     __tablename__ = "persons"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[PersonStatus] = mapped_column(
         SQLEnum(
@@ -450,9 +425,7 @@ class FaceInstance(Base):
 
     __tablename__ = "face_instances"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     asset_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("image_assets.id", ondelete="CASCADE"),
@@ -516,10 +489,7 @@ class FaceInstance(Base):
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<FaceInstance(id={self.id}, asset_id={self.asset_id}, "
-            f"person_id={self.person_id})>"
-        )
+        return f"<FaceInstance(id={self.id}, asset_id={self.asset_id}, person_id={self.person_id})>"
 
 
 class PersonPrototype(Base):
@@ -527,9 +497,7 @@ class PersonPrototype(Base):
 
     __tablename__ = "person_prototypes"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     person_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("persons.id", ondelete="CASCADE"),
@@ -540,9 +508,7 @@ class PersonPrototype(Base):
         ForeignKey("face_instances.id", ondelete="SET NULL"),
         nullable=True,
     )
-    qdrant_point_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
-    )
+    qdrant_point_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     role: Mapped[PrototypeRole] = mapped_column(
         SQLEnum(
             PrototypeRole,
@@ -563,10 +529,7 @@ class PersonPrototype(Base):
     __table_args__ = (Index("ix_person_prototypes_person_id", "person_id"),)
 
     def __repr__(self) -> str:
-        return (
-            f"<PersonPrototype(id={self.id}, person_id={self.person_id}, "
-            f"role={self.role})>"
-        )
+        return f"<PersonPrototype(id={self.id}, person_id={self.person_id}, role={self.role})>"
 
 
 class FaceAssignmentEvent(Base):
@@ -574,9 +537,7 @@ class FaceAssignmentEvent(Base):
 
     __tablename__ = "face_assignment_events"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -643,9 +604,7 @@ class FaceDetectionSession(Base):
 
     __tablename__ = "face_detection_sessions"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     training_session_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("training_sessions.id", ondelete="SET NULL"), nullable=True
     )
@@ -660,7 +619,20 @@ class FaceDetectionSession(Base):
     faces_detected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     faces_assigned: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
-    )  # Auto-assigned to known persons
+    )  # Auto-assigned to known persons (DEPRECATED: sum of faces_assigned_to_persons + clusters_created)
+
+    # Detailed assignment breakdown
+    faces_assigned_to_persons: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    clusters_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    suggestions_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Batch progress tracking
+    current_batch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_batches: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Resume support: store asset IDs and current position
+    asset_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_asset_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Detection configuration
     min_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
@@ -674,17 +646,11 @@ class FaceDetectionSession(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Background job reference
-    job_id: Mapped[str | None] = mapped_column(
-        String(100), nullable=True
-    )  # RQ job ID
+    job_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # RQ job ID
 
     __table_args__ = (
         Index("ix_face_detection_sessions_status", "status"),
@@ -714,9 +680,7 @@ class FaceSuggestion(Base):
         ForeignKey("persons.id", ondelete="CASCADE"),
         nullable=False,
     )
-    confidence: Mapped[float] = mapped_column(
-        Float, nullable=False
-    )  # Cosine similarity score
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)  # Cosine similarity score
     source_face_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("face_instances.id", ondelete="CASCADE"),
@@ -728,9 +692,7 @@ class FaceSuggestion(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    reviewed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Indexes for efficient querying
     __table_args__ = (
@@ -777,9 +739,7 @@ class SystemConfig(Base):
     allowed_values: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     # Metadata
-    category: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="general"
-    )
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
