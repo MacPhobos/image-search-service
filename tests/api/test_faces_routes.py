@@ -101,6 +101,88 @@ class TestClusterEndpoints:
         assert data["page"] == 1
 
     @pytest.mark.asyncio
+    async def test_list_clusters_partially_labeled(self, test_client, db_session, mock_image_asset, mock_person):
+        """Test listing clusters with mixed labeled/unlabeled faces (regression test for duplicate bug).
+
+        This tests the fix for the bug where grouping by both cluster_id AND person_id
+        caused duplicate cluster rows when a cluster had some faces labeled and some unlabeled.
+        """
+        from image_search_service.db.models import FaceInstance
+
+        cluster_id = "test_cluster_mixed"
+
+        # Create 3 faces in the same cluster: 2 labeled, 1 unlabeled
+        face1 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=100,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.95,
+            quality_score=0.85,
+            qdrant_point_id=uuid.uuid4(),
+            cluster_id=cluster_id,
+            person_id=mock_person.id,  # Labeled
+        )
+        face2 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=200,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.92,
+            quality_score=0.78,
+            qdrant_point_id=uuid.uuid4(),
+            cluster_id=cluster_id,
+            person_id=mock_person.id,  # Labeled
+        )
+        face3 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=300,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.88,
+            quality_score=0.72,
+            qdrant_point_id=uuid.uuid4(),
+            cluster_id=cluster_id,
+            person_id=None,  # Unlabeled
+        )
+        db_session.add(face1)
+        db_session.add(face2)
+        db_session.add(face3)
+        await db_session.commit()
+
+        # Test with include_labeled=True (should see cluster once with all 3 faces)
+        response = await test_client.get(
+            "/api/v1/faces/clusters",
+            params={"include_labeled": True}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1, "Should have exactly 1 cluster (no duplicates)"
+
+        cluster = data["items"][0]
+        assert cluster["clusterId"] == cluster_id
+        assert cluster["faceCount"] == 3, "Should aggregate all 3 faces in the cluster"
+        assert cluster["personId"] == str(mock_person.id), "Should use MAX person_id (labeled over unlabeled)"
+        assert cluster["personName"] == mock_person.name
+
+        # Test with include_labeled=False (should NOT see this cluster since it has labeled faces)
+        response = await test_client.get(
+            "/api/v1/faces/clusters",
+            params={"include_labeled": False}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0, "Should not include clusters with any labeled faces"
+
+    @pytest.mark.asyncio
     async def test_list_clusters_pagination(self, test_client, db_session):
         """Test cluster listing with pagination parameters."""
         response = await test_client.get(
@@ -627,7 +709,6 @@ class TestBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_remove_success(self, test_client, db_session, mock_person, mock_image_asset):
         """Test successful bulk remove operation."""
-        from unittest.mock import patch
 
         from image_search_service.db.models import FaceInstance
 
@@ -730,7 +811,6 @@ class TestBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_move_create_new_person(self, test_client, db_session, mock_person, mock_image_asset):
         """Test bulk move creating a new person."""
-        from unittest.mock import patch
 
         from image_search_service.db.models import FaceInstance
 
@@ -769,7 +849,6 @@ class TestBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_move_to_existing_person(self, test_client, db_session, mock_person, mock_image_asset):
         """Test bulk move to existing person."""
-        from unittest.mock import patch
 
         from image_search_service.db.models import FaceInstance, Person
 

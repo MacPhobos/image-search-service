@@ -89,17 +89,18 @@ async def list_clusters(
     cluster_query = (
         select(
             FaceInstance.cluster_id,
-            FaceInstance.person_id,
+            func.max(FaceInstance.person_id).label("person_id"),
             func.count(FaceInstance.id).label("face_count"),
             func.avg(FaceInstance.quality_score).label("avg_quality"),
             face_ids_expr,
         )
         .where(FaceInstance.cluster_id.isnot(None))
-        .group_by(FaceInstance.cluster_id, FaceInstance.person_id)
+        .group_by(FaceInstance.cluster_id)
     )
 
     if not include_labeled:
-        cluster_query = cluster_query.where(FaceInstance.person_id.is_(None))
+        # Use HAVING clause since person_id is now an aggregated column
+        cluster_query = cluster_query.having(func.max(FaceInstance.person_id).is_(None))
 
     # Count total clusters
     count_subquery = cluster_query.subquery()
