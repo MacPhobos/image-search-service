@@ -744,3 +744,56 @@ class FaceSuggestion(Base):
             f"<FaceSuggestion(id={self.id}, face_instance_id={self.face_instance_id}, "
             f"suggested_person_id={self.suggested_person_id}, confidence={self.confidence})>"
         )
+
+
+class ConfigDataType(str, Enum):
+    """Data types for configuration values."""
+
+    FLOAT = "float"
+    INT = "int"
+    STRING = "string"
+    BOOLEAN = "boolean"
+
+
+class SystemConfig(Base):
+    """System configuration table for database-backed settings.
+
+    This table provides a flexible key-value store for application configuration
+    with built-in type safety and validation constraints. It supports multiple
+    data types and can enforce min/max ranges or allowed value lists.
+    """
+
+    __tablename__ = "system_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    value: Mapped[str] = mapped_column(String(500), nullable=False)
+    data_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Validation constraints (stored as strings, parsed based on data_type)
+    min_value: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    max_value: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    allowed_values: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+
+    # Metadata
+    category: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="general"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_system_configs_key", "key"),
+        Index("ix_system_configs_category", "category"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SystemConfig(key={self.key}, value={self.value}, category={self.category})>"

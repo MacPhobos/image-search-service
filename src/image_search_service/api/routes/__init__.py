@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from image_search_service.api.routes.admin import router as admin_router
 from image_search_service.api.routes.assets import router as assets_router
 from image_search_service.api.routes.categories import router as categories_router
+from image_search_service.api.routes.config import router as config_router
 from image_search_service.api.routes.evidence import router as evidence_router
 from image_search_service.api.routes.face_sessions import router as face_sessions_router
 from image_search_service.api.routes.face_suggestions import (
@@ -35,6 +36,7 @@ api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(admin_router)
 api_v1_router.include_router(assets_router)
 api_v1_router.include_router(categories_router)
+api_v1_router.include_router(config_router)
 api_v1_router.include_router(images_router)
 api_v1_router.include_router(search_router)
 api_v1_router.include_router(training_router)

@@ -36,23 +36,40 @@ class FaceAssigner:
         since: datetime | None = None,
         max_faces: int = 1000,
     ) -> dict:
-        """Assign new/unlabeled faces to known persons using prototype matching.
+        """Assign new/unlabeled faces using two-tier threshold system.
 
         Process:
         1. Get faces without person_id (optionally filtered by created_at)
         2. For each face, search against all prototypes
-        3. If best match exceeds threshold, assign to that person
-        4. Update database and Qdrant
+        3. If best match >= auto_assign_threshold -> auto-assign to person
+        4. If best match >= suggestion_threshold -> create FaceSuggestion for review
+        5. Otherwise, leave face unassigned
 
         Args:
             since: Only process faces created after this datetime
             max_faces: Maximum faces to process in this batch
 
         Returns:
-            Summary dict with assignment statistics
+            Summary dict with assignment statistics including auto_assigned
+            and suggestions_created counts
         """
-        from image_search_service.db.models import FaceInstance, PersonPrototype
+        from image_search_service.db.models import (
+            FaceInstance,
+            FaceSuggestion,
+            PersonPrototype,
+        )
+        from image_search_service.services.config_service import SyncConfigService
         from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+        # Get thresholds from config service
+        config_service = SyncConfigService(self.db)
+        auto_assign_threshold = config_service.get_float("face_auto_assign_threshold")
+        suggestion_threshold = config_service.get_float("face_suggestion_threshold")
+
+        logger.info(
+            f"Using thresholds: auto_assign={auto_assign_threshold}, "
+            f"suggestion={suggestion_threshold}"
+        )
 
         qdrant = get_face_qdrant_client()
 
@@ -65,7 +82,8 @@ class FaceAssigner:
             logger.info("No prototypes available for assignment")
             return {
                 "processed": 0,
-                "assigned": 0,
+                "auto_assigned": 0,
+                "suggestions_created": 0,
                 "unassigned": 0,
                 "status": "no_prototypes",
             }
@@ -92,7 +110,8 @@ class FaceAssigner:
             logger.info("No unassigned faces to process")
             return {
                 "processed": 0,
-                "assigned": 0,
+                "auto_assigned": 0,
+                "suggestions_created": 0,
                 "unassigned": 0,
                 "status": "no_new_faces",
             }
@@ -100,6 +119,7 @@ class FaceAssigner:
         logger.info(f"Processing {len(faces)} unassigned faces")
 
         assigned_count = 0
+        suggestion_count = 0
         unassigned_count = 0
         assignments = {}  # person_id -> list of (face_id, qdrant_point_id)
 
@@ -112,11 +132,11 @@ class FaceAssigner:
                 unassigned_count += 1
                 continue
 
-            # Search against prototypes
+            # Search against prototypes using the lower threshold to catch suggestions
             matches = qdrant.search_against_prototypes(
                 query_embedding=embedding,
                 limit=self.max_matches_per_face,
-                score_threshold=self.similarity_threshold,
+                score_threshold=suggestion_threshold,
             )
 
             if not matches:
@@ -145,18 +165,62 @@ class FaceAssigner:
             else:
                 person_id = uuid.UUID(person_id_str)
 
-            # Record assignment
-            if person_id not in assignments:
-                assignments[person_id] = []
-            assignments[person_id].append((face.id, face.qdrant_point_id))
-            assigned_count += 1
+            # Apply two-tier threshold logic
+            if best_match.score >= auto_assign_threshold:
+                # AUTO-ASSIGN: High confidence match
+                if person_id not in assignments:
+                    assignments[person_id] = []
+                assignments[person_id].append((face.id, face.qdrant_point_id))
+                assigned_count += 1
 
-            logger.debug(
-                f"Face {face.id} matched to person {person_id} "
-                f"(score: {best_match.score:.3f})"
-            )
+                logger.debug(
+                    f"Auto-assigned face {face.id} to person {person_id} "
+                    f"(score: {best_match.score:.3f})"
+                )
 
-        # Batch update database and Qdrant
+            elif best_match.score >= suggestion_threshold:
+                # SUGGESTION: Medium confidence match - create suggestion for review
+                # Check if suggestion already exists
+                existing = self.db.execute(
+                    select(FaceSuggestion).where(
+                        FaceSuggestion.face_instance_id == face.id,
+                        FaceSuggestion.suggested_person_id == person_id,
+                        FaceSuggestion.status == "pending",
+                    )
+                ).scalar_one_or_none()
+
+                if not existing:
+                    # Get source face from prototype if available
+                    source_face_id = face.id  # Default to self
+                    prototype_point_id_str = best_match.id
+                    if prototype_point_id_str:
+                        prototype = self.db.execute(
+                            select(PersonPrototype).where(
+                                PersonPrototype.qdrant_point_id
+                                == uuid.UUID(prototype_point_id_str)
+                            )
+                        ).scalar_one_or_none()
+                        if prototype and prototype.face_instance_id:
+                            source_face_id = prototype.face_instance_id
+
+                    suggestion = FaceSuggestion(
+                        face_instance_id=face.id,
+                        suggested_person_id=person_id,
+                        confidence=best_match.score,
+                        source_face_id=source_face_id,
+                        status="pending",
+                    )
+                    self.db.add(suggestion)
+                    suggestion_count += 1
+
+                    logger.debug(
+                        f"Created suggestion for face {face.id} -> person {person_id} "
+                        f"(score: {best_match.score:.3f})"
+                    )
+            else:
+                unassigned_count += 1
+
+        # Batch update database and Qdrant for auto-assignments
         for person_id, face_data in assignments.items():
             face_ids = [f[0] for f in face_data]
             qdrant_point_ids = [f[1] for f in face_data]
@@ -177,13 +241,15 @@ class FaceAssigner:
         persons_matched = len(assignments)
 
         logger.info(
-            f"Assignment complete: {assigned_count} assigned to {persons_matched} persons, "
+            f"Assignment complete: {assigned_count} auto-assigned to "
+            f"{persons_matched} persons, {suggestion_count} suggestions created, "
             f"{unassigned_count} unassigned"
         )
 
         return {
             "processed": len(faces),
-            "assigned": assigned_count,
+            "auto_assigned": assigned_count,
+            "suggestions_created": suggestion_count,
             "unassigned": unassigned_count,
             "persons_matched": persons_matched,
             "status": "completed",

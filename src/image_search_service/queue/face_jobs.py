@@ -541,15 +541,14 @@ def detect_faces_for_session_job(
                 session.last_error = last_error
                 db_session.commit()
 
-        # Auto-assign faces to known persons
+        # Auto-assign faces to known persons (uses config-based thresholds)
         logger.info(f"[{job_id}] Auto-assigning faces to known persons")
         faces_assigned = 0
+        suggestions_created = 0
 
         try:
-            assigner = get_face_assigner(
-                db_session=db_session,
-                similarity_threshold=0.6,  # Use default threshold
-            )
+            # FaceAssigner now uses config service internally for thresholds
+            assigner = get_face_assigner(db_session=db_session)
 
             # Assign faces created during this session
             assignment_result = assigner.assign_new_faces(
@@ -557,11 +556,13 @@ def detect_faces_for_session_job(
                 max_faces=10000,  # Process all new faces
             )
 
-            faces_assigned = assignment_result.get("assigned", 0)
+            faces_assigned = assignment_result.get("auto_assigned", 0)
+            suggestions_created = assignment_result.get("suggestions_created", 0)
             session.faces_assigned = faces_assigned
 
             logger.info(
-                f"[{job_id}] Auto-assignment complete: {faces_assigned} faces assigned"
+                f"[{job_id}] Auto-assignment complete: {faces_assigned} faces auto-assigned, "
+                f"{suggestions_created} suggestions created"
             )
 
         except Exception as e:
@@ -651,8 +652,8 @@ def detect_faces_for_session_job(
 def propagate_person_label_job(
     source_face_id: str,
     person_id: str,
-    min_confidence: float = 0.7,
-    max_suggestions: int = 50,
+    min_confidence: float | None = None,
+    max_suggestions: int | None = None,
 ) -> dict[str, Any]:
     """Find similar faces and create suggestions when a face is labeled to a person.
 
@@ -662,14 +663,15 @@ def propagate_person_label_job(
     Args:
         source_face_id: UUID string of the face that was just labeled
         person_id: UUID string of the person the face was assigned to
-        min_confidence: Minimum cosine similarity to create suggestion (default 0.7)
-        max_suggestions: Maximum number of suggestions to create (default 50)
+        min_confidence: Minimum cosine similarity (defaults to config: face_suggestion_threshold)
+        max_suggestions: Maximum suggestions to create (defaults to config: face_suggestion_max_results)
 
     Returns:
         Dictionary with job results
     """
     import uuid as uuid_lib
 
+    from image_search_service.services.config_service import SyncConfigService
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     job = get_current_job()
@@ -682,6 +684,17 @@ def propagate_person_label_job(
     logger.info(f"[{job_id}] Starting propagation for face {source_face_id} → person {person_id}")
 
     db_session = get_sync_session()
+
+    # Get config values if not provided
+    config_service = SyncConfigService(db_session)
+    if min_confidence is None:
+        min_confidence = config_service.get_float("face_suggestion_threshold")
+    if max_suggestions is None:
+        max_suggestions = config_service.get_int("face_suggestion_max_results")
+
+    logger.info(
+        f"[{job_id}] Using min_confidence={min_confidence}, max_suggestions={max_suggestions}"
+    )
 
     try:
         # 1. Get the source face instance
@@ -798,7 +811,7 @@ def propagate_person_label_job(
 
 
 def expire_old_suggestions_job(
-    days_threshold: int = 30,
+    days_threshold: int | None = None,
 ) -> dict[str, Any]:
     """Expire pending suggestions older than the threshold.
 
@@ -807,16 +820,24 @@ def expire_old_suggestions_job(
 
     Args:
         days_threshold: Number of days after which to expire suggestions
+                       (defaults to config: face_suggestion_expiry_days)
 
     Returns:
         Dictionary with job results
     """
+    from image_search_service.services.config_service import SyncConfigService
+
     job = get_current_job()
     job_id = job.id if job else "no-job"
 
-    logger.info(f"[{job_id}] Expiring suggestions older than {days_threshold} days")
-
     db_session = get_sync_session()
+
+    # Get config value if not provided
+    if days_threshold is None:
+        config_service = SyncConfigService(db_session)
+        days_threshold = config_service.get_int("face_suggestion_expiry_days")
+
+    logger.info(f"[{job_id}] Expiring suggestions older than {days_threshold} days")
 
     try:
         cutoff_date = datetime.now(UTC) - timedelta(days=days_threshold)
