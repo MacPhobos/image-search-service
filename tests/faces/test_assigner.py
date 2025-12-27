@@ -1,7 +1,7 @@
 """Tests for face assignment module."""
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,7 +15,10 @@ class TestFaceAssigner:
         """Test assignment when no prototypes exist."""
         from image_search_service.faces.assigner import FaceAssigner
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client"):
+        # Patch at the module where it's imported (inside the method)
+        with patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ), patch("image_search_service.services.config_service.SyncConfigService"):
             mock_session = MagicMock()
             mock_session.execute = MagicMock(
                 return_value=MagicMock(scalars=lambda: MagicMock(all=lambda: []))
@@ -25,7 +28,7 @@ class TestFaceAssigner:
             result = assigner.assign_new_faces()
 
         assert result["status"] == "no_prototypes"
-        assert result["assigned"] == 0
+        assert result["auto_assigned"] == 0
 
     @pytest.mark.asyncio
     async def test_assign_no_new_faces(self, db_session, mock_person):
@@ -42,7 +45,18 @@ class TestFaceAssigner:
         db_session.add(prototype)
         await db_session.commit()
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client"):
+        with patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ), patch(
+            "image_search_service.services.config_service.SyncConfigService"
+        ) as mock_config_cls:
+            mock_config = MagicMock()
+            mock_config.get_float.side_effect = lambda k: {
+                "face_auto_assign_threshold": 0.85,
+                "face_suggestion_threshold": 0.70,
+            }.get(k, 0.7)
+            mock_config_cls.return_value = mock_config
+
             mock_session = MagicMock()
 
             # Mock prototypes query to return one prototype
@@ -62,7 +76,7 @@ class TestFaceAssigner:
             result = assigner.assign_new_faces()
 
         assert result["status"] == "no_new_faces"
-        assert result["assigned"] == 0
+        assert result["auto_assigned"] == 0
 
     @pytest.mark.asyncio
     async def test_assign_face_to_person(self, db_session, mock_person, mock_face_instance):
@@ -77,12 +91,24 @@ class TestFaceAssigner:
             role=PrototypeRole.EXEMPLAR.value,
         )
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client") as mock_get:
+        with patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ) as mock_get, patch(
+            "image_search_service.services.config_service.SyncConfigService"
+        ) as mock_config_cls:
+            # Mock config service
+            mock_config = MagicMock()
+            mock_config.get_float.side_effect = lambda k: {
+                "face_auto_assign_threshold": 0.85,
+                "face_suggestion_threshold": 0.70,
+            }.get(k, 0.7)
+            mock_config_cls.return_value = mock_config
+
             # Mock Qdrant client
             mock_qdrant = MagicMock()
             mock_match = MagicMock()
             mock_match.id = str(prototype.qdrant_point_id)
-            mock_match.score = 0.85
+            mock_match.score = 0.90  # Above auto-assign threshold
             mock_match.payload = {"person_id": str(mock_person.id)}
             mock_qdrant.search_against_prototypes.return_value = [mock_match]
             mock_qdrant.update_person_ids = MagicMock()
@@ -98,9 +124,13 @@ class TestFaceAssigner:
             mock_faces_result = MagicMock()
             mock_faces_result.scalars.return_value.all.return_value = [mock_face_instance]
 
+            # Mock update result
+            mock_update_result = MagicMock()
+
             mock_session.execute.side_effect = [
                 mock_prototypes_result,
                 mock_faces_result,
+                mock_update_result,  # For the batch update
             ]
             mock_session.commit = MagicMock()
 
@@ -112,7 +142,7 @@ class TestFaceAssigner:
                 result = assigner.assign_new_faces()
 
         assert result["status"] == "completed"
-        assert result["assigned"] == 1
+        assert result["auto_assigned"] == 1
 
     @pytest.mark.asyncio
     async def test_assign_filters_by_since(self, db_session, mock_person, mock_face_instance):
@@ -127,9 +157,20 @@ class TestFaceAssigner:
             role=PrototypeRole.EXEMPLAR.value,
         )
 
-        since_date = datetime.utcnow() - timedelta(days=1)
+        since_date = datetime.now(timezone.utc) - timedelta(days=1)
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client"):
+        with patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ), patch(
+            "image_search_service.services.config_service.SyncConfigService"
+        ) as mock_config_cls:
+            mock_config = MagicMock()
+            mock_config.get_float.side_effect = lambda k: {
+                "face_auto_assign_threshold": 0.85,
+                "face_suggestion_threshold": 0.70,
+            }.get(k, 0.7)
+            mock_config_cls.return_value = mock_config
+
             mock_session = MagicMock()
 
             # Mock prototypes query
@@ -154,7 +195,9 @@ class TestFaceAssigner:
         """Test getting embedding for non-existent face."""
         from image_search_service.faces.assigner import FaceAssigner
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client") as mock_get:
+        with patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ) as mock_get:
             mock_qdrant = MagicMock()
             mock_qdrant.client.retrieve.return_value = []
             mock_get.return_value = mock_qdrant
@@ -172,7 +215,9 @@ class TestFaceAssigner:
 
         mock_embedding = [0.1] * 512
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client") as mock_get:
+        with patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ) as mock_get:
             mock_qdrant = MagicMock()
             mock_point = MagicMock()
             mock_point.vector = mock_embedding
@@ -191,7 +236,7 @@ class TestFaceAssigner:
         """Test centroid computation when person has no faces."""
         from image_search_service.faces.assigner import FaceAssigner
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client"):
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client"):
             mock_session = MagicMock()
 
             # Mock persons query
@@ -233,7 +278,9 @@ class TestFaceAssigner:
             [0.2] * 512,
         ]
 
-        with patch("image_search_service.faces.assigner.get_face_qdrant_client") as mock_get:
+        with patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ) as mock_get:
             mock_qdrant = MagicMock()
             mock_qdrant.upsert_face = MagicMock()
             mock_get.return_value = mock_qdrant
@@ -277,9 +324,7 @@ class TestFaceAssigner:
 
         mock_session = MagicMock()
         assigner = FaceAssigner(
-            mock_session,
-            similarity_threshold=0.75,
-            max_matches_per_face=5
+            mock_session, similarity_threshold=0.75, max_matches_per_face=5
         )
 
         assert assigner.similarity_threshold == 0.75
