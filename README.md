@@ -100,6 +100,32 @@ make verify-qdrant
 | `EMBEDDING_DIM` | Embedding vector dimension | `512` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 
+### GPU/Device Configuration
+
+The service automatically detects and uses the best available compute device:
+
+| Variable | Values | Description |
+|----------|--------|-------------|
+| `DEVICE` | `auto`, `cuda`, `cuda:N`, `mps`, `cpu` | Select compute device (default: `auto`) |
+| `FORCE_CPU` | `true`, `1`, `yes` | Force CPU mode for debugging |
+
+**Auto-detection priority:** CUDA (NVIDIA) → MPS (Apple Silicon) → CPU
+
+**Examples:**
+```bash
+# NVIDIA GPU (Linux/Windows)
+DEVICE=cuda make dev
+
+# Apple Silicon (macOS M1/M2/M3/M4)
+DEVICE=mps make dev
+
+# Force CPU for testing
+FORCE_CPU=true make dev
+
+# Specific CUDA device (multi-GPU)
+DEVICE=cuda:1 make dev
+```
+
 ## Project Structure
 
 ```
