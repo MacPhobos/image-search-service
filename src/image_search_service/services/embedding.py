@@ -7,7 +7,7 @@ from typing import Any
 from PIL import Image
 
 from image_search_service.core.config import get_settings
-from image_search_service.core.device import get_device, get_device_info
+from image_search_service.core.device import get_device
 from image_search_service.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,11 +33,8 @@ def _load_model() -> tuple[Any, Any, Any]:
 
     settings = get_settings()
     device = get_device()
-    device_info = get_device_info()
 
-    logger.info(
-        f"Loading OpenCLIP model {settings.clip_model_name} on {device} ({device_info['type']})"
-    )
+    logger.info(f"Loading OpenCLIP model {settings.clip_model_name} on {device}")
 
     model, _, preprocess = open_clip.create_model_and_transforms(
         settings.clip_model_name, pretrained=settings.clip_pretrained
