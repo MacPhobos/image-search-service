@@ -5,20 +5,19 @@ from typing import Any, Optional
 
 import numpy as np
 
+from image_search_service.core.device import get_onnx_providers
+
 logger = logging.getLogger(__name__)
 
 # Lazy loading of insightface
 _face_analysis: Any | None = None
 
 
-def _has_cuda() -> bool:
-    """Check if CUDA is available."""
-    try:
-        import onnxruntime as ort
-
-        return "CUDAExecutionProvider" in ort.get_available_providers()
-    except ImportError:
-        return False
+def _has_gpu_provider() -> bool:
+    """Check if GPU-accelerated ONNX provider is available."""
+    providers = get_onnx_providers()
+    gpu_providers = {"CUDAExecutionProvider", "CoreMLExecutionProvider"}
+    return any(p in gpu_providers for p in providers)
 
 
 def _ensure_model_loaded() -> Any:
@@ -28,14 +27,15 @@ def _ensure_model_loaded() -> Any:
         try:
             from insightface.app import FaceAnalysis
 
+            providers = get_onnx_providers()
             _face_analysis = FaceAnalysis(
                 name="buffalo_l",  # Good balance of speed/accuracy
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                providers=providers,
             )
-            ctx_id = 0 if _has_cuda() else -1
+            ctx_id = 0 if _has_gpu_provider() else -1
             _face_analysis.prepare(ctx_id=ctx_id, det_size=(640, 640))
-            device = "CUDA" if _has_cuda() else "CPU"
-            logger.info(f"Loaded InsightFace model (buffalo_l) on {device}")
+            provider_name = providers[0] if providers else "CPU"
+            logger.info(f"Loaded InsightFace model (buffalo_l) with {provider_name}")
         except ImportError as e:
             logger.error("InsightFace not installed. Run: pip install insightface onnxruntime-gpu")
             raise ImportError(

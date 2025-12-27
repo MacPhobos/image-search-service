@@ -7,6 +7,7 @@ from typing import Any
 from PIL import Image
 
 from image_search_service.core.config import get_settings
+from image_search_service.core.device import get_device, get_device_info
 from image_search_service.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -29,12 +30,14 @@ def _load_model() -> tuple[Any, Any, Any]:
         return _model, _preprocess, _tokenizer
 
     import open_clip
-    import torch
 
     settings = get_settings()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_device()
+    device_info = get_device_info()
 
-    logger.info(f"Loading OpenCLIP model {settings.clip_model_name} on {device}")
+    logger.info(
+        f"Loading OpenCLIP model {settings.clip_model_name} on {device} ({device_info['type']})"
+    )
 
     model, _, preprocess = open_clip.create_model_and_transforms(
         settings.clip_model_name, pretrained=settings.clip_pretrained
@@ -63,9 +66,7 @@ class EmbeddingService:
     def device(self) -> str:
         """Get device for model inference."""
         if self._device is None:
-            import torch
-
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._device = get_device()
         return self._device
 
     @property

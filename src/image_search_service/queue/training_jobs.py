@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from image_search_service.core.config import get_settings
+from image_search_service.core.device import get_device_info
 from image_search_service.core.logging import get_logger
 from image_search_service.db.models import JobStatus, TrainingJob
 from image_search_service.db.sync_operations import (
@@ -473,13 +474,21 @@ def _build_evidence_metadata(
     }
 
     try:
-        import torch
-
-        environment_meta["cuda_available"] = torch.cuda.is_available()
-        if torch.cuda.is_available():
-            environment_meta["gpu_name"] = torch.cuda.get_device_name(0)
-    except ImportError:
-        environment_meta["cuda_available"] = False
+        device_info = get_device_info()
+        environment_meta.update({
+            "device": device_info["selected_device"],
+            "cuda_available": device_info["cuda_available"],
+            "mps_available": device_info.get("mps_available", False),
+            "platform": device_info["platform"],
+            "machine": device_info["machine"],
+            "pytorch_version": device_info["pytorch_version"],
+        })
+        if device_info["cuda_available"]:
+            environment_meta["gpu_name"] = device_info.get("cuda_device_name")
+            environment_meta["cuda_version"] = device_info.get("cuda_version")
+    except Exception as e:
+        logger.warning(f"Failed to capture device info: {e}")
+        environment_meta["device"] = "unknown"
 
     # Combine all metadata
     metadata: dict[str, object] = {
