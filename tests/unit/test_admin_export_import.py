@@ -18,6 +18,7 @@ from image_search_service.api.admin_schemas import (
 )
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 from image_search_service.services.admin_service import (
+    _batch_check_missing_embeddings,
     _match_face_by_bbox,
     export_person_metadata,
     import_person_metadata,
@@ -1049,3 +1050,134 @@ async def test_import_person_metadata_error_handling_continues_processing(
     # Bob should have succeeded
     bob_result = next(r for r in result.person_results if r.name == "Bob")
     assert bob_result.faces_matched == 1
+
+
+# ============ Batch Embedding Check Tests ============
+
+
+def test_batch_check_missing_embeddings_empty_list() -> None:
+    """Test batch check with empty list returns empty set."""
+    mock_face_qdrant = MagicMock()
+
+    result = _batch_check_missing_embeddings(
+        face_qdrant=mock_face_qdrant,
+        face_instances=[],
+        batch_size=500,
+    )
+
+    assert result == set()
+    mock_face_qdrant.client.retrieve.assert_not_called()
+
+
+def test_batch_check_missing_embeddings_all_exist() -> None:
+    """Test batch check when all embeddings exist in Qdrant."""
+    # Create mock face instances
+    face1_id = uuid.uuid4()
+    face2_id = uuid.uuid4()
+    face3_id = uuid.uuid4()
+
+    face1 = MagicMock()
+    face1.qdrant_point_id = face1_id
+    face2 = MagicMock()
+    face2.qdrant_point_id = face2_id
+    face3 = MagicMock()
+    face3.qdrant_point_id = face3_id
+
+    face_instances = [face1, face2, face3]
+
+    # Mock Qdrant client - all points exist
+    mock_point1 = MagicMock()
+    mock_point1.id = str(face1_id)
+    mock_point2 = MagicMock()
+    mock_point2.id = str(face2_id)
+    mock_point3 = MagicMock()
+    mock_point3.id = str(face3_id)
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.client.retrieve.return_value = [mock_point1, mock_point2, mock_point3]
+
+    result = _batch_check_missing_embeddings(
+        face_qdrant=mock_face_qdrant,
+        face_instances=face_instances,
+        batch_size=500,
+    )
+
+    assert result == set()  # No missing embeddings
+    mock_face_qdrant.client.retrieve.assert_called_once()
+
+
+def test_batch_check_missing_embeddings_some_missing() -> None:
+    """Test batch check when some embeddings are missing."""
+    # Create mock face instances
+    face1_id = uuid.uuid4()
+    face2_id = uuid.uuid4()
+    face3_id = uuid.uuid4()
+
+    face1 = MagicMock()
+    face1.qdrant_point_id = face1_id
+    face2 = MagicMock()
+    face2.qdrant_point_id = face2_id
+    face3 = MagicMock()
+    face3.qdrant_point_id = face3_id
+
+    face_instances = [face1, face2, face3]
+
+    # Mock Qdrant client - only face1 and face3 exist (face2 missing)
+    mock_point1 = MagicMock()
+    mock_point1.id = str(face1_id)
+    mock_point3 = MagicMock()
+    mock_point3.id = str(face3_id)
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.client.retrieve.return_value = [mock_point1, mock_point3]
+
+    result = _batch_check_missing_embeddings(
+        face_qdrant=mock_face_qdrant,
+        face_instances=face_instances,
+        batch_size=500,
+    )
+
+    assert result == {face2_id}  # Only face2 missing
+    mock_face_qdrant.client.retrieve.assert_called_once()
+
+
+def test_batch_check_missing_embeddings_multiple_batches() -> None:
+    """Test batch check processes multiple batches correctly."""
+    # Create 6 mock face instances (will be 2 batches of 3 with batch_size=3)
+    face_ids = [uuid.uuid4() for _ in range(6)]
+    face_instances = [MagicMock(qdrant_point_id=fid) for fid in face_ids]
+
+    # Mock Qdrant client:
+    # Batch 1: faces 0,1,2 - only 0,2 exist (1 missing)
+    # Batch 2: faces 3,4,5 - all exist
+    mock_face_qdrant = MagicMock()
+
+    def mock_retrieve(collection_name, ids, with_payload, with_vectors):
+        # Determine which batch based on first ID
+        if str(face_ids[0]) in ids:
+            # First batch - return 0 and 2
+            point0 = MagicMock()
+            point0.id = str(face_ids[0])
+            point2 = MagicMock()
+            point2.id = str(face_ids[2])
+            return [point0, point2]
+        else:
+            # Second batch - return all
+            point3 = MagicMock()
+            point3.id = str(face_ids[3])
+            point4 = MagicMock()
+            point4.id = str(face_ids[4])
+            point5 = MagicMock()
+            point5.id = str(face_ids[5])
+            return [point3, point4, point5]
+
+    mock_face_qdrant.client.retrieve.side_effect = mock_retrieve
+
+    result = _batch_check_missing_embeddings(
+        face_qdrant=mock_face_qdrant,
+        face_instances=face_instances,
+        batch_size=3,
+    )
+
+    assert result == {face_ids[1]}  # Only face 1 missing
+    assert mock_face_qdrant.client.retrieve.call_count == 2  # Two batches
