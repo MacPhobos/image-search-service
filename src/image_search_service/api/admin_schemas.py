@@ -116,12 +116,25 @@ class PersonMetadataExport(CamelCaseModel):
     persons: list[PersonExport]
 
 
+class ExportOptions(CamelCaseModel):
+    """Options for exporting person metadata."""
+
+    verify_paths: bool = Field(
+        default=False,
+        description="If true, only export faces where image file exists on filesystem",
+    )
+
+
 class ImportOptions(CamelCaseModel):
     """Options for importing person metadata."""
 
     dry_run: bool = Field(default=False)
     tolerance_pixels: int = Field(default=10, ge=1, le=50)
     skip_missing_images: bool = Field(default=True)
+    auto_ingest_images: bool = Field(
+        default=True,
+        description="Automatically ingest images that exist on filesystem but not in database",
+    )
 
 
 class ImportRequest(CamelCaseModel):

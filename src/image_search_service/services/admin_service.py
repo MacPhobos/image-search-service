@@ -3,6 +3,7 @@
 import os
 from datetime import UTC, datetime
 from math import sqrt
+from pathlib import Path
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select, text
@@ -12,6 +13,7 @@ from image_search_service.api.admin_schemas import (
     BoundingBoxExport,
     DeleteAllDataResponse,
     ExportMetadata,
+    ExportOptions,
     FaceMappingExport,
     FaceMappingResult,
     ImportOptions,
@@ -22,6 +24,8 @@ from image_search_service.api.admin_schemas import (
 )
 from image_search_service.core.logging import get_logger
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
+from image_search_service.faces.detector import detect_faces_from_path
+from image_search_service.services.embedding import get_embedding_service
 from image_search_service.vector import qdrant
 from image_search_service.vector.face_qdrant import FaceQdrantClient, get_face_qdrant_client
 
@@ -204,26 +208,38 @@ async def _truncate_application_tables(db: AsyncSession) -> dict[str, int]:
 async def export_person_metadata(
     db: AsyncSession,
     max_faces_per_person: int = 100,
+    options: ExportOptions | None = None,
 ) -> PersonMetadataExport:
     """Export all active persons with their face-to-image mappings.
 
     For each person, selects up to max_faces_per_person faces,
     ordered by quality_score (descending), then detection_confidence.
 
+    All exported paths are normalized (absolute with symlinks resolved) to ensure
+    consistency when re-importing.
+
     Returns JSON-serializable export structure including:
     - Person names and status
-    - Face mappings with image paths and bounding boxes
+    - Face mappings with normalized image paths and bounding boxes
 
     Args:
         db: Database session
         max_faces_per_person: Maximum number of faces to export per person (default 100)
+        options: Export options (verify_paths, etc.)
 
     Returns:
         PersonMetadataExport with all active persons and their face mappings
     """
     from sqlalchemy import select
 
-    logger.info("Starting person metadata export (max_faces_per_person=%d)", max_faces_per_person)
+    if options is None:
+        options = ExportOptions()
+
+    logger.info(
+        "Starting person metadata export (max_faces_per_person=%d, verify_paths=%s)",
+        max_faces_per_person,
+        options.verify_paths,
+    )
 
     # Step 1: Get all active persons ordered by name
     stmt = select(Person).where(Person.status == PersonStatus.ACTIVE).order_by(Person.name)
@@ -254,9 +270,25 @@ async def export_person_metadata(
 
         # Build face mappings for this person
         face_mappings: list[FaceMappingExport] = []
+        paths_skipped = 0
+
         for face_instance, image_path in face_rows:
+            # Normalize path for consistency with import
+            normalized_path = _normalize_path(image_path)
+
+            # Optionally verify that file exists on filesystem
+            if options.verify_paths:
+                if not os.path.exists(normalized_path):
+                    logger.warning(
+                        "Skipping face mapping for missing file: %s (person=%s)",
+                        normalized_path,
+                        person.name,
+                    )
+                    paths_skipped += 1
+                    continue
+
             face_mapping = FaceMappingExport(
-                image_path=image_path,
+                image_path=normalized_path,  # Use normalized path
                 bounding_box=BoundingBoxExport(
                     x=face_instance.bbox_x,
                     y=face_instance.bbox_y,
@@ -267,6 +299,13 @@ async def export_person_metadata(
                 quality_score=face_instance.quality_score,
             )
             face_mappings.append(face_mapping)
+
+        if paths_skipped > 0:
+            logger.info(
+                "Skipped %d face mappings with missing files for person %s",
+                paths_skipped,
+                person.name,
+            )
 
         # Only include persons with at least one face mapping
         if face_mappings:
@@ -295,6 +334,171 @@ async def export_person_metadata(
         ),
         persons=person_exports,
     )
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize file path by resolving symlinks and converting to absolute path.
+
+    Args:
+        path: File path to normalize
+
+    Returns:
+        Normalized absolute path with symlinks resolved
+    """
+    return str(Path(path).resolve())
+
+
+async def _ingest_image_sync(
+    db: AsyncSession,
+    image_path: str,
+    face_qdrant: FaceQdrantClient,
+    min_confidence: float = 0.5,
+    min_face_size: int = 20,
+) -> ImageAsset | None:
+    """Synchronously ingest a single image: create asset, embeddings, and detect faces.
+
+    This function performs the complete ingestion workflow:
+    1. Create ImageAsset record in database
+    2. Generate and store image embedding in Qdrant
+    3. Detect faces and store face instances in database and Qdrant
+
+    Args:
+        db: Async database session
+        image_path: Absolute path to image file
+        face_qdrant: Face Qdrant client for storing face embeddings
+        min_confidence: Minimum face detection confidence (default: 0.5)
+        min_face_size: Minimum face size in pixels (default: 20)
+
+    Returns:
+        Created ImageAsset or None if ingestion failed
+    """
+    try:
+        normalized_path = _normalize_path(image_path)
+        path_obj = Path(normalized_path)
+
+        # Verify file exists
+        if not path_obj.exists() or not path_obj.is_file():
+            logger.warning(f"Image file not found or not a file: {normalized_path}")
+            return None
+
+        # Step 1: Create ImageAsset record
+        file_stat = path_obj.stat()
+        asset = ImageAsset(
+            path=normalized_path,
+            file_size=file_stat.st_size,
+            file_modified_at=datetime.fromtimestamp(file_stat.st_mtime, tz=UTC),
+        )
+        db.add(asset)
+        await db.flush()  # Get asset.id without committing
+
+        logger.info(f"Created ImageAsset {asset.id} for path: {normalized_path}")
+
+        # Step 2: Generate and store image embedding in main Qdrant collection
+        try:
+            embedding_service = get_embedding_service()
+
+            # Ensure main collection exists
+            qdrant.ensure_collection(embedding_service.embedding_dim)
+
+            # Generate embedding
+            vector = embedding_service.embed_image(normalized_path)
+
+            # Prepare payload
+            payload: dict[str, str | int] = {"path": normalized_path}
+            if asset.created_at:
+                payload["created_at"] = asset.created_at.isoformat()
+
+            # Upsert to main Qdrant collection
+            qdrant.upsert_vector(
+                asset_id=asset.id,
+                vector=vector,
+                payload=payload,
+            )
+
+            # Update indexed_at timestamp
+            asset.indexed_at = datetime.now(UTC)
+
+            logger.info(f"Stored embedding for asset {asset.id} in Qdrant")
+
+        except Exception as e:
+            logger.error(f"Failed to generate/store embedding for {normalized_path}: {e}")
+            # Rollback asset creation if embedding fails
+            await db.rollback()
+            return None
+
+        # Step 3: Detect faces and store in database and Qdrant
+        try:
+            detected_faces = detect_faces_from_path(
+                str(normalized_path),
+                min_confidence=min_confidence,
+                min_face_size=min_face_size,
+            )
+
+            if detected_faces:
+                import uuid
+                qdrant_face_points = []
+
+                for face in detected_faces:
+                    # Create FaceInstance record
+                    point_id = uuid.uuid4()
+                    quality_score = face.compute_quality_score()
+
+                    face_instance = FaceInstance(
+                        id=uuid.uuid4(),
+                        asset_id=asset.id,
+                        bbox_x=face.bbox[0],
+                        bbox_y=face.bbox[1],
+                        bbox_w=face.bbox[2],
+                        bbox_h=face.bbox[3],
+                        landmarks=face.landmarks_as_dict(),
+                        detection_confidence=face.confidence,
+                        quality_score=quality_score,
+                        qdrant_point_id=point_id,
+                    )
+                    db.add(face_instance)
+
+                    # Prepare Qdrant point for face
+                    qdrant_point = {
+                        "point_id": point_id,
+                        "embedding": face.embedding.tolist(),
+                        "asset_id": asset.id,
+                        "face_instance_id": face_instance.id,
+                        "detection_confidence": face.confidence,
+                        "quality_score": quality_score,
+                        "bbox": {
+                            "x": face.bbox[0],
+                            "y": face.bbox[1],
+                            "w": face.bbox[2],
+                            "h": face.bbox[3],
+                        },
+                    }
+
+                    if asset.file_modified_at:
+                        qdrant_point["taken_at"] = asset.file_modified_at
+
+                    qdrant_face_points.append(qdrant_point)
+
+                # Batch upsert faces to Qdrant
+                if qdrant_face_points:
+                    face_qdrant.upsert_faces_batch(qdrant_face_points)
+                    logger.info(f"Detected and stored {len(qdrant_face_points)} faces for asset {asset.id}")
+            else:
+                logger.debug(f"No faces detected in {normalized_path}")
+
+        except Exception as e:
+            # Face detection failure is non-fatal - we still have the asset and main embedding
+            logger.warning(f"Face detection failed for {normalized_path}: {e}")
+
+        # Commit all changes
+        await db.commit()
+        await db.refresh(asset)
+
+        return asset
+
+    except Exception as e:
+        logger.error(f"Failed to ingest image {image_path}: {e}", exc_info=True)
+        await db.rollback()
+        return None
 
 
 def _match_face_by_bbox(
@@ -354,7 +558,8 @@ async def import_person_metadata(
     For each person:
     1. Create person (or find existing by name)
     2. For each face mapping:
-       - Check if image file exists
+       - Check if image file exists on filesystem (ALWAYS checked)
+       - If exists but not in DB and auto_ingest_images=True: ingest it
        - Find faces already in database for image
        - Match face by bounding box
        - Assign face to person (if not dry_run)
@@ -362,7 +567,7 @@ async def import_person_metadata(
     Args:
         db: Database session
         import_data: PersonMetadataExport with persons and face mappings
-        options: Import options (dry_run, tolerance, skip_missing_images)
+        options: Import options (dry_run, tolerance, skip_missing_images, auto_ingest_images)
         face_qdrant: FaceQdrantClient for updating Qdrant vectors
 
     Returns:
@@ -431,37 +636,95 @@ async def import_person_metadata(
                 image_path = face_mapping.image_path
                 bbox = face_mapping.bounding_box
 
-                # Check if image file exists (if skip_missing_images is enabled)
-                if options.skip_missing_images and not os.path.exists(image_path):
-                    images_missing += 1
-                    face_mapping_results.append(
-                        FaceMappingResult(
-                            image_path=image_path,
-                            status="image_missing",
-                            error="Image file not found on filesystem",
-                        )
-                    )
-                    logger.debug("Image not found: %s", image_path)
-                    continue
+                # Normalize path for consistent lookups
+                normalized_path = _normalize_path(image_path)
 
-                # Step 3: Find image asset in database
-                asset_stmt = select(ImageAsset).where(ImageAsset.path == image_path)
+                # Check if image file exists on filesystem (if skip_missing_images enabled OR auto_ingest enabled)
+                filesystem_check_needed = options.skip_missing_images or options.auto_ingest_images
+                filesystem_exists = os.path.exists(normalized_path) if filesystem_check_needed else True
+
+                if filesystem_check_needed and not filesystem_exists:
+                    # Image doesn't exist on filesystem
+                    if options.skip_missing_images:
+                        # Skip this image
+                        images_missing += 1
+                        face_mapping_results.append(
+                            FaceMappingResult(
+                                image_path=image_path,
+                                status="image_missing",
+                                error="Image file not found on filesystem",
+                            )
+                        )
+                        logger.debug("Image not found on filesystem: %s", image_path)
+                        continue
+                    # Note: If auto_ingest is enabled but file doesn't exist, we'll catch it below
+
+                # Step 3: Find image asset in database (using normalized path)
+                asset_stmt = select(ImageAsset).where(ImageAsset.path == normalized_path)
                 asset_result = await db.execute(asset_stmt)
                 asset = asset_result.scalar_one_or_none()
 
+                # Step 4: If asset not in database AND auto_ingest_images enabled, ingest it
+                if not asset and options.auto_ingest_images and filesystem_exists:
+                    if not options.dry_run:
+                        logger.info(
+                            "Auto-ingesting image not in database: %s", normalized_path
+                        )
+                        asset = await _ingest_image_sync(
+                            db=db,
+                            image_path=normalized_path,
+                            face_qdrant=face_qdrant,
+                            min_confidence=0.5,
+                            min_face_size=20,
+                        )
+
+                        if not asset:
+                            faces_not_found += 1
+                            face_mapping_results.append(
+                                FaceMappingResult(
+                                    image_path=image_path,
+                                    status="not_found",
+                                    error="Auto-ingest failed for image",
+                                )
+                            )
+                            logger.warning("Auto-ingest failed for: %s", normalized_path)
+                            continue
+                        else:
+                            logger.info(
+                                "Successfully auto-ingested asset %s for image: %s",
+                                asset.id,
+                                normalized_path,
+                            )
+                    else:
+                        # Dry run: simulate auto-ingest success
+                        logger.info(
+                            "Dry run: would auto-ingest image: %s", normalized_path
+                        )
+                        # In dry run, we can't proceed with face matching without a real asset
+                        faces_not_found += 1
+                        face_mapping_results.append(
+                            FaceMappingResult(
+                                image_path=image_path,
+                                status="not_found",
+                                error="Dry run: image would be auto-ingested",
+                            )
+                        )
+                        continue
+
+                # If still no asset and auto-ingest disabled, mark as not found
                 if not asset:
                     faces_not_found += 1
                     face_mapping_results.append(
                         FaceMappingResult(
                             image_path=image_path,
                             status="not_found",
-                            error="Image asset not found in database",
+                            error="Image asset not found in database (auto-ingest disabled)",
                         )
                     )
                     logger.debug("Image asset not in database: %s", image_path)
                     continue
 
-                # Step 4: Get faces for this image
+                # Step 5: Get faces for this image
                 faces_stmt = select(FaceInstance).where(FaceInstance.asset_id == asset.id)
                 faces_result = await db.execute(faces_stmt)
                 detected_faces = list(faces_result.scalars().all())
@@ -478,7 +741,7 @@ async def import_person_metadata(
                     logger.debug("No faces found for image: %s", image_path)
                     continue
 
-                # Step 5: Match face by bounding box
+                # Step 6: Match face by bounding box
                 matched_face = _match_face_by_bbox(
                     detected_faces=detected_faces,
                     target_x=bbox.x,
@@ -511,7 +774,7 @@ async def import_person_metadata(
                     )
                     continue
 
-                # Step 6: Assign face to person (if not dry_run and person exists)
+                # Step 7: Assign face to person (if not dry_run and person exists)
                 if not options.dry_run and person is not None:
                     # Update database
                     matched_face.person_id = person.id

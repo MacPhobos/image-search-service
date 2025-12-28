@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from image_search_service.api.admin_schemas import (
     DeleteAllDataRequest,
     DeleteAllDataResponse,
+    ExportOptions,
     ImportRequest,
     ImportResponse,
     PersonMetadataExport,
@@ -105,6 +106,10 @@ async def export_person_metadata(
     max_faces_per_person: int = Query(
         100, ge=1, le=500, description="Maximum face mappings per person"
     ),
+    verify_paths: bool = Query(
+        False,
+        description="If true, only export faces where image file exists on filesystem",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> PersonMetadataExport:
     """Export all persons with their face-to-image mappings for backup.
@@ -112,13 +117,15 @@ async def export_person_metadata(
     Returns JSON structure with:
     - Person names and status (active persons only)
     - Up to max_faces_per_person face mappings per person
-    - Each face mapping includes image path and bounding box
+    - Each face mapping includes normalized image path and bounding box
+    - All paths are normalized (absolute, symlinks resolved) for consistency
 
     Use this export before "Delete All Data" to preserve face labels.
     The export can be imported later to restore face-to-person mappings.
 
     Args:
         max_faces_per_person: Maximum face mappings per person (1-500)
+        verify_paths: If true, only export faces where image file exists (default: false)
         db: Database session
 
     Returns:
@@ -126,14 +133,18 @@ async def export_person_metadata(
 
     Example:
         ```
-        POST /api/v1/admin/persons/export?max_faces_per_person=100
+        POST /api/v1/admin/persons/export?max_faces_per_person=100&verify_paths=true
         ```
     """
     logger.info(
-        f"Exporting person metadata with max_faces_per_person={max_faces_per_person}"
+        f"Exporting person metadata with max_faces_per_person={max_faces_per_person}, "
+        f"verify_paths={verify_paths}"
     )
 
-    result = await admin_service.export_person_metadata(db, max_faces_per_person)
+    options = ExportOptions(verify_paths=verify_paths)
+    result = await admin_service.export_person_metadata(
+        db, max_faces_per_person, options
+    )
 
     logger.info(
         f"Export completed: {result.metadata.total_persons} persons, "
