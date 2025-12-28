@@ -15,7 +15,9 @@ from image_search_service.api.face_session_schemas import (
     BulkSuggestionActionResponse,
     FaceSuggestionListResponse,
     FaceSuggestionResponse,
+    FaceSuggestionsGroupedResponse,
     RejectSuggestionRequest,
+    SuggestionGroup,
 )
 from image_search_service.db.models import (
     FaceInstance,
@@ -24,24 +26,67 @@ from image_search_service.db.models import (
     Person,
 )
 from image_search_service.db.session import get_db
+from image_search_service.services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/faces/suggestions", tags=["face-suggestions"])
 
 
-@router.get("", response_model=FaceSuggestionListResponse)
-async def list_suggestions(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    status: str | None = Query(
-        None, description="Filter by status: pending, accepted, rejected"
-    ),
-    person_id: str | None = Query(None, description="Filter by suggested person ID"),
-    db: AsyncSession = Depends(get_db),
+# Helper functions for building suggestion responses
+async def _build_suggestion_response(
+    suggestion: FaceSuggestion,
+    db: AsyncSession,
+    person: Person | None = None,
+    face_instance: FaceInstance | None = None,
+) -> FaceSuggestionResponse:
+    """Build a FaceSuggestionResponse from database models."""
+    # Lazy load if not provided
+    if person is None:
+        person = await db.get(Person, suggestion.suggested_person_id)
+    if face_instance is None:
+        face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
+
+    thumbnail_url = (
+        f"/api/v1/images/{face_instance.asset_id}/thumbnail"
+        if face_instance
+        else None
+    )
+    full_image_url = (
+        f"/api/v1/images/{face_instance.asset_id}/full"
+        if face_instance
+        else None
+    )
+
+    return FaceSuggestionResponse(
+        id=suggestion.id,
+        face_instance_id=str(suggestion.face_instance_id),
+        suggested_person_id=str(suggestion.suggested_person_id),
+        confidence=suggestion.confidence,
+        source_face_id=str(suggestion.source_face_id),
+        status=suggestion.status,
+        created_at=suggestion.created_at,
+        reviewed_at=suggestion.reviewed_at,
+        face_thumbnail_url=thumbnail_url,
+        person_name=person.name if person else None,
+        full_image_url=full_image_url,
+        bbox_x=face_instance.bbox_x if face_instance else None,
+        bbox_y=face_instance.bbox_y if face_instance else None,
+        bbox_w=face_instance.bbox_w if face_instance else None,
+        bbox_h=face_instance.bbox_h if face_instance else None,
+        detection_confidence=face_instance.detection_confidence if face_instance else None,
+        quality_score=face_instance.quality_score if face_instance else None,
+    )
+
+
+async def _list_suggestions_flat(
+    db: AsyncSession,
+    page: int,
+    page_size: int,
+    status: str | None,
+    person_id: str | None,
 ) -> FaceSuggestionListResponse:
-    """List face suggestions with pagination and filtering."""
-    # Build query with eager loading of face and person
+    """Legacy flat pagination mode."""
     base_query = select(FaceSuggestion).order_by(FaceSuggestion.confidence.desc())
 
     if status:
@@ -63,43 +108,7 @@ async def list_suggestions(
     # Build response items
     items = []
     for suggestion in suggestions:
-        # Get person info
-        person = await db.get(Person, suggestion.suggested_person_id)
-
-        # Get face instance for thumbnail URL and bounding box data
-        face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
-        thumbnail_url = (
-            f"/api/v1/images/{face_instance.asset_id}/thumbnail"
-            if face_instance
-            else None
-        )
-        full_image_url = (
-            f"/api/v1/images/{face_instance.asset_id}/full"
-            if face_instance
-            else None
-        )
-
-        items.append(
-            FaceSuggestionResponse(
-                id=suggestion.id,
-                face_instance_id=str(suggestion.face_instance_id),
-                suggested_person_id=str(suggestion.suggested_person_id),
-                confidence=suggestion.confidence,
-                source_face_id=str(suggestion.source_face_id),
-                status=suggestion.status,
-                created_at=suggestion.created_at,
-                reviewed_at=suggestion.reviewed_at,
-                face_thumbnail_url=thumbnail_url,
-                person_name=person.name if person else None,
-                full_image_url=full_image_url,
-                bbox_x=face_instance.bbox_x if face_instance else None,
-                bbox_y=face_instance.bbox_y if face_instance else None,
-                bbox_w=face_instance.bbox_w if face_instance else None,
-                bbox_h=face_instance.bbox_h if face_instance else None,
-                detection_confidence=face_instance.detection_confidence if face_instance else None,
-                quality_score=face_instance.quality_score if face_instance else None,
-            )
-        )
+        items.append(await _build_suggestion_response(suggestion, db))
 
     return FaceSuggestionListResponse(
         items=items,
@@ -107,6 +116,221 @@ async def list_suggestions(
         page=page,
         page_size=page_size,
     )
+
+
+async def _list_suggestions_grouped(
+    db: AsyncSession,
+    page: int,
+    groups_per_page: int,
+    suggestions_per_group: int,
+    status: str | None,
+    person_id: str | None,
+) -> FaceSuggestionsGroupedResponse:
+    """Group-based pagination mode by person."""
+    # Build base WHERE clause
+    where_clauses = []
+    if status:
+        where_clauses.append(FaceSuggestion.status == status)
+    if person_id:
+        where_clauses.append(FaceSuggestion.suggested_person_id == UUID(person_id))
+
+    # Query 1: Get person groups with aggregates, ordered by max confidence
+    group_query = (
+        select(
+            FaceSuggestion.suggested_person_id,
+            func.count(FaceSuggestion.id).label("count"),
+            func.max(FaceSuggestion.confidence).label("max_conf"),
+        )
+        .group_by(FaceSuggestion.suggested_person_id)
+        .order_by(func.max(FaceSuggestion.confidence).desc())
+    )
+
+    if where_clauses:
+        for clause in where_clauses:
+            group_query = group_query.where(clause)
+
+    # Count total groups
+    count_query = select(func.count()).select_from(group_query.subquery())
+    total_groups_result = await db.execute(count_query)
+    total_groups = total_groups_result.scalar() or 0
+
+    # Get paginated person groups
+    paginated_groups_query = group_query.offset((page - 1) * groups_per_page).limit(groups_per_page)
+    groups_result = await db.execute(paginated_groups_query)
+    person_groups = groups_result.all()
+
+    if not person_groups:
+        return FaceSuggestionsGroupedResponse(
+            groups=[],
+            total_groups=total_groups,
+            total_suggestions=0,
+            page=page,
+            groups_per_page=groups_per_page,
+            suggestions_per_group=suggestions_per_group,
+        )
+
+    # Extract person IDs
+    person_ids = [row.suggested_person_id for row in person_groups]
+
+    # Query 2: Get suggestions for these persons with row number limiting
+    # Use SQLAlchemy ORM with window function for cross-database compatibility
+    from sqlalchemy import func as sql_func
+    from sqlalchemy.orm import aliased
+
+    # Create subquery with row numbers
+    row_num = (
+        sql_func.row_number()
+        .over(
+            partition_by=FaceSuggestion.suggested_person_id,
+            order_by=FaceSuggestion.confidence.desc(),
+        )
+        .label("rn")
+    )
+
+    ranked_subquery = (
+        select(FaceSuggestion, row_num)
+        .where(FaceSuggestion.suggested_person_id.in_(person_ids))
+        .subquery()
+    )
+
+    # Select from subquery where row number <= suggestions_per_group
+    ranked_alias = aliased(FaceSuggestion, ranked_subquery)
+    suggestions_query = (
+        select(ranked_subquery)
+        .where(ranked_subquery.c.rn <= suggestions_per_group)
+        .order_by(
+            ranked_subquery.c.suggested_person_id,
+            ranked_subquery.c.confidence.desc(),
+        )
+    )
+
+    suggestions_result = await db.execute(suggestions_query)
+    rows = suggestions_result.fetchall()
+
+    # Reconstruct FaceSuggestion objects from rows
+    # Rows contain columns from FaceSuggestion plus the 'rn' column
+    suggestions_by_person: dict[UUID, list[FaceSuggestion]] = {}
+    for row in rows:
+        # Access columns by their table column names
+        suggestion = FaceSuggestion(
+            id=row.id,
+            face_instance_id=row.face_instance_id,
+            suggested_person_id=row.suggested_person_id,
+            confidence=row.confidence,
+            source_face_id=row.source_face_id,
+            status=row.status,
+            created_at=row.created_at,
+            reviewed_at=row.reviewed_at,
+        )
+        if suggestion.suggested_person_id not in suggestions_by_person:
+            suggestions_by_person[suggestion.suggested_person_id] = []
+        suggestions_by_person[suggestion.suggested_person_id].append(suggestion)
+
+    # Load all persons in one query
+    persons_query = select(Person).where(Person.id.in_(person_ids))
+    persons_result = await db.execute(persons_query)
+    persons_map = {p.id: p for p in persons_result.scalars().all()}
+
+    # Load all face instances in one query
+    all_face_instance_ids = [s.face_instance_id for suggestions in suggestions_by_person.values() for s in suggestions]
+    face_instances_query = select(FaceInstance).where(FaceInstance.id.in_(all_face_instance_ids))
+    face_instances_result = await db.execute(face_instances_query)
+    face_instances_map = {f.id: f for f in face_instances_result.scalars().all()}
+
+    # Build response groups
+    groups = []
+    total_suggestions = 0
+    for row in person_groups:
+        person_id = row.suggested_person_id
+        person = persons_map.get(person_id)
+        group_suggestions = suggestions_by_person.get(person_id, [])
+
+        # Build suggestion responses
+        suggestion_responses = []
+        for suggestion in group_suggestions:
+            face_instance = face_instances_map.get(suggestion.face_instance_id)
+            suggestion_responses.append(
+                await _build_suggestion_response(suggestion, db, person, face_instance)
+            )
+
+        groups.append(
+            SuggestionGroup(
+                person_id=str(person_id),
+                person_name=person.name if person else None,
+                suggestion_count=row.count,
+                max_confidence=row.max_conf,
+                suggestions=suggestion_responses,
+            )
+        )
+        total_suggestions += row.count
+
+    return FaceSuggestionsGroupedResponse(
+        groups=groups,
+        total_groups=total_groups,
+        total_suggestions=total_suggestions,
+        page=page,
+        groups_per_page=groups_per_page,
+        suggestions_per_group=suggestions_per_group,
+    )
+
+
+@router.get("", response_model=FaceSuggestionListResponse | FaceSuggestionsGroupedResponse)
+async def list_suggestions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
+    status: str | None = Query(
+        None, description="Filter by status: pending, accepted, rejected"
+    ),
+    person_id: str | None = Query(None, description="Filter by suggested person ID", alias="personId"),
+    grouped: bool = Query(True, description="Use group-based pagination (default: true)"),
+    groups_per_page: int | None = Query(None, description="Groups per page (uses config if not provided)", alias="groupsPerPage"),
+    suggestions_per_group: int | None = Query(None, description="Suggestions per group (uses config if not provided)", alias="suggestionsPerGroup"),
+    db: AsyncSession = Depends(get_db),
+) -> FaceSuggestionListResponse | FaceSuggestionsGroupedResponse:
+    """List face suggestions with pagination and filtering.
+
+    Supports two pagination modes:
+    - grouped=true (default): Group-based pagination by person
+    - grouped=false: Legacy flat pagination
+    """
+    # Get config defaults if not provided
+    config_service = ConfigService(db)
+    if groups_per_page is None:
+        groups_per_page = await config_service.get_int("face_suggestion_groups_per_page")
+    if suggestions_per_group is None:
+        suggestions_per_group = await config_service.get_int("face_suggestion_items_per_group")
+
+    # Validate after loading config defaults
+    if groups_per_page < 1 or groups_per_page > 50:
+        raise HTTPException(
+            status_code=422,
+            detail="groupsPerPage must be between 1 and 50"
+        )
+    if suggestions_per_group < 1 or suggestions_per_group > 50:
+        raise HTTPException(
+            status_code=422,
+            detail="suggestionsPerGroup must be between 1 and 50"
+        )
+
+    if grouped:
+        # Group-based pagination
+        return await _list_suggestions_grouped(
+            db=db,
+            page=page,
+            groups_per_page=groups_per_page,
+            suggestions_per_group=suggestions_per_group,
+            status=status,
+            person_id=person_id,
+        )
+    else:
+        # Legacy flat pagination
+        return await _list_suggestions_flat(
+            db=db,
+            page=page,
+            page_size=page_size,
+            status=status,
+            person_id=person_id,
+        )
 
 
 @router.get("/stats")

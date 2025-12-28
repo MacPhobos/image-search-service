@@ -158,13 +158,17 @@ class TestListSuggestions:
         mock_face_instance_with_bbox,
         mock_image_asset,
     ):
-        """Test that list endpoint includes bounding box fields in all items."""
-        response = await test_client.get("/api/v1/faces/suggestions")
+        """Test that list endpoint includes bounding box fields in all items (flat mode)."""
+        # Use flat pagination mode to test legacy format
+        response = await test_client.get(
+            "/api/v1/faces/suggestions",
+            params={"grouped": False}
+        )
 
         assert response.status_code == 200
         data = response.json()
 
-        # Verify response structure
+        # Verify response structure (flat mode)
         assert "items" in data
         assert "total" in data
         assert len(data["items"]) >= 1

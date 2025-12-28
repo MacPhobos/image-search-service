@@ -112,12 +112,33 @@ class FaceSuggestionResponse(CamelCaseModel):
 
 
 class FaceSuggestionListResponse(CamelCaseModel):
-    """Paginated list of face suggestions."""
+    """Paginated list of face suggestions (legacy flat pagination)."""
 
     items: list[FaceSuggestionResponse]
     total: int
     page: int
     page_size: int
+
+
+class SuggestionGroup(CamelCaseModel):
+    """Group of suggestions for a single person."""
+
+    person_id: str  # UUID as string
+    person_name: str | None
+    suggestion_count: int  # Total suggestions for this person
+    max_confidence: float
+    suggestions: list[FaceSuggestionResponse]  # Limited by suggestionsPerGroup
+
+
+class FaceSuggestionsGroupedResponse(CamelCaseModel):
+    """Group-based paginated response for face suggestions."""
+
+    groups: list[SuggestionGroup]
+    total_groups: int  # Total number of person groups
+    total_suggestions: int  # Total number of suggestions across all groups
+    page: int
+    groups_per_page: int
+    suggestions_per_group: int
 
 
 class AcceptSuggestionRequest(CamelCaseModel):

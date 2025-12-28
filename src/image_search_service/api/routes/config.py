@@ -8,8 +8,14 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def to_camel(string: str) -> str:
+    """Convert snake_case to camelCase."""
+    words = string.split("_")
+    return words[0] + "".join(word.capitalize() for word in words[1:])
 
 from image_search_service.db.session import get_db
 from image_search_service.services.config_service import ConfigService
@@ -51,6 +57,18 @@ class FaceMatchingConfigResponse(BaseModel):
     prototype_max_exemplars: int
 
 
+class FaceSuggestionSettingsResponse(BaseModel):
+    """Face suggestion pagination settings."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
+
+    groups_per_page: int = Field(..., ge=1, le=50, description="Number of person groups per page")
+    items_per_group: int = Field(..., ge=1, le=50, description="Number of suggestions per group")
+
+
 # Request Models
 class ConfigUpdateRequest(BaseModel):
     """Request to update a configuration value."""
@@ -84,6 +102,18 @@ class FaceMatchingConfigUpdateRequest(BaseModel):
                 "suggestion_threshold must be less than auto_assign_threshold"
             )
         return self
+
+
+class FaceSuggestionSettingsUpdateRequest(BaseModel):
+    """Request to update face suggestion pagination settings."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
+
+    groups_per_page: int = Field(..., ge=1, le=50)
+    items_per_group: int = Field(..., ge=1, le=50)
 
 
 # Endpoints
@@ -154,6 +184,51 @@ async def update_face_matching_config(
         suggestion_expiry_days=request.suggestion_expiry_days,
         prototype_min_quality=request.prototype_min_quality,
         prototype_max_exemplars=request.prototype_max_exemplars,
+    )
+
+
+@router.get("/face-suggestions", response_model=FaceSuggestionSettingsResponse)
+async def get_face_suggestion_settings(
+    db: AsyncSession = Depends(get_db),
+) -> FaceSuggestionSettingsResponse:
+    """Get face suggestion pagination settings.
+
+    Returns the current configuration for group-based pagination
+    of face suggestions.
+    """
+    service = ConfigService(db)
+
+    return FaceSuggestionSettingsResponse(
+        groups_per_page=await service.get_int("face_suggestion_groups_per_page"),
+        items_per_group=await service.get_int("face_suggestion_items_per_group"),
+    )
+
+
+@router.put("/face-suggestions", response_model=FaceSuggestionSettingsResponse)
+async def update_face_suggestion_settings(
+    request: FaceSuggestionSettingsUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> FaceSuggestionSettingsResponse:
+    """Update face suggestion pagination settings.
+
+    Updates the group-based pagination configuration for face suggestions.
+    """
+    service = ConfigService(db)
+
+    try:
+        await service.set_value("face_suggestion_groups_per_page", request.groups_per_page)
+        await service.set_value("face_suggestion_items_per_group", request.items_per_group)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    logger.info(
+        f"Updated face suggestion settings: groups_per_page={request.groups_per_page}, "
+        f"items_per_group={request.items_per_group}"
+    )
+
+    return FaceSuggestionSettingsResponse(
+        groups_per_page=request.groups_per_page,
+        items_per_group=request.items_per_group,
     )
 
 
