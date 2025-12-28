@@ -143,10 +143,27 @@ def detect_faces_from_path(
     min_confidence: float = 0.5,
     min_face_size: int = 20,
 ) -> list[DetectedFace]:
-    """Detect faces from an image file path."""
-    import cv2
+    """Detect faces from an image file path.
 
-    image = cv2.imread(image_path)
+    Applies EXIF orientation to ensure correct face detection on rotated images.
+    """
+    import cv2
+    from PIL import Image, ImageOps
+
+    # Read image with PIL first to apply EXIF orientation
+    image: "np.ndarray[Any, Any]" | None = None
+    try:
+        with Image.open(image_path) as pil_img:
+            # Apply EXIF orientation transformation
+            pil_img = ImageOps.exif_transpose(pil_img) or pil_img
+            # Convert PIL RGB to OpenCV BGR format
+            image_rgb = np.array(pil_img.convert("RGB"))
+            image = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    except Exception as e:
+        logger.warning(f"Could not read image with PIL/EXIF: {image_path}, error: {e}")
+        # Fallback to cv2.imread without EXIF handling
+        image = cv2.imread(image_path)
+
     if image is None:
         logger.warning(f"Could not read image: {image_path}")
         return []

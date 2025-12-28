@@ -3,7 +3,7 @@
 import hashlib
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,6 +86,8 @@ class ThumbnailService:
             raise FileNotFoundError(f"Image not found: {image_path}")
 
         with Image.open(path) as img:
+            # Apply EXIF orientation to get actual dimensions
+            img = ImageOps.exif_transpose(img) or img
             width, height = img.size
             return (width, height)
 
@@ -117,6 +119,9 @@ class ThumbnailService:
 
         # Open and resize image
         with Image.open(original) as img:
+            # Apply EXIF orientation transformation (handles rotated smartphone photos)
+            img = ImageOps.exif_transpose(img) or img
+
             # Convert RGBA to RGB for JPEG compatibility
             if img.mode in ("RGBA", "LA", "P"):
                 # Create white background
