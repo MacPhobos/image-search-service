@@ -574,6 +574,136 @@ def expire_suggestions(
         typer.echo(f"Expired {result.get('expired_count', 0)} suggestions")
 
 
+@faces_app.command("backfill-prototypes")
+def backfill_prototypes(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be created without creating"
+    ),
+    max_per_person: int = typer.Option(10, help="Maximum faces to process per person"),
+) -> None:
+    """Create prototypes from all existing face→person assignments.
+
+    This command backfills prototypes for persons who have labeled faces but
+    no prototypes. Useful for fixing existing data after prototype system deployment.
+
+    Example:
+        faces backfill-prototypes --dry-run
+        faces backfill-prototypes --max-per-person 5
+    """
+    import asyncio
+
+    from sqlalchemy import select
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.db.models import FaceInstance, Person, PersonStatus
+    from image_search_service.db.session import get_async_session_context
+    from image_search_service.services.prototype_service import (
+        create_or_update_prototypes,
+        get_prototype_count,
+    )
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    async def _backfill() -> dict:
+        """Async backfill implementation."""
+        settings = get_settings()
+        qdrant = get_face_qdrant_client()
+
+        async with get_async_session_context() as db:
+            # Get all active persons
+            person_query = select(Person).where(Person.status == PersonStatus.ACTIVE)
+            person_result = await db.execute(person_query)
+            persons = list(person_result.scalars().all())
+
+            typer.echo(f"Found {len(persons)} active persons")
+            typer.echo("")
+
+            prototypes_created = 0
+            persons_processed = 0
+
+            with tqdm(total=len(persons), desc="Processing persons", unit="person") as pbar:
+                for person in persons:
+                    # Check if person already has prototypes
+                    existing_count = await get_prototype_count(db, person.id)
+
+                    if existing_count > 0:
+                        pbar.set_postfix_str(f"{person.name}: {existing_count} existing")
+                        pbar.update(1)
+                        continue
+
+                    # Get all labeled faces for this person, sorted by quality descending
+                    faces_query = (
+                        select(FaceInstance)
+                        .where(FaceInstance.person_id == person.id)
+                        .order_by(FaceInstance.quality_score.desc())
+                        .limit(max_per_person)
+                    )
+                    faces_result = await db.execute(faces_query)
+                    faces = list(faces_result.scalars().all())
+
+                    if not faces:
+                        pbar.set_postfix_str(f"{person.name}: no faces")
+                        pbar.update(1)
+                        continue
+
+                    # Create prototypes from top quality faces
+                    person_prototypes = 0
+                    for face in faces:
+                        if dry_run:
+                            # Just show what would be created
+                            quality = face.quality_score or 0.0
+                            typer.echo(
+                                f"  Would create prototype for {person.name}: "
+                                f"face {face.id} (quality={quality:.2f})"
+                            )
+                            person_prototypes += 1
+                        else:
+                            # Actually create prototype
+                            try:
+                                proto = await create_or_update_prototypes(
+                                    db=db,
+                                    qdrant=qdrant,
+                                    person_id=person.id,
+                                    newly_labeled_face_id=face.id,
+                                    max_exemplars=settings.face_prototype_max_exemplars,
+                                    min_quality_threshold=settings.face_prototype_min_quality,
+                                )
+                                if proto:
+                                    person_prototypes += 1
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to create prototype for face {face.id}: {e}"
+                                )
+
+                    if not dry_run:
+                        await db.commit()
+
+                    if person_prototypes > 0:
+                        prototypes_created += person_prototypes
+                        persons_processed += 1
+
+                    pbar.set_postfix_str(f"{person.name}: {person_prototypes} prototypes")
+                    pbar.update(1)
+
+        return {
+            "persons_processed": persons_processed,
+            "prototypes_created": prototypes_created,
+        }
+
+    # Run async function
+    result = asyncio.run(_backfill())
+
+    typer.echo("")
+    typer.echo("=" * 50)
+    if dry_run:
+        typer.echo("DRY RUN RESULTS:")
+    else:
+        typer.echo("BACKFILL RESULTS:")
+    typer.echo("=" * 50)
+    typer.echo(f"Persons processed: {result['persons_processed']}")
+    typer.echo(f"Prototypes created: {result['prototypes_created']}")
+    typer.echo("")
+
+
 @faces_app.command("find-orphans")
 def find_orphan_faces(
     limit: int = typer.Option(100, help="Maximum faces to check"),

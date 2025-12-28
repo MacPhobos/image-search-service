@@ -102,6 +102,22 @@ class Settings(BaseSettings):
         description="Maximum number of face suggestions to return",
     )
 
+    # Prototype creation settings
+    face_prototype_min_quality: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        alias="FACE_PROTOTYPE_MIN_QUALITY",
+        description="Minimum quality score for prototype creation (0.0-1.0)",
+    )
+    face_prototype_max_exemplars: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        alias="FACE_PROTOTYPE_MAX_EXEMPLARS",
+        description="Maximum exemplar prototypes per person",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

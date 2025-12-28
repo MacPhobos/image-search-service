@@ -848,6 +848,26 @@ async def bulk_move_to_person(
 
         await db.commit()
 
+        # Create prototypes from verified labels
+        from image_search_service.services.prototype_service import create_or_update_prototypes
+
+        settings = get_settings()
+        for face in faces:
+            try:
+                await create_or_update_prototypes(
+                    db=db,
+                    qdrant=qdrant,
+                    person_id=target_person.id,
+                    newly_labeled_face_id=face.id,
+                    max_exemplars=settings.face_prototype_max_exemplars,
+                    min_quality_threshold=settings.face_prototype_min_quality,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create prototype for face {face.id}: {e}")
+                # Continue with other faces
+
+        await db.commit()
+
         logger.info(
             f"Bulk moved {len(faces)} faces from {source_person.name} to {target_person.name} "
             f"in {len(affected_photo_ids)} photos"
@@ -1042,6 +1062,24 @@ async def assign_face_to_person(
         db.add(event)
 
         await db.commit()
+
+        # Create prototype from this verified label
+        from image_search_service.services.prototype_service import create_or_update_prototypes
+
+        settings = get_settings()
+        try:
+            await create_or_update_prototypes(
+                db=db,
+                qdrant=qdrant,
+                person_id=person.id,
+                newly_labeled_face_id=face.id,
+                max_exemplars=settings.face_prototype_max_exemplars,
+                min_quality_threshold=settings.face_prototype_min_quality,
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to create prototype for face {face.id}: {e}")
+            # Don't fail the request if prototype creation fails
 
         logger.info(f"Assigned face {face_id} to person {person.name} ({person.id})")
 
