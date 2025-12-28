@@ -187,11 +187,17 @@ async def _list_suggestions_grouped(
         .label("rn")
     )
 
-    ranked_subquery = (
-        select(FaceSuggestion, row_num)
-        .where(FaceSuggestion.suggested_person_id.in_(person_ids))
-        .subquery()
+    # Build query for suggestions with filters
+    suggestions_query = select(FaceSuggestion, row_num).where(
+        FaceSuggestion.suggested_person_id.in_(person_ids)
     )
+
+    # Apply the same WHERE clauses used for grouping (includes status filter)
+    if where_clauses:
+        for clause in where_clauses:
+            suggestions_query = suggestions_query.where(clause)
+
+    ranked_subquery = suggestions_query.subquery()
 
     # Select from subquery where row number <= suggestions_per_group
     ranked_alias = aliased(FaceSuggestion, ranked_subquery)
