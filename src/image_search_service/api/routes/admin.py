@@ -1,6 +1,8 @@
 """Admin routes for destructive operations."""
 
-from fastapi import APIRouter, Depends, Query
+import os
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.api.admin_schemas import (
@@ -32,7 +34,9 @@ async def delete_all_data(
     - All rows from application tables in PostgreSQL
     - Preserves: alembic_version table for migration tracking
 
-    Safety: Requires confirm=true AND confirmation_text="DELETE ALL DATA"
+    Safety requirements:
+    - Environment variable ALLOW_DESTRUCTIVE_ADMIN_OPS=true must be set
+    - Request must include confirm=true AND confirmation_text="DELETE ALL DATA"
 
     Args:
         request: Delete all data request with double confirmation
@@ -42,10 +46,14 @@ async def delete_all_data(
         Deletion summary with counts and preserved migration version
 
     Raises:
+        HTTPException: 403 if environment variable not set
         HTTPException: 400 if confirmation requirements not met
 
     Example:
         ```
+        # First, set environment variable:
+        export ALLOW_DESTRUCTIVE_ADMIN_OPS=true
+
         POST /api/v1/admin/data/delete-all
         {
             "confirm": true,
@@ -54,6 +62,21 @@ async def delete_all_data(
         }
         ```
     """
+    # Environment-based safety gate - cannot be bypassed by code
+    if os.getenv("ALLOW_DESTRUCTIVE_ADMIN_OPS", "").lower() != "true":
+        logger.warning(
+            "Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. "
+            f"Attempted by request with reason: {request.reason or 'None'}"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Destructive operations are disabled. "
+                "Set environment variable ALLOW_DESTRUCTIVE_ADMIN_OPS=true to enable. "
+                "This is a safety measure to prevent accidental data loss."
+            ),
+        )
+
     logger.warning(
         "Admin delete all data endpoint called. "
         f"Confirmation: {request.confirm}, "
