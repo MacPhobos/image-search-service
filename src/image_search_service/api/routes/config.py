@@ -47,6 +47,8 @@ class FaceMatchingConfigResponse(BaseModel):
     suggestion_threshold: float
     max_suggestions: int
     suggestion_expiry_days: int
+    prototype_min_quality: float
+    prototype_max_exemplars: int
 
 
 # Request Models
@@ -71,6 +73,8 @@ class FaceMatchingConfigUpdateRequest(BaseModel):
     suggestion_threshold: float = Field(..., ge=0.3, le=0.95)
     max_suggestions: int = Field(default=50, ge=1, le=200)
     suggestion_expiry_days: int = Field(default=30, ge=1, le=365)
+    prototype_min_quality: float = Field(default=0.5, ge=0.0, le=1.0)
+    prototype_max_exemplars: int = Field(default=5, ge=1, le=20)
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> "FaceMatchingConfigUpdateRequest":
@@ -90,7 +94,7 @@ async def get_face_matching_config(
     """Get face matching configuration settings.
 
     Returns the current configuration for automatic face-to-person matching,
-    including confidence thresholds and suggestion limits.
+    including confidence thresholds, suggestion limits, and prototype settings.
     """
     service = ConfigService(db)
 
@@ -99,6 +103,8 @@ async def get_face_matching_config(
         suggestion_threshold=await service.get_float("face_suggestion_threshold"),
         max_suggestions=await service.get_int("face_suggestion_max_results"),
         suggestion_expiry_days=await service.get_int("face_suggestion_expiry_days"),
+        prototype_min_quality=await service.get_float("face_prototype_min_quality"),
+        prototype_max_exemplars=await service.get_int("face_prototype_max_exemplars"),
     )
 
 
@@ -125,12 +131,20 @@ async def update_face_matching_config(
         await service.set_value(
             "face_suggestion_expiry_days", request.suggestion_expiry_days
         )
+        await service.set_value(
+            "face_prototype_min_quality", request.prototype_min_quality
+        )
+        await service.set_value(
+            "face_prototype_max_exemplars", request.prototype_max_exemplars
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     logger.info(
         f"Updated face matching config: auto={request.auto_assign_threshold}, "
-        f"suggestion={request.suggestion_threshold}"
+        f"suggestion={request.suggestion_threshold}, "
+        f"prototype_min_quality={request.prototype_min_quality}, "
+        f"prototype_max_exemplars={request.prototype_max_exemplars}"
     )
 
     return FaceMatchingConfigResponse(
@@ -138,6 +152,8 @@ async def update_face_matching_config(
         suggestion_threshold=request.suggestion_threshold,
         max_suggestions=request.max_suggestions,
         suggestion_expiry_days=request.suggestion_expiry_days,
+        prototype_min_quality=request.prototype_min_quality,
+        prototype_max_exemplars=request.prototype_max_exemplars,
     )
 
 

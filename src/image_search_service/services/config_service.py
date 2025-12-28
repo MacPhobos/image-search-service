@@ -25,6 +25,8 @@ class ConfigService:
         "face_suggestion_threshold": 0.70,
         "face_suggestion_max_results": 50,
         "face_suggestion_expiry_days": 30,
+        "face_prototype_min_quality": 0.5,
+        "face_prototype_max_exemplars": 5,
     }
 
     def __init__(self, db_session: AsyncSession):
