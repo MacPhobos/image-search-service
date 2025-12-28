@@ -4,7 +4,7 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.api.face_schemas import (
@@ -86,10 +86,33 @@ async def list_clusters(
         # PostgreSQL: use array_agg (returns array)
         face_ids_expr = func.array_agg(FaceInstance.id).label("face_ids")
 
+    # Use bool_or to check if any face in cluster has person_id
+    # This properly handles NULL checking without UUID comparison issues
+    if is_sqlite:
+        # SQLite doesn't have bool_or, use MAX with CAST to integer
+        # CAST(person_id IS NOT NULL AS INTEGER) gives 1 or 0
+        has_person_expr = func.max(
+            func.cast(FaceInstance.person_id.isnot(None), Integer)
+        ).label("has_person")
+        # SQLite: get any person_id using array aggregation
+        # group_concat returns string, we'll handle conversion later
+        person_id_expr = func.group_concat(FaceInstance.person_id).label("person_id_concat")
+    else:
+        # PostgreSQL: use bool_or to check if any face is labeled
+        has_person_expr = func.bool_or(FaceInstance.person_id.isnot(None)).label("has_person")
+        # Get any person_id from the cluster (for display)
+        # array_agg returns array, we'll extract first element later
+        # Filter out NULLs to only get actual person_ids
+        from sqlalchemy.dialects.postgresql import array
+        person_id_expr = func.array_agg(
+            FaceInstance.person_id
+        ).label("person_ids_array")
+
     cluster_query = (
         select(
             FaceInstance.cluster_id,
-            func.max(FaceInstance.person_id).label("person_id"),
+            person_id_expr,
+            has_person_expr,
             func.count(FaceInstance.id).label("face_count"),
             func.avg(FaceInstance.quality_score).label("avg_quality"),
             face_ids_expr,
@@ -99,8 +122,17 @@ async def list_clusters(
     )
 
     if not include_labeled:
-        # Use HAVING clause since person_id is now an aggregated column
-        cluster_query = cluster_query.having(func.max(FaceInstance.person_id).is_(None))
+        # Filter for clusters where NO face has person_id (unlabeled clusters)
+        # has_person will be FALSE or NULL for fully unlabeled clusters
+        if is_sqlite:
+            # SQLite: has_person is 0 or NULL for unlabeled
+            cluster_query = cluster_query.having(
+                func.coalesce(has_person_expr, False).is_(False)
+            )
+        else:
+            # PostgreSQL: bool_or returns NULL if all inputs are NULL
+            # We want clusters where has_person IS NOT TRUE (NULL or FALSE)
+            cluster_query = cluster_query.having(has_person_expr.isnot(True))
 
     # Count total clusters
     count_subquery = cluster_query.subquery()
@@ -115,10 +147,30 @@ async def list_clusters(
 
     items = []
     for row in rows:
+        # Extract person_id from aggregated result
+        person_id = None
+        if is_sqlite:
+            # SQLite: person_id_concat is comma-separated string or None
+            if hasattr(row, 'person_id_concat') and row.person_id_concat:
+                # Get first person_id from concatenated string
+                first_id_str = row.person_id_concat.split(',')[0].strip()
+                if first_id_str:
+                    try:
+                        person_id = UUID(first_id_str)
+                    except ValueError:
+                        pass
+        else:
+            # PostgreSQL: person_ids_array is array of UUIDs
+            if hasattr(row, 'person_ids_array') and row.person_ids_array:
+                # Filter out None values and get first
+                non_null_ids = [pid for pid in row.person_ids_array if pid is not None]
+                if non_null_ids:
+                    person_id = non_null_ids[0]
+
         # Get person name if assigned
         person_name = None
-        if row.person_id:
-            person = await db.get(Person, row.person_id)
+        if person_id:
+            person = await db.get(Person, person_id)
             person_name = person.name if person else None
 
         # Handle face_ids based on database type
@@ -137,7 +189,7 @@ async def list_clusters(
                 face_count=row.face_count,
                 sample_face_ids=face_ids_list[:5],
                 avg_quality=row.avg_quality,
-                person_id=row.person_id,
+                person_id=person_id,
                 person_name=person_name,
             )
         )
