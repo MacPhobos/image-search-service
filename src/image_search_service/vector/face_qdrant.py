@@ -31,8 +31,20 @@ from image_search_service.core.logging import get_logger
 logger = get_logger(__name__)
 
 # Collection configuration
-FACE_COLLECTION_NAME = "faces"
 FACE_VECTOR_DIM = 512  # ArcFace/InsightFace embedding dimension
+
+
+def _get_face_collection_name() -> str:
+    """Get face collection name from settings (allows test override).
+
+    This function reads from environment-configurable settings instead of
+    using a hardcoded constant, preventing tests from accidentally deleting
+    production data.
+
+    Returns:
+        Face collection name from settings (e.g., "faces" or "test_faces")
+    """
+    return get_settings().qdrant_face_collection
 
 
 class FaceQdrantClient:
@@ -92,61 +104,62 @@ class FaceQdrantClient:
         - 512-dim vectors with cosine distance
         - Payload indexes for person_id, cluster_id, is_prototype
         """
+        collection_name = _get_face_collection_name()
         try:
             collections = self.client.get_collections().collections
             collection_names = [c.name for c in collections]
 
-            if FACE_COLLECTION_NAME not in collection_names:
+            if collection_name not in collection_names:
                 # Create collection with cosine distance
                 self.client.create_collection(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=collection_name,
                     vectors_config=VectorParams(size=FACE_VECTOR_DIM, distance=Distance.COSINE),
                 )
                 logger.info(
-                    f"Created Qdrant collection '{FACE_COLLECTION_NAME}' with dim={FACE_VECTOR_DIM}"
+                    f"Created Qdrant collection '{collection_name}' with dim={FACE_VECTOR_DIM}"
                 )
 
                 # Create payload indexes for efficient filtering
                 self.client.create_payload_index(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=collection_name,
                     field_name="person_id",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'person_id'")
 
                 self.client.create_payload_index(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=collection_name,
                     field_name="cluster_id",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'cluster_id'")
 
                 self.client.create_payload_index(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=collection_name,
                     field_name="is_prototype",
                     field_schema=PayloadSchemaType.BOOL,
                 )
                 logger.info("Created payload index on 'is_prototype'")
 
                 self.client.create_payload_index(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=collection_name,
                     field_name="asset_id",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'asset_id'")
 
                 self.client.create_payload_index(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=collection_name,
                     field_name="face_instance_id",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'face_instance_id'")
 
             else:
-                logger.debug(f"Collection '{FACE_COLLECTION_NAME}' already exists")
+                logger.debug(f"Collection '{collection_name}' already exists")
 
         except Exception as e:
-            logger.error(f"Failed to ensure collection '{FACE_COLLECTION_NAME}': {e}")
+            logger.error(f"Failed to ensure collection '{collection_name}': {e}")
             raise
 
     def upsert_face(
@@ -199,7 +212,7 @@ class FaceQdrantClient:
 
         try:
             self.client.upsert(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 points=[
                     PointStruct(
                         id=str(point_id),
@@ -273,7 +286,7 @@ class FaceQdrantClient:
                 )
 
             self.client.upsert(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 points=points,
             )
             logger.info(f"Batch upserted {len(points)} faces")
@@ -305,7 +318,7 @@ class FaceQdrantClient:
                     processed_payload[key] = value
 
             self.client.set_payload(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 payload=processed_payload,
                 points=[str(point_id)],
             )
@@ -331,7 +344,7 @@ class FaceQdrantClient:
 
         try:
             self.client.set_payload(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 payload={"cluster_id": cluster_id},
                 points=[str(point_id) for point_id in point_ids],
             )
@@ -359,14 +372,14 @@ class FaceQdrantClient:
             # Use delete_payload to remove person_id if None
             if person_id is None:
                 self.client.delete_payload(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=_get_face_collection_name(),
                     keys=["person_id"],
                     points=[str(point_id) for point_id in point_ids],
                 )
                 logger.info(f"Removed person_id from {len(point_ids)} faces")
             else:
                 self.client.set_payload(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=_get_face_collection_name(),
                     payload={"person_id": str(person_id)},
                     points=[str(point_id) for point_id in point_ids],
                 )
@@ -421,7 +434,7 @@ class FaceQdrantClient:
 
             # Execute search using query_points
             results = self.client.query_points(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 query=query_embedding,
                 limit=limit,
                 score_threshold=score_threshold,
@@ -470,7 +483,7 @@ class FaceQdrantClient:
         """
         try:
             points = self.client.retrieve(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 ids=[str(point_id)],
                 with_payload=False,
                 with_vectors=True,
@@ -542,7 +555,7 @@ class FaceQdrantClient:
             scroll_filter = Filter(must=conditions) if conditions else None  # type: ignore[arg-type]
 
             records, next_offset = self.client.scroll(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 scroll_filter=scroll_filter,
                 limit=limit,
                 offset=offset,
@@ -580,7 +593,7 @@ class FaceQdrantClient:
 
             while len(face_embeddings) < limit:
                 records, next_offset = self.client.scroll(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=_get_face_collection_name(),
                     limit=min(100, limit - len(face_embeddings)),
                     offset=offset,
                     with_vectors=True,
@@ -652,7 +665,7 @@ class FaceQdrantClient:
 
             while True:
                 records, next_offset = self.client.scroll(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=_get_face_collection_name(),
                     scroll_filter=asset_filter,
                     limit=100,
                     offset=offset,
@@ -668,7 +681,7 @@ class FaceQdrantClient:
                 # Delete batch
                 if point_ids:
                     self.client.delete(
-                        collection_name=FACE_COLLECTION_NAME,
+                        collection_name=_get_face_collection_name(),
                         points_selector=PointIdsList(points=point_ids),
                     )
                     deleted_count += len(point_ids)
@@ -711,7 +724,7 @@ class FaceQdrantClient:
             )
 
             records, _ = self.client.scroll(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 scroll_filter=face_filter,
                 limit=10,  # Should only be 1
                 offset=offset,
@@ -724,7 +737,7 @@ class FaceQdrantClient:
             # Delete
             if point_ids:
                 self.client.delete(
-                    collection_name=FACE_COLLECTION_NAME,
+                    collection_name=_get_face_collection_name(),
                     points_selector=PointIdsList(points=point_ids),
                 )
                 deleted_count = len(point_ids)
@@ -748,7 +761,7 @@ class FaceQdrantClient:
         try:
             # Retrieve the specific point by ID
             points = self.client.retrieve(
-                collection_name=FACE_COLLECTION_NAME,
+                collection_name=_get_face_collection_name(),
                 ids=[str(point_id)],
                 with_payload=False,
                 with_vectors=False,
@@ -766,10 +779,10 @@ class FaceQdrantClient:
             Dict with collection info or None if collection doesn't exist
         """
         try:
-            collection_info = self.client.get_collection(collection_name=FACE_COLLECTION_NAME)
+            collection_info = self.client.get_collection(collection_name=_get_face_collection_name())
 
             return {
-                "name": FACE_COLLECTION_NAME,
+                "name": _get_face_collection_name(),
                 "points_count": collection_info.points_count,
                 # Use points_count (vectors_count removed in qdrant-client 1.12+)
                 "vectors_count": collection_info.points_count,
@@ -779,7 +792,7 @@ class FaceQdrantClient:
             }
 
         except Exception as e:
-            logger.warning(f"Failed to get collection info for '{FACE_COLLECTION_NAME}': {e}")
+            logger.warning(f"Failed to get collection info for '{_get_face_collection_name()}': {e}")
             return None
 
     def reset_collection(self) -> int:
@@ -789,25 +802,46 @@ class FaceQdrantClient:
 
         Returns:
             Total number of vectors deleted
+
+        Raises:
+            RuntimeError: If attempting to delete production collection during tests
         """
+        import os
+
+        collection_name = _get_face_collection_name()
+
+        # CRITICAL SAFETY GUARD: Prevent deletion of production collections during tests
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            if collection_name == "faces":
+                raise RuntimeError(
+                    "SAFETY GUARD: Refusing to delete production 'faces' collection during tests. "
+                    "Ensure QDRANT_FACE_COLLECTION is set to 'test_faces' in test fixtures."
+                )
+
+        # Additional safety guard for non-test destructive operations
+        if collection_name == "faces" and not os.getenv("ALLOW_PRODUCTION_RESET"):
+            logger.warning(
+                "Resetting production 'faces' collection - set ALLOW_PRODUCTION_RESET=1 to suppress"
+            )
+
         try:
             # Get count before deletion
             vector_count = 0
             try:
-                collection_info = self.client.get_collection(collection_name=FACE_COLLECTION_NAME)
+                collection_info = self.client.get_collection(collection_name=collection_name)
                 vector_count = collection_info.points_count or 0
             except Exception:
                 # Collection might not exist yet
-                logger.info(f"Collection '{FACE_COLLECTION_NAME}' does not exist, nothing to reset")
+                logger.info(f"Collection '{collection_name}' does not exist, nothing to reset")
                 return 0
 
             # Delete the entire collection
-            self.client.delete_collection(collection_name=FACE_COLLECTION_NAME)
-            logger.warning(f"Deleted collection '{FACE_COLLECTION_NAME}'")
+            self.client.delete_collection(collection_name=collection_name)
+            logger.warning(f"Deleted collection '{collection_name}'")
 
             # Recreate empty collection with same configuration
             self.ensure_collection()
-            logger.info(f"Recreated collection '{FACE_COLLECTION_NAME}' with dim={FACE_VECTOR_DIM}")
+            logger.info(f"Recreated collection '{collection_name}' with dim={FACE_VECTOR_DIM}")
 
             logger.warning(f"Reset face collection: deleted {vector_count} vectors")
             return vector_count

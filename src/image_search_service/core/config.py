@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = Field(default="image_assets", alias="QDRANT_COLLECTION")
+    qdrant_face_collection: str = Field(default="faces", alias="QDRANT_FACE_COLLECTION")
 
     @property
     def qdrant_host(self) -> str:
