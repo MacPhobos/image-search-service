@@ -132,7 +132,7 @@ class TestGetSuggestion:
         assert data["qualityScore"] == mock_face_instance_with_bbox.quality_score
 
         # Verify full image URL construction
-        expected_url = f"/api/v1/images/{mock_image_asset.id}/file"
+        expected_url = f"/api/v1/images/{mock_image_asset.id}/full"
         assert data["fullImageUrl"] == expected_url
 
     @pytest.mark.asyncio
@@ -192,7 +192,7 @@ class TestListSuggestions:
         assert suggestion_item["qualityScore"] == mock_face_instance_with_bbox.quality_score
 
         # Verify full image URL
-        expected_url = f"/api/v1/images/{mock_image_asset.id}/file"
+        expected_url = f"/api/v1/images/{mock_image_asset.id}/full"
         assert suggestion_item["fullImageUrl"] == expected_url
 
 class TestAcceptSuggestion:
@@ -232,7 +232,7 @@ class TestAcceptSuggestion:
         assert data["qualityScore"] == mock_face_instance_with_bbox.quality_score
 
         # Verify full image URL
-        expected_url = f"/api/v1/images/{mock_image_asset.id}/file"
+        expected_url = f"/api/v1/images/{mock_image_asset.id}/full"
         assert data["fullImageUrl"] == expected_url
 
 
@@ -273,7 +273,7 @@ class TestRejectSuggestion:
         assert data["qualityScore"] == mock_face_instance_with_bbox.quality_score
 
         # Verify full image URL
-        expected_url = f"/api/v1/images/{mock_image_asset.id}/file"
+        expected_url = f"/api/v1/images/{mock_image_asset.id}/full"
         assert data["fullImageUrl"] == expected_url
 
 class TestBoundingBoxFieldValidation:
@@ -347,11 +347,11 @@ class TestBoundingBoxFieldValidation:
         assert response.status_code == 200
         data = response.json()
 
-        # Verify URL pattern: /api/v1/images/{asset_id}/file
+        # Verify URL pattern: /api/v1/images/{asset_id}/full
         assert data["fullImageUrl"].startswith("/api/v1/images/")
-        assert data["fullImageUrl"].endswith("/file")
+        assert data["fullImageUrl"].endswith("/full")
         assert str(mock_image_asset.id) in data["fullImageUrl"]
 
         # Exact match
-        expected = f"/api/v1/images/{mock_image_asset.id}/file"
+        expected = f"/api/v1/images/{mock_image_asset.id}/full"
         assert data["fullImageUrl"] == expected

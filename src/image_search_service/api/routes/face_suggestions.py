@@ -74,7 +74,7 @@ async def list_suggestions(
             else None
         )
         full_image_url = (
-            f"/api/v1/images/{face_instance.asset_id}/file"
+            f"/api/v1/images/{face_instance.asset_id}/full"
             if face_instance
             else None
         )
@@ -187,7 +187,7 @@ async def get_suggestion(
         else None
     )
     full_image_url = (
-        f"/api/v1/images/{face_instance.asset_id}/file"
+        f"/api/v1/images/{face_instance.asset_id}/full"
         if face_instance
         else None
     )
@@ -252,7 +252,7 @@ async def accept_suggestion(
 
     # Get thumbnail URL and full image URL from face instance (already loaded)
     thumbnail_url = f"/api/v1/images/{face.asset_id}/thumbnail"
-    full_image_url = f"/api/v1/images/{face.asset_id}/file"
+    full_image_url = f"/api/v1/images/{face.asset_id}/full"
 
     logger.info(
         f"Accepted suggestion {suggestion_id}: "
@@ -316,7 +316,7 @@ async def reject_suggestion(
         else None
     )
     full_image_url = (
-        f"/api/v1/images/{face_instance.asset_id}/file"
+        f"/api/v1/images/{face_instance.asset_id}/full"
         if face_instance
         else None
     )
