@@ -1143,7 +1143,7 @@ Get all detected faces for a specific asset.
       "qualityScore": 0.82,
       "clusterId": "clu_abc123",
       "personId": "uuid",
-      "personName": null,
+      "personName": "John Doe",
       "createdAt": "2025-12-23T10:30:00Z"
     }
   ],
