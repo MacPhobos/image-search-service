@@ -101,6 +101,14 @@ class FaceSuggestionResponse(CamelCaseModel):
     # Include face thumbnail URL for UI
     face_thumbnail_url: str | None = None
     person_name: str | None = None
+    # Full image and bounding box information for overlay display
+    full_image_url: str | None = None
+    bbox_x: int | None = None
+    bbox_y: int | None = None
+    bbox_w: int | None = None
+    bbox_h: int | None = None
+    detection_confidence: float | None = None
+    quality_score: float | None = None
 
 
 class FaceSuggestionListResponse(CamelCaseModel):

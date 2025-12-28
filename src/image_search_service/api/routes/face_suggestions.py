@@ -66,10 +66,15 @@ async def list_suggestions(
         # Get person info
         person = await db.get(Person, suggestion.suggested_person_id)
 
-        # Get face instance for thumbnail URL
+        # Get face instance for thumbnail URL and bounding box data
         face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
         thumbnail_url = (
             f"/api/v1/images/{face_instance.asset_id}/thumbnail"
+            if face_instance
+            else None
+        )
+        full_image_url = (
+            f"/api/v1/images/{face_instance.asset_id}/file"
             if face_instance
             else None
         )
@@ -86,6 +91,13 @@ async def list_suggestions(
                 reviewed_at=suggestion.reviewed_at,
                 face_thumbnail_url=thumbnail_url,
                 person_name=person.name if person else None,
+                full_image_url=full_image_url,
+                bbox_x=face_instance.bbox_x if face_instance else None,
+                bbox_y=face_instance.bbox_y if face_instance else None,
+                bbox_w=face_instance.bbox_w if face_instance else None,
+                bbox_h=face_instance.bbox_h if face_instance else None,
+                detection_confidence=face_instance.detection_confidence if face_instance else None,
+                quality_score=face_instance.quality_score if face_instance else None,
             )
         )
 
@@ -167,10 +179,15 @@ async def get_suggestion(
 
     person = await db.get(Person, suggestion.suggested_person_id)
 
-    # Get face instance for thumbnail URL
+    # Get face instance for thumbnail URL and bounding box data
     face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
     thumbnail_url = (
         f"/api/v1/images/{face_instance.asset_id}/thumbnail"
+        if face_instance
+        else None
+    )
+    full_image_url = (
+        f"/api/v1/images/{face_instance.asset_id}/file"
         if face_instance
         else None
     )
@@ -186,6 +203,13 @@ async def get_suggestion(
         reviewed_at=suggestion.reviewed_at,
         face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
+        full_image_url=full_image_url,
+        bbox_x=face_instance.bbox_x if face_instance else None,
+        bbox_y=face_instance.bbox_y if face_instance else None,
+        bbox_w=face_instance.bbox_w if face_instance else None,
+        bbox_h=face_instance.bbox_h if face_instance else None,
+        detection_confidence=face_instance.detection_confidence if face_instance else None,
+        quality_score=face_instance.quality_score if face_instance else None,
     )
 
 
@@ -226,8 +250,9 @@ async def accept_suggestion(
     # Get person for response
     person = await db.get(Person, suggestion.suggested_person_id)
 
-    # Get thumbnail URL from face instance (already loaded)
+    # Get thumbnail URL and full image URL from face instance (already loaded)
     thumbnail_url = f"/api/v1/images/{face.asset_id}/thumbnail"
+    full_image_url = f"/api/v1/images/{face.asset_id}/file"
 
     logger.info(
         f"Accepted suggestion {suggestion_id}: "
@@ -245,6 +270,13 @@ async def accept_suggestion(
         reviewed_at=suggestion.reviewed_at,
         face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
+        full_image_url=full_image_url,
+        bbox_x=face.bbox_x,
+        bbox_y=face.bbox_y,
+        bbox_w=face.bbox_w,
+        bbox_h=face.bbox_h,
+        detection_confidence=face.detection_confidence,
+        quality_score=face.quality_score,
     )
 
 
@@ -276,10 +308,15 @@ async def reject_suggestion(
 
     person = await db.get(Person, suggestion.suggested_person_id)
 
-    # Get face instance for thumbnail URL
+    # Get face instance for thumbnail URL and bounding box data
     face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
     thumbnail_url = (
         f"/api/v1/images/{face_instance.asset_id}/thumbnail"
+        if face_instance
+        else None
+    )
+    full_image_url = (
+        f"/api/v1/images/{face_instance.asset_id}/file"
         if face_instance
         else None
     )
@@ -297,6 +334,13 @@ async def reject_suggestion(
         reviewed_at=suggestion.reviewed_at,
         face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
+        full_image_url=full_image_url,
+        bbox_x=face_instance.bbox_x if face_instance else None,
+        bbox_y=face_instance.bbox_y if face_instance else None,
+        bbox_w=face_instance.bbox_w if face_instance else None,
+        bbox_h=face_instance.bbox_h if face_instance else None,
+        detection_confidence=face_instance.detection_confidence if face_instance else None,
+        quality_score=face_instance.quality_score if face_instance else None,
     )
 
 

@@ -1,7 +1,7 @@
 # Image Search API Contract
 
-> **Version**: 1.4.0
-> **Last Updated**: 2025-12-26
+> **Version**: 1.5.0
+> **Last Updated**: 2025-12-28
 > **Status**: FROZEN - Changes require version bump and UI sync
 
 This document defines the API contract between `image-search-service` (backend) and `image-search-ui` (frontend).
@@ -755,6 +755,14 @@ interface FaceSuggestion {
 	reviewedAt: string | null; // ISO 8601 timestamp when reviewed (null if pending)
 	faceThumbnailUrl: string | null; // Thumbnail URL for the suggested face
 	personName: string | null; // Name of the suggested person
+	// Bounding box and image data for face overlay display
+	fullImageUrl: string | null; // Full image URL (e.g., /api/v1/images/{assetId}/file)
+	bboxX: number | null; // Bounding box X coordinate (pixels)
+	bboxY: number | null; // Bounding box Y coordinate (pixels)
+	bboxW: number | null; // Bounding box width (pixels)
+	bboxH: number | null; // Bounding box height (pixels)
+	detectionConfidence: number | null; // Face detection confidence (0.0-1.0)
+	qualityScore: number | null; // Face quality score (0.0-1.0)
 }
 ```
 
@@ -827,7 +835,14 @@ List face suggestions with pagination and filtering.
 			"createdAt": "2025-12-25T10:00:00Z",
 			"reviewedAt": null,
 			"faceThumbnailUrl": "/files/123e4567-e89b-12d3-a456-426614174000/face_thumb",
-			"personName": "John Smith"
+			"personName": "John Smith",
+			"fullImageUrl": "/api/v1/images/1234/file",
+			"bboxX": 100,
+			"bboxY": 150,
+			"bboxW": 80,
+			"bboxH": 80,
+			"detectionConfidence": 0.95,
+			"qualityScore": 0.78
 		}
 	],
 	"pagination": {
@@ -915,7 +930,14 @@ Accept a face suggestion and assign the face to the suggested person.
 	"createdAt": "2025-12-25T10:00:00Z",
 	"reviewedAt": "2025-12-25T10:15:00Z",
 	"faceThumbnailUrl": "/files/123e4567-e89b-12d3-a456-426614174000/face_thumb",
-	"personName": "John Smith"
+	"personName": "John Smith",
+	"fullImageUrl": "/api/v1/images/1234/file",
+	"bboxX": 100,
+	"bboxY": 150,
+	"bboxW": 80,
+	"bboxH": 80,
+	"detectionConfidence": 0.95,
+	"qualityScore": 0.78
 }
 ```
 
@@ -1306,6 +1328,7 @@ All endpoints except:
 
 | Version | Date       | Changes                                                                                      |
 | ------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 1.5.0   | 2025-12-28 | Enhanced FaceSuggestion schema with bounding box data: added fullImageUrl, bboxX, bboxY, bboxW, bboxH, detectionConfidence, qualityScore fields for face overlay display support. |
 | 1.4.0   | 2025-12-26 | Added face unassignment endpoint: DELETE /api/v1/faces/faces/{faceId}/person. Added FACE_NOT_ASSIGNED error code. |
 | 1.3.0   | 2025-12-25 | Added Face Suggestions endpoints: GET /api/v1/faces/suggestions (list), GET /api/v1/faces/suggestions/stats (statistics), GET /api/v1/faces/suggestions/{id} (single), POST /api/v1/faces/suggestions/{id}/accept, POST /api/v1/faces/suggestions/{id}/reject, POST /api/v1/faces/suggestions/bulk-action. Added SUGGESTION_NOT_FOUND and SUGGESTION_ALREADY_REVIEWED error codes. |
 | 1.2.0   | 2024-12-24 | Added person creation endpoint (POST /api/v1/faces/persons), face assignment endpoint (POST /api/v1/faces/faces/{faceId}/assign), and status field to Person schema |
