@@ -103,7 +103,6 @@ async def list_clusters(
         # Get any person_id from the cluster (for display)
         # array_agg returns array, we'll extract first element later
         # Filter out NULLs to only get actual person_ids
-        from sqlalchemy.dialects.postgresql import array
         person_id_expr = func.array_agg(
             FaceInstance.person_id
         ).label("person_ids_array")
@@ -208,24 +207,26 @@ async def get_cluster(
     db: AsyncSession = Depends(get_db),
 ) -> ClusterDetailResponse:
     """Get detailed info for a specific cluster."""
-    # Get all faces in cluster
-    query = select(FaceInstance).where(FaceInstance.cluster_id == cluster_id)
+    # Get all faces in cluster with person names
+    query = (
+        select(FaceInstance, Person.name)
+        .outerjoin(Person, FaceInstance.person_id == Person.id)
+        .where(FaceInstance.cluster_id == cluster_id)
+    )
     result = await db.execute(query)
-    faces = result.scalars().all()
+    faces_data = result.all()
 
-    if not faces:
+    if not faces_data:
         raise HTTPException(status_code=404, detail=f"Cluster {cluster_id} not found")
 
-    # Get person info if assigned
-    person_id = faces[0].person_id if faces else None
-    person_name = None
-    if person_id:
-        person = await db.get(Person, person_id)
-        person_name = person.name if person else None
+    # Get person info from first face (clusters typically have one person)
+    first_face, first_person_name = faces_data[0]
+    person_id = first_face.person_id
+    person_name = first_person_name
 
     return ClusterDetailResponse(
         cluster_id=cluster_id,
-        faces=[_face_to_response(f) for f in faces],
+        faces=[_face_to_response(face, name) for face, name in faces_data],
         person_id=person_id,
         person_name=person_name,
     )
@@ -963,15 +964,20 @@ async def get_faces_for_asset(
     db: AsyncSession = Depends(get_db),
 ) -> FaceInstanceListResponse:
     """Get all detected faces for a specific asset."""
-    query = select(FaceInstance).where(FaceInstance.asset_id == asset_id)
+    # Join with Person table to get person names
+    query = (
+        select(FaceInstance, Person.name)
+        .outerjoin(Person, FaceInstance.person_id == Person.id)
+        .where(FaceInstance.asset_id == asset_id)
+    )
     result = await db.execute(query)
-    faces = result.scalars().all()
+    faces_data = result.all()
 
     return FaceInstanceListResponse(
-        items=[_face_to_response(f) for f in faces],
-        total=len(faces),
+        items=[_face_to_response(face, person_name) for face, person_name in faces_data],
+        total=len(faces_data),
         page=1,
-        page_size=len(faces),
+        page_size=len(faces_data),
     )
 
 
@@ -1361,7 +1367,7 @@ async def train_face_matching(
 # ============ Helper Functions ============
 
 
-def _face_to_response(face: FaceInstance) -> FaceInstanceResponse:
+def _face_to_response(face: FaceInstance, person_name: str | None = None) -> FaceInstanceResponse:
     """Convert FaceInstance model to response schema."""
     return FaceInstanceResponse(
         id=face.id,
@@ -1371,6 +1377,6 @@ def _face_to_response(face: FaceInstance) -> FaceInstanceResponse:
         quality_score=face.quality_score,
         cluster_id=face.cluster_id,
         person_id=face.person_id,
-        person_name=None,  # Would need join to get this
+        person_name=person_name,
         created_at=face.created_at,
     )
