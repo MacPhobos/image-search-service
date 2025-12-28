@@ -65,6 +65,21 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+def get_async_session_context() -> AsyncSession:
+    """Get an async session context manager for use outside FastAPI routes.
+
+    Usage:
+        async with get_async_session_context() as session:
+            # Use session for database operations
+            result = await session.execute(query)
+
+    Returns:
+        Async session context manager
+    """
+    factory = get_session_factory()
+    return factory()
+
+
 def get_sync_engine() -> Engine:
     """Get synchronous engine for RQ workers.
 
