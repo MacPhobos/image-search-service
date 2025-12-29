@@ -118,6 +118,55 @@ class Settings(BaseSettings):
         description="Maximum exemplar prototypes per person",
     )
 
+    # Temporal prototype settings
+    face_prototype_max_total: int = Field(
+        default=12,
+        alias="FACE_PROTOTYPE_MAX_TOTAL",
+        description="Maximum total prototypes per person (including all types)",
+    )
+    face_prototype_temporal_slots: int = Field(
+        default=6,
+        alias="FACE_PROTOTYPE_TEMPORAL_SLOTS",
+        description="Number of slots reserved for temporal prototypes",
+    )
+    face_prototype_primary_slots: int = Field(
+        default=3,
+        alias="FACE_PROTOTYPE_PRIMARY_SLOTS",
+        description="Number of slots reserved for primary (pinned) prototypes",
+    )
+    face_prototype_temporal_mode: bool = Field(
+        default=True,
+        alias="FACE_PROTOTYPE_TEMPORAL_MODE",
+        description="Enable temporal prototype mode (age-era based selection)",
+    )
+
+    # Age-era bucket ranges
+    age_era_infant_max: int = Field(
+        default=3,
+        alias="AGE_ERA_INFANT_MAX",
+        description="Maximum age for infant era (0-3 years)",
+    )
+    age_era_child_max: int = Field(
+        default=12,
+        alias="AGE_ERA_CHILD_MAX",
+        description="Maximum age for child era (4-12 years)",
+    )
+    age_era_teen_max: int = Field(
+        default=19,
+        alias="AGE_ERA_TEEN_MAX",
+        description="Maximum age for teen era (13-19 years)",
+    )
+    age_era_young_adult_max: int = Field(
+        default=35,
+        alias="AGE_ERA_YOUNG_ADULT_MAX",
+        description="Maximum age for young adult era (20-35 years)",
+    )
+    age_era_adult_max: int = Field(
+        default=55,
+        alias="AGE_ERA_ADULT_MAX",
+        description="Maximum age for adult era (36-55 years)",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

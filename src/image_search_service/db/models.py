@@ -87,6 +87,20 @@ class PrototypeRole(str, Enum):
 
     CENTROID = "centroid"  # Computed average/centroid
     EXEMPLAR = "exemplar"  # High-quality representative face
+    PRIMARY = "primary"  # User-pinned definitive photo
+    TEMPORAL = "temporal"  # Age-era based exemplar
+    FALLBACK = "fallback"  # Lower quality, fills era gaps
+
+
+class AgeEraBucket(str, Enum):
+    """Age era buckets for temporal prototype classification."""
+
+    INFANT = "infant"  # 0-3 years
+    CHILD = "child"  # 4-12 years
+    TEEN = "teen"  # 13-19 years
+    YOUNG_ADULT = "young_adult"  # 20-35 years
+    ADULT = "adult"  # 36-55 years
+    SENIOR = "senior"  # 56+ years
 
 
 class Category(Base):
@@ -518,6 +532,16 @@ class PersonPrototype(Base):
         ),
         nullable=False,
     )
+
+    # Temporal metadata
+    age_era_bucket: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    decade_bucket: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # Pinning metadata
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    pinned_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pinned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -526,7 +550,12 @@ class PersonPrototype(Base):
     person: Mapped["Person"] = relationship("Person", back_populates="prototypes")
     face_instance: Mapped["FaceInstance | None"] = relationship("FaceInstance")
 
-    __table_args__ = (Index("ix_person_prototypes_person_id", "person_id"),)
+    __table_args__ = (
+        Index("ix_person_prototypes_person_id", "person_id"),
+        Index("ix_person_prototypes_role", "person_id", "role"),
+        Index("ix_person_prototypes_era", "person_id", "age_era_bucket"),
+        Index("ix_person_prototypes_pinned", "person_id", "is_pinned"),
+    )
 
     def __repr__(self) -> str:
         return f"<PersonPrototype(id={self.id}, person_id={self.person_id}, role={self.role})>"
