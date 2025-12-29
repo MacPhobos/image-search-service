@@ -153,7 +153,7 @@ def detect_faces_from_path(
     from PIL import Image, ImageOps
 
     # Read image with PIL first to apply EXIF orientation
-    image: "np.ndarray[Any, Any]" | None = None
+    image: np.ndarray[Any, Any] | None = None
     try:
         with Image.open(image_path) as pil_img:
             # Apply EXIF orientation transformation
