@@ -1,6 +1,7 @@
 """Pydantic schemas for face detection and recognition APIs."""
 
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -433,3 +434,35 @@ class RecomputePrototypesResponse(CamelCaseModel):
     prototypes_created: int
     prototypes_removed: int
     coverage: TemporalCoverage
+
+
+# ============ Unified Person-Centric Model Schemas ============
+
+
+class PersonType(str, Enum):
+    """Type classification for unified person view."""
+
+    IDENTIFIED = "identified"  # Has person_id and name
+    UNIDENTIFIED = "unidentified"  # Has cluster_id but no person_id
+    NOISE = "noise"  # cluster_id = '-1' or similar noise markers
+
+
+class UnifiedPersonResponse(CamelCaseModel):
+    """Unified response for both identified persons and unidentified clusters."""
+
+    id: str  # UUID string for identified, cluster_id for unidentified
+    name: str  # Person name for identified, "Unidentified Person N" for unidentified
+    type: PersonType
+    face_count: int
+    thumbnail_url: str | None = None
+    confidence: float | None = None  # Cluster quality/average quality for unidentified
+
+
+class UnifiedPeopleListResponse(CamelCaseModel):
+    """Response for unified people listing endpoint."""
+
+    people: list[UnifiedPersonResponse]
+    total: int
+    identified_count: int
+    unidentified_count: int
+    noise_count: int

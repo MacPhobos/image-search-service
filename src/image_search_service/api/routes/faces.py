@@ -51,6 +51,7 @@ from image_search_service.api.face_schemas import (
     TrainMatchingResponse,
     TriggerClusteringRequest,
     UnassignFaceResponse,
+    UnifiedPeopleListResponse,
 )
 from image_search_service.db.models import (
     FaceAssignmentEvent,
@@ -366,6 +367,55 @@ async def split_cluster(
         original_cluster_id=cluster_id,
         new_clusters=result.get("new_cluster_ids", []),
         status=result.get("status", "unknown"),
+    )
+
+
+# ============ Unified People Endpoint ============
+
+
+@router.get("/people", response_model=UnifiedPeopleListResponse)
+async def list_unified_people(
+    include_identified: bool = Query(True, description="Include identified persons"),
+    include_unidentified: bool = Query(True, description="Include unidentified clusters"),
+    include_noise: bool = Query(False, description="Include noise/unknown faces"),
+    sort_by: str = Query(
+        "face_count",
+        regex="^(face_count|name)$",
+        description="Sort by: face_count, name",
+    ),
+    sort_order: str = Query("desc", regex="^(asc|desc)$", description="Sort order"),
+    db: AsyncSession = Depends(get_db),
+) -> UnifiedPeopleListResponse:
+    """
+    List all people (identified and unidentified) in a unified view.
+
+    This endpoint combines:
+    - Identified people (with names from Person table)
+    - Unidentified clusters (face groups without names)
+    - Optionally noise faces (ungrouped faces)
+
+    The unified view eliminates the "Clusters" vs "People" distinction,
+    treating both as "people" with different types (identified/unidentified/noise).
+
+    Args:
+        include_identified: Include persons with assigned names
+        include_unidentified: Include face clusters without person assignment
+        include_noise: Include noise/outlier faces (cluster_id = '-1' or NULL)
+        sort_by: Field to sort by (face_count or name)
+        sort_order: Sort order (asc or desc)
+
+    Returns:
+        Unified list of people with counts broken down by type
+    """
+    from image_search_service.services.person_service import PersonService
+
+    service = PersonService(db)
+    return await service.get_all_people(
+        include_identified=include_identified,
+        include_unidentified=include_unidentified,
+        include_noise=include_noise,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
