@@ -9,6 +9,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchAny,
     MatchValue,
     PointIdsList,
     PointStruct,
@@ -74,22 +75,33 @@ def ensure_collection(embedding_dim: int) -> None:
     _collection_ensured.add(settings.qdrant_collection)
 
 
-def upsert_vector(asset_id: int, vector: list[float], payload: dict[str, str | int]) -> None:
+def upsert_vector(
+    asset_id: int,
+    vector: list[float],
+    payload: dict[str, str | int],
+    person_ids: list[str] | None = None,
+) -> None:
     """Upsert a vector point into Qdrant.
 
     Args:
         asset_id: Asset ID (used as point ID)
         vector: Embedding vector
         payload: Additional metadata (strings and integers)
+        person_ids: Optional list of person IDs detected in the image
     """
     settings = get_settings()
     client = get_qdrant_client()
 
+    # Build complete payload with person_ids
+    complete_payload = {
+        **payload,
+        "asset_id": str(asset_id),
+        "person_ids": person_ids or [],  # Always include, empty array if no faces
+    }
+
     client.upsert(
         collection_name=settings.qdrant_collection,
-        points=[
-            PointStruct(id=asset_id, vector=vector, payload={**payload, "asset_id": str(asset_id)})
-        ],
+        points=[PointStruct(id=asset_id, vector=vector, payload=complete_payload)],
     )
 
 
@@ -143,7 +155,7 @@ def search_vectors(
         query_vector: Query embedding vector
         limit: Maximum number of results
         offset: Offset for pagination
-        filters: Optional filters (from_date, to_date, category_id)
+        filters: Optional filters (from_date, to_date, category_id, personId/person_id)
         client: Optional Qdrant client (uses default if not provided)
 
     Returns:
@@ -153,7 +165,7 @@ def search_vectors(
     if client is None:
         client = get_qdrant_client()
 
-    # Build filter if date range or category_id provided
+    # Build filter if date range, category_id, or person_id provided
     qdrant_filter = None
     if filters:
         conditions: list[FieldCondition] = []
@@ -171,6 +183,24 @@ def search_vectors(
             conditions.append(
                 FieldCondition(key="category_id", match=MatchValue(value=filters["category_id"]))
             )
+        # Handle personId filter (frontend sends camelCase, also support snake_case)
+        person_id = filters.get("personId") or filters.get("person_id")
+        if person_id is not None:
+            # MatchAny expects list[str] or list[int], ensure correct type
+            if isinstance(person_id, int):
+                conditions.append(
+                    FieldCondition(
+                        key="person_ids",
+                        match=MatchAny(any=[person_id]),
+                    )
+                )
+            elif isinstance(person_id, str):
+                conditions.append(
+                    FieldCondition(
+                        key="person_ids",
+                        match=MatchAny(any=[person_id]),
+                    )
+                )
         if conditions:
             # Filter.must accepts various condition types, use type: ignore for simplicity
             qdrant_filter = Filter(must=conditions)  # type: ignore[arg-type]
@@ -581,6 +611,36 @@ def delete_orphan_vectors(
 
     except Exception as e:
         logger.error(f"Failed to delete orphan vectors: {e}")
+        raise
+
+
+def update_vector_payload(
+    asset_id: int,
+    payload_updates: dict[str, Any],
+    client: QdrantClient | None = None,
+) -> None:
+    """Update payload fields for an existing vector point without changing the vector.
+
+    This is used to keep metadata in sync (e.g., person_ids) when database state changes.
+
+    Args:
+        asset_id: The point ID (asset ID) to update
+        payload_updates: Dictionary of payload fields to update
+        client: Optional Qdrant client (uses global if not provided)
+    """
+    settings = get_settings()
+    if client is None:
+        client = get_qdrant_client()
+
+    try:
+        client.set_payload(
+            collection_name=settings.qdrant_collection,
+            points=[asset_id],
+            payload=payload_updates,
+        )
+        logger.debug(f"Updated payload for asset {asset_id}: {payload_updates}")
+    except Exception as e:
+        logger.error(f"Failed to update payload for asset {asset_id}: {e}")
         raise
 
 

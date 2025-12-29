@@ -619,6 +619,36 @@ async def merge_persons(
 
     logger.info(f"Merged person {source.name} into {target.name} ({len(faces)} faces)")
 
+    # Trigger background jobs to update person_ids for all affected assets
+    # Get unique asset IDs from the moved faces
+    affected_asset_ids = {face.asset_id for face in faces}
+    if affected_asset_ids:
+        try:
+            from redis import Redis
+            from rq import Queue
+
+            from image_search_service.core.config import get_settings
+            from image_search_service.queue.jobs import update_asset_person_ids_job
+
+            settings = get_settings()
+            redis_conn = Redis.from_url(settings.redis_url)
+            queue = Queue("default", connection=redis_conn)
+
+            for asset_id in affected_asset_ids:
+                queue.enqueue(
+                    update_asset_person_ids_job,
+                    asset_id=asset_id,
+                    job_timeout="5m",
+                )
+
+            logger.info(
+                f"Queued {len(affected_asset_ids)} person_ids update jobs for merge "
+                f"{source.name} → {target.name}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to enqueue person_ids update jobs: {e}")
+            # Don't fail the request if job queueing fails
+
     return MergePersonsResponse(
         source_person_id=person_id,
         target_person_id=target.id,
@@ -705,6 +735,34 @@ async def bulk_remove_from_person(
             f"Bulk removed {len(faces)} faces from person {person.name} "
             f"in {len(affected_photo_ids)} photos"
         )
+
+        # Trigger background jobs to update person_ids for all affected assets
+        if affected_photo_ids:
+            try:
+                from redis import Redis
+                from rq import Queue
+
+                from image_search_service.core.config import get_settings
+                from image_search_service.queue.jobs import update_asset_person_ids_job
+
+                settings = get_settings()
+                redis_conn = Redis.from_url(settings.redis_url)
+                queue = Queue("default", connection=redis_conn)
+
+                for asset_id in affected_photo_ids:
+                    queue.enqueue(
+                        update_asset_person_ids_job,
+                        asset_id=asset_id,
+                        job_timeout="5m",
+                    )
+
+                logger.info(
+                    f"Queued {len(affected_photo_ids)} person_ids update jobs for bulk remove "
+                    f"from person {person.name}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to enqueue person_ids update jobs: {e}")
+                # Don't fail the request if job queueing fails
 
         return BulkRemoveResponse(
             updated_faces=len(faces),
@@ -879,6 +937,34 @@ async def bulk_move_to_person(
             f"Bulk moved {len(faces)} faces from {source_person.name} to {target_person.name} "
             f"in {len(affected_photo_ids)} photos"
         )
+
+        # Trigger background jobs to update person_ids for all affected assets
+        if affected_photo_ids:
+            try:
+                from redis import Redis
+                from rq import Queue
+
+                from image_search_service.core.config import get_settings
+                from image_search_service.queue.jobs import update_asset_person_ids_job
+
+                settings = get_settings()
+                redis_conn = Redis.from_url(settings.redis_url)
+                queue = Queue("default", connection=redis_conn)
+
+                for asset_id in affected_photo_ids:
+                    queue.enqueue(
+                        update_asset_person_ids_job,
+                        asset_id=asset_id,
+                        job_timeout="5m",
+                    )
+
+                logger.info(
+                    f"Queued {len(affected_photo_ids)} person_ids update jobs for bulk move "
+                    f"{source_person.name} → {target_person.name}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to enqueue person_ids update jobs: {e}")
+                # Don't fail the request if job queueing fails
 
         # Trigger propagation job using the first face as source
         if faces:
@@ -1090,6 +1176,28 @@ async def assign_face_to_person(
 
         logger.info(f"Assigned face {face_id} to person {person.name} ({person.id})")
 
+        # Trigger background job to update asset's person_ids in Qdrant
+        try:
+            from redis import Redis
+            from rq import Queue
+
+            from image_search_service.core.config import get_settings
+            from image_search_service.queue.jobs import update_asset_person_ids_job
+
+            settings = get_settings()
+            redis_conn = Redis.from_url(settings.redis_url)
+            queue = Queue("default", connection=redis_conn)
+
+            queue.enqueue(
+                update_asset_person_ids_job,
+                asset_id=face.asset_id,
+                job_timeout="5m",
+            )
+            logger.info(f"Queued person_ids update job for asset {face.asset_id}")
+        except Exception as e:
+            logger.warning(f"Failed to enqueue person_ids update job: {e}")
+            # Don't fail the request if job queueing fails
+
         # Trigger propagation job using the assigned face as source
         try:
             settings = get_settings()
@@ -1185,6 +1293,28 @@ async def unassign_face_from_person(
         logger.info(
             f"Unassigned face {face_id} from person {previous_person_name} ({previous_person_id})"
         )
+
+        # Trigger background job to update asset's person_ids in Qdrant
+        try:
+            from redis import Redis
+            from rq import Queue
+
+            from image_search_service.core.config import get_settings
+            from image_search_service.queue.jobs import update_asset_person_ids_job
+
+            settings = get_settings()
+            redis_conn = Redis.from_url(settings.redis_url)
+            queue = Queue("default", connection=redis_conn)
+
+            queue.enqueue(
+                update_asset_person_ids_job,
+                asset_id=face.asset_id,
+                job_timeout="5m",
+            )
+            logger.info(f"Queued person_ids update job for asset {face.asset_id}")
+        except Exception as e:
+            logger.warning(f"Failed to enqueue person_ids update job: {e}")
+            # Don't fail the request if job queueing fails
 
         return UnassignFaceResponse(
             face_id=face.id,

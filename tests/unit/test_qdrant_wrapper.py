@@ -5,7 +5,12 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
 from image_search_service.core.config import get_settings
-from image_search_service.vector.qdrant import ensure_collection, search_vectors, upsert_vector
+from image_search_service.vector.qdrant import (
+    ensure_collection,
+    search_vectors,
+    update_vector_payload,
+    upsert_vector,
+)
 from tests.conftest import MockEmbeddingService
 
 
@@ -205,3 +210,373 @@ def test_search_empty_collection_returns_empty(
 
     # Empty collection should return empty results
     assert results == []
+
+
+# ========== Person Filter Tests (New Feature) ==========
+
+
+def test_upsert_vector_with_person_ids(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that upsert_vector includes person_ids in payload."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+    vector = mock_emb.embed_text("test image")
+
+    # Upsert with person_ids
+    upsert_vector(
+        asset_id=123,
+        vector=vector,
+        payload={"path": "/test/image.jpg"},
+        person_ids=["person-uuid-1", "person-uuid-2"],
+    )
+
+    # Verify person_ids were stored in payload
+    settings = get_settings()
+    points = qdrant_client.retrieve(
+        collection_name=settings.qdrant_collection,
+        ids=[123],
+    )
+
+    assert len(points) == 1
+    assert points[0].payload is not None
+    assert "person_ids" in points[0].payload
+    assert points[0].payload["person_ids"] == ["person-uuid-1", "person-uuid-2"]
+
+
+def test_upsert_vector_without_person_ids(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that upsert_vector uses empty array when person_ids not provided."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+    vector = mock_emb.embed_text("test image")
+
+    # Upsert without person_ids parameter
+    upsert_vector(
+        asset_id=456,
+        vector=vector,
+        payload={"path": "/test/no-faces.jpg"},
+    )
+
+    # Verify person_ids defaults to empty array
+    settings = get_settings()
+    points = qdrant_client.retrieve(
+        collection_name=settings.qdrant_collection,
+        ids=[456],
+    )
+
+    assert len(points) == 1
+    assert points[0].payload is not None
+    assert "person_ids" in points[0].payload
+    assert points[0].payload["person_ids"] == []
+
+
+def test_search_with_person_id_filter(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that search_vectors applies personId filter correctly."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert test vectors with different person_ids
+    vector1 = mock_emb.embed_text("image with person A")
+    upsert_vector(
+        asset_id=1,
+        vector=vector1,
+        payload={"path": "/test/person-a.jpg"},
+        person_ids=["person-a-uuid"],
+    )
+
+    vector2 = mock_emb.embed_text("image with person B")
+    upsert_vector(
+        asset_id=2,
+        vector=vector2,
+        payload={"path": "/test/person-b.jpg"},
+        person_ids=["person-b-uuid"],
+    )
+
+    vector3 = mock_emb.embed_text("image with both persons")
+    upsert_vector(
+        asset_id=3,
+        vector=vector3,
+        payload={"path": "/test/both.jpg"},
+        person_ids=["person-a-uuid", "person-b-uuid"],
+    )
+
+    # Search with personId filter for person A
+    query_vector = mock_emb.embed_text("search query")
+    results = search_vectors(
+        query_vector=query_vector,
+        limit=10,
+        filters={"personId": "person-a-uuid"},
+    )
+
+    # Should only return images with person A (assets 1 and 3)
+    asset_ids = {r["asset_id"] for r in results}
+    assert asset_ids == {"1", "3"}
+
+
+def test_search_with_person_id_snake_case(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that search_vectors also accepts person_id (snake_case)."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert test vector
+    vector = mock_emb.embed_text("test image")
+    upsert_vector(
+        asset_id=1,
+        vector=vector,
+        payload={"path": "/test/person.jpg"},
+        person_ids=["person-uuid-123"],
+    )
+
+    # Search with person_id (snake_case)
+    query_vector = mock_emb.embed_text("search query")
+    results = search_vectors(
+        query_vector=query_vector,
+        limit=10,
+        filters={"person_id": "person-uuid-123"},
+    )
+
+    # Should return the image
+    assert len(results) == 1
+    assert results[0]["asset_id"] == "1"
+
+
+def test_search_without_person_filter_returns_all(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that search_vectors returns all results when no personId filter."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert vectors with different person_ids
+    for i in range(3):
+        vector = mock_emb.embed_text(f"image {i}")
+        upsert_vector(
+            asset_id=i,
+            vector=vector,
+            payload={"path": f"/test/img{i}.jpg"},
+            person_ids=[f"person-{i}"],
+        )
+
+    # Search without person filter
+    query_vector = mock_emb.embed_text("search query")
+    results = search_vectors(query_vector=query_vector, limit=10, filters={})
+
+    # Should return all 3 images
+    assert len(results) == 3
+
+
+def test_search_with_combined_filters(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that search_vectors applies personId with other filters."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert vectors with category_id and person_ids
+    vector1 = mock_emb.embed_text("cat1 person A")
+    upsert_vector(
+        asset_id=1,
+        vector=vector1,
+        payload={"path": "/test/1.jpg", "category_id": 5},
+        person_ids=["person-a"],
+    )
+
+    vector2 = mock_emb.embed_text("cat2 person A")
+    upsert_vector(
+        asset_id=2,
+        vector=vector2,
+        payload={"path": "/test/2.jpg", "category_id": 10},
+        person_ids=["person-a"],
+    )
+
+    vector3 = mock_emb.embed_text("cat1 person B")
+    upsert_vector(
+        asset_id=3,
+        vector=vector3,
+        payload={"path": "/test/3.jpg", "category_id": 5},
+        person_ids=["person-b"],
+    )
+
+    # Search with both category_id and personId
+    query_vector = mock_emb.embed_text("search query")
+    results = search_vectors(
+        query_vector=query_vector,
+        limit=10,
+        filters={"category_id": 5, "personId": "person-a"},
+    )
+
+    # Should only return asset 1 (category 5 AND person A)
+    asset_ids = {r["asset_id"] for r in results}
+    assert asset_ids == {"1"}
+
+
+def test_search_with_nonexistent_person_returns_empty(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that searching for nonexistent person returns empty results."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert vector with person
+    vector = mock_emb.embed_text("test image")
+    upsert_vector(
+        asset_id=1,
+        vector=vector,
+        payload={"path": "/test/1.jpg"},
+        person_ids=["person-a"],
+    )
+
+    # Search for different person
+    query_vector = mock_emb.embed_text("search query")
+    results = search_vectors(
+        query_vector=query_vector,
+        limit=10,
+        filters={"personId": "person-nonexistent"},
+    )
+
+    # Should return empty
+    assert results == []
+
+
+def test_update_vector_payload_success(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that update_vector_payload updates Qdrant payload without changing vector."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert initial vector with empty person_ids
+    vector = mock_emb.embed_text("test image")
+    upsert_vector(
+        asset_id=123,
+        vector=vector,
+        payload={"path": "/test/image.jpg"},
+        person_ids=[],
+    )
+
+    # Update payload with person_ids
+    update_vector_payload(
+        asset_id=123,
+        payload_updates={"person_ids": ["person-1", "person-2"]},
+    )
+
+    # Verify payload was updated
+    settings = get_settings()
+    points = qdrant_client.retrieve(
+        collection_name=settings.qdrant_collection,
+        ids=[123],
+    )
+
+    assert len(points) == 1
+    assert points[0].payload is not None
+    assert points[0].payload["person_ids"] == ["person-1", "person-2"]
+    # Original payload should still be there
+    assert points[0].payload["path"] == "/test/image.jpg"
+
+
+def test_update_vector_payload_preserves_other_fields(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that update_vector_payload preserves other payload fields."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert vector with multiple payload fields
+    vector = mock_emb.embed_text("test image")
+    upsert_vector(
+        asset_id=456,
+        vector=vector,
+        payload={"path": "/test/image.jpg", "category_id": 5},
+        person_ids=["old-person"],
+    )
+
+    # Update only person_ids
+    update_vector_payload(
+        asset_id=456,
+        payload_updates={"person_ids": ["new-person-1", "new-person-2"]},
+    )
+
+    # Verify all fields are preserved
+    settings = get_settings()
+    points = qdrant_client.retrieve(
+        collection_name=settings.qdrant_collection,
+        ids=[456],
+    )
+
+    assert len(points) == 1
+    payload = points[0].payload
+    assert payload is not None
+    assert payload["person_ids"] == ["new-person-1", "new-person-2"]
+    assert payload["path"] == "/test/image.jpg"
+    assert payload["category_id"] == 5
+    assert payload["asset_id"] == "456"
+
+
+def test_update_vector_payload_with_empty_array(
+    qdrant_client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that update_vector_payload can clear person_ids with empty array."""
+    monkeypatch.setattr(
+        "image_search_service.vector.qdrant.get_qdrant_client", lambda: qdrant_client
+    )
+
+    mock_emb = MockEmbeddingService()
+
+    # Insert vector with person_ids
+    vector = mock_emb.embed_text("test image")
+    upsert_vector(
+        asset_id=789,
+        vector=vector,
+        payload={"path": "/test/image.jpg"},
+        person_ids=["person-1", "person-2"],
+    )
+
+    # Clear person_ids
+    update_vector_payload(
+        asset_id=789,
+        payload_updates={"person_ids": []},
+    )
+
+    # Verify person_ids is now empty
+    settings = get_settings()
+    points = qdrant_client.retrieve(
+        collection_name=settings.qdrant_collection,
+        ids=[789],
+    )
+
+    assert len(points) == 1
+    assert points[0].payload is not None
+    assert points[0].payload["person_ids"] == []
