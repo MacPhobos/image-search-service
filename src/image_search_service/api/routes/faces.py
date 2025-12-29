@@ -1572,14 +1572,37 @@ async def recompute_prototypes_endpoint(
     request: RecomputePrototypesRequest,
     db: AsyncSession = Depends(get_db),
 ) -> RecomputePrototypesResponse:
-    """Trigger temporal re-diversification of prototypes."""
-    # TODO: Implement in Phase 4
-    # For now, return placeholder response
-    from image_search_service.services import prototype_service
+    """Trigger temporal re-diversification of prototypes.
 
-    coverage = await prototype_service.get_temporal_coverage(db, person_id)
+    This endpoint recomputes prototypes with temporal diversity:
+    - Ensures coverage across age eras
+    - Respects pinned prototypes (if preserve_pins=True)
+    - Prunes excess prototypes while maintaining quality
+    """
+    from image_search_service.services import prototype_service
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # Get Qdrant client
+    qdrant = get_face_qdrant_client()
+
+    # Execute recomputation
+    result = await prototype_service.recompute_prototypes_for_person(
+        db=db,
+        qdrant=qdrant,
+        person_id=person_id,
+        preserve_pins=request.preserve_pins,
+    )
+
+    # Extract results
+    prototypes_created = result["prototypes_created"]
+    prototypes_removed = result["prototypes_removed"]
+    coverage = result["coverage"]
 
     # Cast dict values to expected types
+    assert isinstance(prototypes_created, int)
+    assert isinstance(prototypes_removed, int)
+    assert isinstance(coverage, dict)
+
     covered_eras = coverage["covered_eras"]
     missing_eras = coverage["missing_eras"]
     coverage_percentage = coverage["coverage_percentage"]
@@ -1591,8 +1614,8 @@ async def recompute_prototypes_endpoint(
     assert isinstance(total_prototypes, int)
 
     return RecomputePrototypesResponse(
-        prototypes_created=0,
-        prototypes_removed=0,
+        prototypes_created=prototypes_created,
+        prototypes_removed=prototypes_removed,
         coverage=TemporalCoverage(
             covered_eras=covered_eras,
             missing_eras=missing_eras,

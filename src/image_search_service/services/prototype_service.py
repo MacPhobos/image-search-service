@@ -23,7 +23,7 @@ from image_search_service.vector.face_qdrant import FaceQdrantClient
 logger = logging.getLogger(__name__)
 
 
-async def create_or_update_prototypes(
+async def create_or_update_prototypes_legacy(
     db: AsyncSession,
     qdrant: FaceQdrantClient,
     person_id: UUID,
@@ -31,12 +31,10 @@ async def create_or_update_prototypes(
     max_exemplars: int = 5,
     min_quality_threshold: float = 0.5,
 ) -> PersonPrototype | None:
-    """Create prototype from newly labeled face, then prune if needed.
+    """Legacy prototype creation (pre-temporal mode).
 
-    This function is called whenever a user assigns a face to a person. It:
-    1. Checks if the face meets quality requirements
-    2. Creates a new prototype if it doesn't already exist
-    3. Prunes excess prototypes if the person exceeds max_exemplars
+    This is the original implementation used when temporal mode is disabled.
+    It creates EXEMPLAR prototypes and prunes based on quality only.
 
     Args:
         db: Async database session
@@ -119,6 +117,192 @@ async def create_or_update_prototypes(
         await prune_prototypes(db, qdrant, person_id, all_exemplars, max_exemplars)
 
     return prototype
+
+
+async def create_or_update_prototypes_temporal(
+    db: AsyncSession,
+    qdrant: FaceQdrantClient,
+    person_id: UUID,
+    newly_labeled_face_id: UUID,
+) -> PersonPrototype | None:
+    """Temporal-aware prototype creation (Phase 4).
+
+    When temporal mode is enabled, this function:
+    1. Checks if the face can be a prototype (quality threshold)
+    2. Classifies the face by age era
+    3. Creates/updates prototype with TEMPORAL role if era needs coverage
+    4. Otherwise creates EXEMPLAR if slots available
+    5. Triggers pruning if exceeding max_total
+
+    Args:
+        db: Async database session
+        qdrant: Qdrant client for vector operations
+        person_id: UUID of the person
+        newly_labeled_face_id: UUID of the newly labeled face
+
+    Returns:
+        PersonPrototype if created/updated, None if skipped
+    """
+    from sqlalchemy.orm import selectinload
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.services import temporal_service
+
+    settings = get_settings()
+
+    # Step 1: Get face with asset for temporal metadata
+    face_query = (
+        select(FaceInstance)
+        .options(selectinload(FaceInstance.asset))
+        .where(FaceInstance.id == newly_labeled_face_id)
+    )
+    result = await db.execute(face_query)
+    face = result.scalar_one_or_none()
+
+    if not face:
+        logger.warning(f"Face {newly_labeled_face_id} not found, cannot create prototype")
+        return None
+
+    # Step 2: Check quality threshold
+    if face.quality_score is None or face.quality_score < settings.face_prototype_min_quality:
+        logger.debug(
+            f"Skipping prototype creation for face {newly_labeled_face_id}: "
+            f"quality {face.quality_score} < threshold {settings.face_prototype_min_quality}"
+        )
+        return None
+
+    # Step 3: Classify face by age era
+    temporal_meta = temporal_service.extract_temporal_metadata(face.landmarks)
+    age_era = temporal_service.classify_age_era(temporal_meta.get("age_estimate"))
+
+    # Step 4: Check if prototype already exists for this face
+    existing_proto_query = select(PersonPrototype).where(
+        PersonPrototype.face_instance_id == newly_labeled_face_id
+    )
+    existing_proto_result = await db.execute(existing_proto_query)
+    existing_proto = existing_proto_result.scalar_one_or_none()
+
+    # Step 5: Determine if this era needs coverage
+    needs_era_coverage = False
+    if age_era:
+        era_value = age_era.value
+        # Check if era already has a prototype
+        era_proto_query = select(func.count()).where(
+            PersonPrototype.person_id == person_id,
+            PersonPrototype.age_era_bucket == era_value,
+        )
+        result = await db.execute(era_proto_query)
+        era_count = result.scalar() or 0
+        needs_era_coverage = era_count == 0
+
+    # Step 6: Assign role based on era coverage need
+    era_bucket: str | None
+    if needs_era_coverage and age_era:
+        role = PrototypeRole.TEMPORAL
+        era_bucket = age_era.value
+        logger.info(
+            f"Face {newly_labeled_face_id} fills gap for era {era_bucket}, "
+            f"assigning TEMPORAL role"
+        )
+    else:
+        role = PrototypeRole.EXEMPLAR
+        era_bucket = age_era.value if age_era else None
+
+    # Step 7: Create or update prototype
+    if existing_proto:
+        # Update existing prototype
+        existing_proto.role = role
+        existing_proto.age_era_bucket = era_bucket
+        prototype = existing_proto
+        logger.debug(f"Updated existing prototype {prototype.id} with role {role.value}")
+    else:
+        # Create new prototype
+        prototype = PersonPrototype(
+            person_id=person_id,
+            face_instance_id=face.id,
+            qdrant_point_id=face.qdrant_point_id,
+            role=role,
+            age_era_bucket=era_bucket,
+        )
+        db.add(prototype)
+        logger.info(
+            f"Created {role.value} prototype for person {person_id} "
+            f"(face {newly_labeled_face_id}, era={era_bucket})"
+        )
+
+    await db.flush()
+
+    # Step 8: Update Qdrant
+    try:
+        qdrant.update_payload(face.qdrant_point_id, {"is_prototype": True})
+    except Exception as e:
+        logger.error(f"Failed to update Qdrant payload for prototype {prototype.id}: {e}")
+
+    # Step 9: Check if pruning needed
+    all_protos = await get_prototypes_for_person(db, person_id)
+    if len(all_protos) > settings.face_prototype_max_total:
+        logger.info(
+            f"Person {person_id} has {len(all_protos)} prototypes, "
+            f"pruning to {settings.face_prototype_max_total}"
+        )
+        await prune_temporal_prototypes(
+            db=db,
+            qdrant=qdrant,
+            person_id=person_id,
+            max_total=settings.face_prototype_max_total,
+            preserve_pins=True,
+        )
+
+    return prototype
+
+
+async def create_or_update_prototypes(
+    db: AsyncSession,
+    qdrant: FaceQdrantClient,
+    person_id: UUID,
+    newly_labeled_face_id: UUID,
+    max_exemplars: int = 5,
+    min_quality_threshold: float = 0.5,
+) -> PersonPrototype | None:
+    """Create prototype from newly labeled face - temporal-aware if enabled.
+
+    This is the main entry point for prototype creation. It delegates to either:
+    - create_or_update_prototypes_temporal (when FACE_PROTOTYPE_TEMPORAL_MODE=True)
+    - create_or_update_prototypes_legacy (when FACE_PROTOTYPE_TEMPORAL_MODE=False)
+
+    Args:
+        db: Async database session
+        qdrant: Qdrant client for vector operations
+        person_id: UUID of the person to create prototype for
+        newly_labeled_face_id: UUID of the face instance that was just labeled
+        max_exemplars: Maximum exemplars (ignored in temporal mode)
+        min_quality_threshold: Minimum quality (ignored in temporal mode, uses config)
+
+    Returns:
+        PersonPrototype if created, None if skipped
+    """
+    from image_search_service.core.config import get_settings
+
+    settings = get_settings()
+
+    if settings.face_prototype_temporal_mode:
+        # Use temporal-aware implementation
+        return await create_or_update_prototypes_temporal(
+            db=db,
+            qdrant=qdrant,
+            person_id=person_id,
+            newly_labeled_face_id=newly_labeled_face_id,
+        )
+    else:
+        # Use legacy implementation for backward compatibility
+        return await create_or_update_prototypes_legacy(
+            db=db,
+            qdrant=qdrant,
+            person_id=person_id,
+            newly_labeled_face_id=newly_labeled_face_id,
+            max_exemplars=max_exemplars,
+            min_quality_threshold=min_quality_threshold,
+        )
 
 
 async def prune_prototypes(
@@ -550,4 +734,421 @@ async def get_temporal_coverage(
         "missing_eras": sorted(list(missing_eras)),
         "coverage_percentage": coverage_percentage,
         "total_prototypes": len(prototypes),
+    }
+
+
+# ============ Phase 4: Smart Selection Service ============
+
+
+async def get_faces_with_temporal_metadata(
+    db: AsyncSession,
+    person_id: UUID,
+) -> list[FaceInstance]:
+    """Get all verified faces for person with temporal metadata extracted.
+
+    Returns faces joined with their asset metadata for temporal classification.
+
+    Args:
+        db: Async database session
+        person_id: UUID of the person
+
+    Returns:
+        List of FaceInstance objects (asset relationship eager-loaded)
+    """
+    from sqlalchemy.orm import selectinload
+
+    # Query faces with asset relationship for photo timestamp
+    query = (
+        select(FaceInstance)
+        .options(selectinload(FaceInstance.asset))
+        .where(FaceInstance.person_id == person_id)
+        .order_by(FaceInstance.quality_score.desc().nulls_last())
+    )
+
+    result = await db.execute(query)
+    faces = list(result.scalars().all())
+
+    return faces
+
+
+async def select_temporal_prototypes(
+    db: AsyncSession,
+    qdrant: FaceQdrantClient,
+    person_id: UUID,
+    preserve_pins: bool = True,
+) -> list[PersonPrototype]:
+    """Select prototypes ensuring temporal diversity across age eras.
+
+    Strategy:
+    1. Keep all pinned prototypes (if preserve_pins=True)
+    2. For each era without a pinned prototype:
+       - Select highest quality face from that era
+       - Assign TEMPORAL role
+    3. Fill remaining slots with EXEMPLAR (best quality overall)
+    4. Use FALLBACK for low-quality era representatives
+
+    Args:
+        db: Async database session
+        qdrant: Qdrant client for vector operations
+        person_id: UUID of the person
+        preserve_pins: If True, preserve pinned prototypes
+
+    Returns:
+        List of newly created/updated prototypes
+    """
+    from image_search_service.core.config import get_settings
+    from image_search_service.db.models import AgeEraBucket
+    from image_search_service.services import temporal_service
+
+    settings = get_settings()
+
+    # Get all faces with temporal metadata
+    faces = await get_faces_with_temporal_metadata(db, person_id)
+
+    if not faces:
+        logger.info(f"No faces found for person {person_id}, skipping prototype selection")
+        return []
+
+    # Classify faces by age era
+    face_by_era: dict[str, list[tuple[FaceInstance, float]]] = {}
+    for face in faces:
+        # Extract temporal metadata from landmarks
+        temporal_meta = temporal_service.extract_temporal_metadata(face.landmarks)
+        age_era = temporal_service.classify_age_era(temporal_meta.get("age_estimate"))
+
+        if age_era:
+            era_bucket = age_era.value
+
+            # Compute temporal quality score
+            base_quality = face.quality_score or 0.0
+            temporal_quality = temporal_service.compute_temporal_quality_score(
+                base_quality=base_quality,
+                pose=temporal_meta.get("pose"),
+                bbox_area=temporal_meta.get("bbox_area"),
+                age_confidence=temporal_meta.get("age_confidence"),
+            )
+
+            if era_bucket not in face_by_era:
+                face_by_era[era_bucket] = []
+            face_by_era[era_bucket].append((face, temporal_quality))
+
+    # Sort faces within each era by quality (descending)
+    for era in face_by_era:
+        face_by_era[era].sort(key=lambda x: x[1], reverse=True)
+
+    # Get existing prototypes to identify pinned ones
+    existing_protos = await get_prototypes_for_person(db, person_id)
+    pinned_protos = [p for p in existing_protos if p.is_pinned] if preserve_pins else []
+    pinned_eras = {p.age_era_bucket for p in pinned_protos if p.age_era_bucket}
+    pinned_face_ids = {p.face_instance_id for p in pinned_protos if p.face_instance_id}
+
+    # Select prototypes: one per era (unless already pinned)
+    selected_protos: list[PersonPrototype] = []
+    used_face_ids = pinned_face_ids.copy()
+
+    # Phase 1: Select TEMPORAL prototypes for uncovered eras
+    for era in AgeEraBucket:
+        era_value = era.value
+
+        # Skip if era already has pinned prototype
+        if era_value in pinned_eras:
+            continue
+
+        # Skip if no faces in this era
+        if era_value not in face_by_era:
+            continue
+
+        # Select highest quality face from this era
+        for face, quality in face_by_era[era_value]:
+            if face.id not in used_face_ids:
+                # Determine role based on quality threshold
+                role = (
+                    PrototypeRole.TEMPORAL
+                    if quality >= settings.face_prototype_min_quality
+                    else PrototypeRole.FALLBACK
+                )
+
+                # Check if prototype already exists for this face
+                existing_proto_query = select(PersonPrototype).where(
+                    PersonPrototype.face_instance_id == face.id
+                )
+                result = await db.execute(existing_proto_query)
+                existing_proto = result.scalar_one_or_none()
+
+                if existing_proto:
+                    # Update existing prototype
+                    existing_proto.role = role
+                    existing_proto.age_era_bucket = era_value
+                    prototype = existing_proto
+                else:
+                    # Create new prototype
+                    prototype = PersonPrototype(
+                        person_id=person_id,
+                        face_instance_id=face.id,
+                        qdrant_point_id=face.qdrant_point_id,
+                        role=role,
+                        age_era_bucket=era_value,
+                    )
+                    db.add(prototype)
+
+                await db.flush()
+
+                # Update Qdrant
+                try:
+                    qdrant.update_payload(face.qdrant_point_id, {"is_prototype": True})
+                except Exception as e:
+                    logger.error(f"Failed to update Qdrant for prototype {prototype.id}: {e}")
+
+                selected_protos.append(prototype)
+                used_face_ids.add(face.id)
+                logger.info(
+                    f"Selected {role.value} prototype for era {era_value} "
+                    f"(face {face.id}, quality={quality:.2f})"
+                )
+                break
+
+    # Phase 2: Fill remaining slots with EXEMPLAR (highest quality overall)
+    max_total = settings.face_prototype_max_total
+    current_count = len(pinned_protos) + len(selected_protos)
+
+    if current_count < max_total:
+        # Get all faces sorted by quality
+        all_faces_sorted = sorted(
+            [(f, f.quality_score or 0.0) for f in faces], key=lambda x: x[1], reverse=True
+        )
+
+        for face, quality in all_faces_sorted:
+            if current_count >= max_total:
+                break
+
+            if face.id in used_face_ids:
+                continue
+
+            if quality < settings.face_prototype_min_quality:
+                continue
+
+            # Check if prototype already exists
+            existing_proto_query = select(PersonPrototype).where(
+                PersonPrototype.face_instance_id == face.id
+            )
+            result = await db.execute(existing_proto_query)
+            existing_proto = result.scalar_one_or_none()
+
+            if existing_proto:
+                existing_proto.role = PrototypeRole.EXEMPLAR
+                prototype = existing_proto
+            else:
+                prototype = PersonPrototype(
+                    person_id=person_id,
+                    face_instance_id=face.id,
+                    qdrant_point_id=face.qdrant_point_id,
+                    role=PrototypeRole.EXEMPLAR,
+                )
+                db.add(prototype)
+
+            await db.flush()
+
+            try:
+                qdrant.update_payload(face.qdrant_point_id, {"is_prototype": True})
+            except Exception as e:
+                logger.error(f"Failed to update Qdrant for prototype {prototype.id}: {e}")
+
+            selected_protos.append(prototype)
+            used_face_ids.add(face.id)
+            current_count += 1
+            logger.info(
+                f"Selected EXEMPLAR prototype (face {face.id}, quality={quality:.2f})"
+            )
+
+    return selected_protos
+
+
+async def prune_temporal_prototypes(
+    db: AsyncSession,
+    qdrant: FaceQdrantClient,
+    person_id: UUID,
+    max_total: int,
+    preserve_pins: bool = True,
+) -> list[UUID]:
+    """Prune prototypes to max_total while respecting temporal coverage.
+
+    Priority (highest to lowest):
+    1. Pinned PRIMARY prototypes (never pruned if preserve_pins=True)
+    2. Pinned TEMPORAL prototypes per era
+    3. Auto-selected TEMPORAL prototypes (one per era)
+    4. EXEMPLAR prototypes (fill remaining)
+    5. FALLBACK prototypes (only when no better option)
+
+    Args:
+        db: Async database session
+        qdrant: Qdrant client for vector operations
+        person_id: UUID of the person
+        max_total: Maximum total prototypes allowed
+        preserve_pins: If True, never prune pinned prototypes
+
+    Returns:
+        List of deleted prototype IDs
+    """
+    # Get all prototypes
+    all_protos = await get_prototypes_for_person(db, person_id)
+
+    if len(all_protos) <= max_total:
+        return []
+
+    # Separate pinned and unpinned
+    pinned = [p for p in all_protos if p.is_pinned and preserve_pins]
+    unpinned = [p for p in all_protos if not (p.is_pinned and preserve_pins)]
+
+    # If pinned prototypes exceed limit, we have a problem
+    if len(pinned) > max_total:
+        logger.warning(
+            f"Person {person_id} has {len(pinned)} pinned prototypes "
+            f"exceeding max_total={max_total}"
+        )
+        # Don't prune pinned if preserve_pins=True
+        return []
+
+    # Calculate how many unpinned we can keep
+    slots_available = max_total - len(pinned)
+
+    if slots_available <= 0:
+        # Must prune all unpinned
+        to_delete = unpinned
+    else:
+        # Priority sort unpinned prototypes
+        # Priority: TEMPORAL > EXEMPLAR > FALLBACK
+        # Within priority, keep highest quality
+
+        # Load face instances for quality scores
+        face_ids = [p.face_instance_id for p in unpinned if p.face_instance_id]
+        if face_ids:
+            face_query = select(FaceInstance).where(FaceInstance.id.in_(face_ids))
+            result = await db.execute(face_query)
+            faces_by_id = {f.id: f for f in result.scalars().all()}
+        else:
+            faces_by_id = {}
+
+        # Build priority list
+        proto_priority: list[tuple[PersonPrototype, int, float]] = []
+        for proto in unpinned:
+            # Assign priority score (higher = keep)
+            if proto.role == PrototypeRole.TEMPORAL:
+                priority = 3
+            elif proto.role == PrototypeRole.EXEMPLAR:
+                priority = 2
+            elif proto.role == PrototypeRole.FALLBACK:
+                priority = 1
+            else:
+                priority = 0  # CENTROID, etc.
+
+            # Get quality score
+            quality = 0.0
+            if proto.face_instance_id and proto.face_instance_id in faces_by_id:
+                face = faces_by_id[proto.face_instance_id]
+                quality = face.quality_score or 0.0
+
+            proto_priority.append((proto, priority, quality))
+
+        # Sort by priority (desc), then quality (desc)
+        proto_priority.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
+        # Keep top slots_available, delete rest
+        to_delete = [p[0] for p in proto_priority[slots_available:]]
+
+    # Delete prototypes
+    deleted_ids: list[UUID] = []
+    for proto in to_delete:
+        deleted_ids.append(proto.id)
+
+        # Update Qdrant
+        try:
+            qdrant.update_payload(proto.qdrant_point_id, {"is_prototype": False})
+        except Exception as e:
+            logger.error(f"Failed to update Qdrant for deleted prototype {proto.id}: {e}")
+
+        await db.delete(proto)
+
+    await db.flush()
+
+    logger.info(
+        f"Pruned {len(deleted_ids)} prototypes for person {person_id}, "
+        f"kept {len(all_protos) - len(deleted_ids)}"
+    )
+
+    return deleted_ids
+
+
+async def recompute_prototypes_for_person(
+    db: AsyncSession,
+    qdrant: FaceQdrantClient,
+    person_id: UUID,
+    preserve_pins: bool = True,
+) -> dict[str, int | dict[str, list[str] | float | int]]:
+    """Full recomputation of prototypes with temporal diversity.
+
+    This orchestrator function:
+    1. Selects temporal prototypes ensuring era coverage
+    2. Prunes excess prototypes while respecting pins and temporal coverage
+    3. Recalculates coverage statistics
+
+    Args:
+        db: Async database session
+        qdrant: Qdrant client for vector operations
+        person_id: UUID of the person
+        preserve_pins: If True, preserve pinned prototypes
+
+    Returns:
+        Dict with:
+            - prototypes_created: int
+            - prototypes_removed: int
+            - coverage: TemporalCoverage dict
+    """
+    from image_search_service.core.config import get_settings
+
+    settings = get_settings()
+
+    # Count prototypes before
+    initial_protos = await get_prototypes_for_person(db, person_id)
+    initial_count = len(initial_protos)
+
+    # Phase 1: Select temporal prototypes
+    await select_temporal_prototypes(
+        db=db,
+        qdrant=qdrant,
+        person_id=person_id,
+        preserve_pins=preserve_pins,
+    )
+
+    # Phase 2: Prune if needed
+    deleted_ids = await prune_temporal_prototypes(
+        db=db,
+        qdrant=qdrant,
+        person_id=person_id,
+        max_total=settings.face_prototype_max_total,
+        preserve_pins=preserve_pins,
+    )
+
+    # Commit changes
+    await db.commit()
+
+    # Phase 3: Calculate coverage
+    coverage = await get_temporal_coverage(db, person_id)
+
+    # Count final prototypes
+    final_protos = await get_prototypes_for_person(db, person_id)
+    final_count = len(final_protos)
+
+    prototypes_created = max(0, final_count - initial_count + len(deleted_ids))
+    prototypes_removed = len(deleted_ids)
+
+    logger.info(
+        f"Recomputed prototypes for person {person_id}: "
+        f"created={prototypes_created}, removed={prototypes_removed}, "
+        f"coverage={coverage['coverage_percentage']:.1f}%"
+    )
+
+    return {
+        "prototypes_created": prototypes_created,
+        "prototypes_removed": prototypes_removed,
+        "coverage": coverage,
     }
