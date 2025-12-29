@@ -1512,6 +1512,10 @@ async def list_prototypes_endpoint(
     for proto in prototypes:
         face = faces_map.get(proto.face_instance_id) if proto.face_instance_id else None
         quality_score = face.quality_score if face else None
+        # Construct thumbnail URL if face and asset exist
+        thumbnail_url = (
+            f"/api/v1/images/{face.asset_id}/thumbnail" if face and face.asset_id else None
+        )
 
         items.append(
             PrototypeListItem(
@@ -1523,6 +1527,7 @@ async def list_prototypes_endpoint(
                 is_pinned=proto.is_pinned,
                 quality_score=quality_score,
                 created_at=proto.created_at,
+                thumbnail_url=thumbnail_url,
             )
         )
 

@@ -402,6 +402,7 @@ class PrototypeListItem(CamelCaseModel):
     is_pinned: bool
     quality_score: float | None
     created_at: datetime
+    thumbnail_url: str | None = None
 
 
 class TemporalCoverage(CamelCaseModel):
