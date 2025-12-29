@@ -38,8 +38,15 @@ from image_search_service.api.face_schemas import (
     PersonPhotoGroup,
     PersonPhotosResponse,
     PersonResponse,
+    PinPrototypeRequest,
+    PinPrototypeResponse,
+    PrototypeListItem,
+    PrototypeListResponse,
+    RecomputePrototypesRequest,
+    RecomputePrototypesResponse,
     SplitClusterRequest,
     SplitClusterResponse,
+    TemporalCoverage,
     TrainMatchingRequest,
     TrainMatchingResponse,
     TriggerClusteringRequest,
@@ -1400,6 +1407,199 @@ async def train_face_matching(
             checkpoint_path=request.checkpoint_path,
         )
         return TrainMatchingResponse(status="completed", result=result)
+
+
+# ============ Prototype Management Endpoints ============
+
+
+@router.post(
+    "/persons/{person_id}/prototypes/pin",
+    response_model=PinPrototypeResponse,
+    summary="Pin face as prototype",
+)
+async def pin_prototype_endpoint(
+    person_id: UUID,
+    request: PinPrototypeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> PinPrototypeResponse:
+    """Pin a face as prototype with optional era assignment.
+
+    Quotas:
+    - Max 3 PRIMARY pins per person
+    - Max 1 TEMPORAL pin per era bucket
+    """
+    from image_search_service.services import prototype_service
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    qdrant = get_face_qdrant_client()
+
+    prototype = await prototype_service.pin_prototype(
+        db=db,
+        qdrant=qdrant,
+        person_id=person_id,
+        face_instance_id=request.face_instance_id,
+        age_era_bucket=request.age_era_bucket,
+        role=request.role,
+        pinned_by=None,  # TODO: Add authentication
+    )
+
+    await db.commit()
+
+    return PinPrototypeResponse(
+        prototype_id=prototype.id,
+        role=prototype.role.value,
+        age_era_bucket=prototype.age_era_bucket,
+        is_pinned=prototype.is_pinned,
+        created_at=prototype.created_at,
+    )
+
+
+@router.delete(
+    "/persons/{person_id}/prototypes/{prototype_id}/pin",
+    summary="Unpin prototype",
+)
+async def unpin_prototype_endpoint(
+    person_id: UUID,
+    prototype_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Unpin a prototype. The slot may be filled automatically."""
+    from image_search_service.services import prototype_service
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    qdrant = get_face_qdrant_client()
+
+    await prototype_service.unpin_prototype(
+        db=db,
+        qdrant=qdrant,
+        person_id=person_id,
+        prototype_id=prototype_id,
+    )
+
+    await db.commit()
+
+    return {"status": "unpinned"}
+
+
+@router.get(
+    "/persons/{person_id}/prototypes",
+    response_model=PrototypeListResponse,
+    summary="List prototypes",
+)
+async def list_prototypes_endpoint(
+    person_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> PrototypeListResponse:
+    """List all prototypes with temporal breakdown and coverage stats."""
+    from image_search_service.services import prototype_service
+
+    # Get prototypes
+    prototypes = await prototype_service.get_prototypes_for_person(db, person_id)
+
+    # Get coverage stats
+    coverage = await prototype_service.get_temporal_coverage(db, person_id)
+
+    # Load face instances for quality scores
+    face_ids = [p.face_instance_id for p in prototypes if p.face_instance_id]
+    faces_map = {}
+    if face_ids:
+        face_query = select(FaceInstance).where(FaceInstance.id.in_(face_ids))
+        face_result = await db.execute(face_query)
+        faces_map = {f.id: f for f in face_result.scalars().all()}
+
+    # Build response items
+    items = []
+    for proto in prototypes:
+        face = faces_map.get(proto.face_instance_id) if proto.face_instance_id else None
+        quality_score = face.quality_score if face else None
+
+        items.append(
+            PrototypeListItem(
+                id=proto.id,
+                face_instance_id=proto.face_instance_id,
+                role=proto.role.value,
+                age_era_bucket=proto.age_era_bucket,
+                decade_bucket=proto.decade_bucket,
+                is_pinned=proto.is_pinned,
+                quality_score=quality_score,
+                created_at=proto.created_at,
+            )
+        )
+
+    # Cast dict values to expected types
+    covered_eras = coverage["covered_eras"]
+    missing_eras = coverage["missing_eras"]
+    coverage_percentage = coverage["coverage_percentage"]
+    total_prototypes = coverage["total_prototypes"]
+
+    assert isinstance(covered_eras, list)
+    assert isinstance(missing_eras, list)
+    assert isinstance(coverage_percentage, float)
+    assert isinstance(total_prototypes, int)
+
+    return PrototypeListResponse(
+        items=items,
+        coverage=TemporalCoverage(
+            covered_eras=covered_eras,
+            missing_eras=missing_eras,
+            coverage_percentage=coverage_percentage,
+            total_prototypes=total_prototypes,
+        ),
+    )
+
+
+@router.get(
+    "/persons/{person_id}/temporal-coverage",
+    summary="Get temporal coverage",
+)
+async def get_temporal_coverage_endpoint(
+    person_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, list[str] | float | int]:
+    """Get detailed temporal coverage report for a person."""
+    from image_search_service.services import prototype_service
+
+    return await prototype_service.get_temporal_coverage(db, person_id)
+
+
+@router.post(
+    "/persons/{person_id}/prototypes/recompute",
+    response_model=RecomputePrototypesResponse,
+    summary="Recompute prototypes",
+)
+async def recompute_prototypes_endpoint(
+    person_id: UUID,
+    request: RecomputePrototypesRequest,
+    db: AsyncSession = Depends(get_db),
+) -> RecomputePrototypesResponse:
+    """Trigger temporal re-diversification of prototypes."""
+    # TODO: Implement in Phase 4
+    # For now, return placeholder response
+    from image_search_service.services import prototype_service
+
+    coverage = await prototype_service.get_temporal_coverage(db, person_id)
+
+    # Cast dict values to expected types
+    covered_eras = coverage["covered_eras"]
+    missing_eras = coverage["missing_eras"]
+    coverage_percentage = coverage["coverage_percentage"]
+    total_prototypes = coverage["total_prototypes"]
+
+    assert isinstance(covered_eras, list)
+    assert isinstance(missing_eras, list)
+    assert isinstance(coverage_percentage, float)
+    assert isinstance(total_prototypes, int)
+
+    return RecomputePrototypesResponse(
+        prototypes_created=0,
+        prototypes_removed=0,
+        coverage=TemporalCoverage(
+            covered_eras=covered_eras,
+            missing_eras=missing_eras,
+            coverage_percentage=coverage_percentage,
+            total_prototypes=total_prototypes,
+        ),
+    )
 
 
 # ============ Helper Functions ============

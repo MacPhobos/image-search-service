@@ -367,3 +367,68 @@ class FaceSuggestionsResponse(CamelCaseModel):
     face_id: UUID
     suggestions: list[FaceSuggestionItem]
     threshold_used: float
+
+
+# ============ Prototype Management Schemas ============
+
+
+class PinPrototypeRequest(CamelCaseModel):
+    """Request to pin a face as prototype."""
+
+    face_instance_id: UUID
+    age_era_bucket: str | None = None  # Optional era association
+    role: str = "temporal"  # "primary" or "temporal"
+    note: str | None = None  # Optional user note
+
+
+class PinPrototypeResponse(CamelCaseModel):
+    """Response from pinning a prototype."""
+
+    prototype_id: UUID
+    role: str
+    age_era_bucket: str | None
+    is_pinned: bool
+    created_at: datetime
+
+
+class PrototypeListItem(CamelCaseModel):
+    """Single prototype in listing."""
+
+    id: UUID
+    face_instance_id: UUID | None
+    role: str
+    age_era_bucket: str | None
+    decade_bucket: str | None
+    is_pinned: bool
+    quality_score: float | None
+    created_at: datetime
+
+
+class TemporalCoverage(CamelCaseModel):
+    """Temporal coverage information."""
+
+    covered_eras: list[str]
+    missing_eras: list[str]
+    coverage_percentage: float
+    total_prototypes: int
+
+
+class PrototypeListResponse(CamelCaseModel):
+    """Response with prototypes and coverage."""
+
+    items: list[PrototypeListItem]
+    coverage: TemporalCoverage
+
+
+class RecomputePrototypesRequest(CamelCaseModel):
+    """Request to recompute prototypes."""
+
+    preserve_pins: bool = True
+
+
+class RecomputePrototypesResponse(CamelCaseModel):
+    """Response from prototype recomputation."""
+
+    prototypes_created: int
+    prototypes_removed: int
+    coverage: TemporalCoverage
