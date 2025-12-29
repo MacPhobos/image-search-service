@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 import numpy as np
 
+from image_search_service.core.config import get_settings
 from image_search_service.core.device import get_onnx_providers
 
 logger = logging.getLogger(__name__)
@@ -27,15 +28,16 @@ def _ensure_model_loaded() -> Any:
         try:
             from insightface.app import FaceAnalysis
 
+            settings = get_settings()
             providers = get_onnx_providers()
             _face_analysis = FaceAnalysis(
-                name="buffalo_l",  # Good balance of speed/accuracy
+                name=settings.face_model_name,
                 providers=providers,
             )
             ctx_id = 0 if _has_gpu_provider() else -1
             _face_analysis.prepare(ctx_id=ctx_id, det_size=(640, 640))
             provider_name = providers[0] if providers else "CPU"
-            logger.info(f"Loaded InsightFace model (buffalo_l) with {provider_name}")
+            logger.info(f"Loaded InsightFace model ({settings.face_model_name}) with {provider_name}")
         except ImportError as e:
             logger.error("InsightFace not installed. Run: pip install insightface onnxruntime-gpu")
             raise ImportError(
