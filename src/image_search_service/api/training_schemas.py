@@ -214,6 +214,11 @@ class DirectoryInfo(BaseModel):
     image_count: int = Field(alias="imageCount")
     selected: bool = False
 
+    # Training status metadata (optional, populated when include_training_status=true)
+    trained_count: int | None = Field(None, alias="trainedCount")
+    last_trained_at: datetime | None = Field(None, alias="lastTrainedAt")
+    training_status: str | None = Field(None, alias="trainingStatus")
+
 
 class DirectoryScanResponse(BaseModel):
     """Response from directory scan operation."""

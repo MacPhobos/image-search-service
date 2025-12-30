@@ -223,11 +223,20 @@ async def scan_directory(data: DirectoryScanRequest) -> DirectoryScanResponse:
 
 
 @router.get("/directories", response_model=list[DirectoryInfo])
-async def list_directories(path: str = Query(...)) -> list[DirectoryInfo]:
+async def list_directories(
+    path: str = Query(..., description="Root directory path"),
+    include_training_status: bool = Query(
+        False,
+        description="Include training status metadata (requires DB lookup)",
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> list[DirectoryInfo]:
     """List subdirectories at a given path.
 
     Args:
         path: Root directory path
+        include_training_status: If True, include training status metadata
+        db: Database session
 
     Returns:
         List of subdirectory information
@@ -238,7 +247,14 @@ async def list_directories(path: str = Query(...)) -> list[DirectoryInfo]:
     dir_service = DirectoryService()
 
     try:
-        return dir_service.list_subdirectories(path)
+        subdirs = dir_service.list_subdirectories(path)
+
+        # Optionally enrich with training status
+        if include_training_status:
+            training_service = TrainingService()
+            subdirs = await training_service.enrich_with_training_status(db, subdirs, path)
+
+        return subdirs
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

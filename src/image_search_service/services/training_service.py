@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from image_search_service.api.training_schemas import (
+    DirectoryInfo,
     JobsSummary,
     ProgressStats,
     TrainingProgressResponse,
@@ -807,3 +808,80 @@ class TrainingService:
 
         logger.info(f"Reset all {len(all_jobs)} jobs for session {session_id}")
         return len(all_jobs)
+
+    async def enrich_with_training_status(
+        self, db: AsyncSession, subdirs: list[DirectoryInfo], root_path: str
+    ) -> list[DirectoryInfo]:
+        """Enrich directory list with training status metadata.
+
+        Queries the training_subdirectories table to calculate trained counts
+        and training status for each subdirectory.
+
+        Args:
+            db: Database session
+            subdirs: List of DirectoryInfo objects to enrich
+            root_path: Root path being scanned
+
+        Returns:
+            Enriched list of DirectoryInfo objects with training status
+        """
+        if not subdirs:
+            return subdirs
+
+        # Query training_subdirectories for all subdirectories under this root path
+        # Join with TrainingSession to filter by root_path
+        query = (
+            select(TrainingSubdirectory)
+            .join(TrainingSession)
+            .where(TrainingSession.root_path == root_path)
+            .where(TrainingSubdirectory.trained_count > 0)
+        )
+
+        result = await db.execute(query)
+        trained_subdirs = result.scalars().all()
+
+        # Build lookup map: path -> training metadata
+        # Aggregate across multiple sessions if a directory was trained multiple times
+        training_map: dict[str, dict[str, object]] = {}
+
+        for ts in trained_subdirs:
+            if ts.path not in training_map:
+                training_map[ts.path] = {
+                    "trained_count": ts.trained_count,
+                    "last_trained_at": ts.created_at,
+                    "total_trained": ts.trained_count,
+                }
+            else:
+                # Aggregate trained counts across sessions
+                training_map[ts.path]["total_trained"] += ts.trained_count
+
+                # Keep the most recent training timestamp
+                if ts.created_at > training_map[ts.path]["last_trained_at"]:
+                    training_map[ts.path]["last_trained_at"] = ts.created_at
+
+        # Enrich subdirectories with training status
+        for subdir in subdirs:
+            if subdir.path in training_map:
+                metadata = training_map[subdir.path]
+                subdir.trained_count = metadata["total_trained"]
+                subdir.last_trained_at = metadata["last_trained_at"]
+
+                # Calculate training status
+                if subdir.trained_count == 0:
+                    subdir.training_status = "never"
+                elif subdir.trained_count >= subdir.image_count:
+                    subdir.training_status = "complete"
+                else:
+                    subdir.training_status = "partial"
+            else:
+                # Never trained
+                subdir.trained_count = 0
+                subdir.last_trained_at = None
+                subdir.training_status = "never"
+
+        logger.debug(
+            f"Enriched {len(subdirs)} subdirectories with training status "
+            f"({len(training_map)} have been trained)"
+        )
+
+        return subdirs
