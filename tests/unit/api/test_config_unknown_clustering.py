@@ -20,8 +20,8 @@ class TestUnknownClusteringConfig:
         assert response.status_code == 200
         data = response.json()
         # Default values from Settings class
-        assert data["minConfidence"] == 0.85
-        assert data["minClusterSize"] == 5
+        assert data["minConfidence"] == 0.70
+        assert data["minClusterSize"] == 2
 
     def test_get_unknown_clustering_config_uses_camel_case(self):
         """Response should use camelCase field names."""

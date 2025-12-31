@@ -88,14 +88,14 @@ class Settings(BaseSettings):
 
     # Unknown face clustering display settings
     unknown_face_cluster_min_confidence: float = Field(
-        default=0.85,
+        default=0.70,
         ge=0.0,
         le=1.0,
         alias="UNKNOWN_FACE_CLUSTER_MIN_CONFIDENCE",
         description="Minimum intra-cluster confidence threshold for displaying unknown faces (0.0-1.0)",
     )
     unknown_face_cluster_min_size: int = Field(
-        default=5,
+        default=2,
         ge=1,
         le=100,
         alias="UNKNOWN_FACE_CLUSTER_MIN_SIZE",
