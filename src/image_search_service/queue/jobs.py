@@ -9,7 +9,11 @@ from image_search_service.core.logging import get_logger
 from image_search_service.db.models import FaceInstance, ImageAsset
 from image_search_service.db.session import get_sync_engine
 from image_search_service.services.embedding import get_embedding_service
-from image_search_service.vector.qdrant import ensure_collection, update_vector_payload, upsert_vector
+from image_search_service.vector.qdrant import (
+    ensure_collection,
+    update_vector_payload,
+    upsert_vector,
+)
 
 logger = get_logger(__name__)
 

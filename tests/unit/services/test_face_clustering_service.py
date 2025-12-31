@@ -1,11 +1,10 @@
 """Tests for face clustering service (confidence calculation and filtering)."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.db.models import FaceInstance

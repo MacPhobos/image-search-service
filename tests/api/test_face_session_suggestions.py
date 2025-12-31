@@ -292,7 +292,11 @@ class TestBoundingBoxFieldValidation:
         mock_person,
     ):
         """Test that bbox fields return exact integer values from database."""
-        from image_search_service.db.models import FaceInstance, FaceSuggestion, FaceSuggestionStatus
+        from image_search_service.db.models import (
+            FaceInstance,
+            FaceSuggestion,
+            FaceSuggestionStatus,
+        )
 
         # Create face with specific bbox values
         face = FaceInstance(

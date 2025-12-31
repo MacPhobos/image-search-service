@@ -21,7 +21,6 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from uuid import UUID
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
@@ -32,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from image_search_service.core.logging import configure_logging, get_logger
-from image_search_service.db.models import FaceInstance, ImageAsset, PersonPrototype
+from image_search_service.db.models import FaceInstance, PersonPrototype
 from image_search_service.db.session import get_async_session_context
 from image_search_service.services.temporal_service import (
     classify_age_era,
@@ -225,7 +224,6 @@ async def main() -> int:
     args = parser.parse_args()
 
     # Setup logging
-    import logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

@@ -15,8 +15,10 @@ from image_search_service.api.routes.faces import router as faces_router
 from image_search_service.api.routes.images import router as images_router
 from image_search_service.api.routes.queues import (
     jobs_router,
-    router as queues_router,
     workers_router,
+)
+from image_search_service.api.routes.queues import (
+    router as queues_router,
 )
 from image_search_service.api.routes.search import router as search_router
 from image_search_service.api.routes.system import router as system_router

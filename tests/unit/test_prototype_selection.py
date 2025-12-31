@@ -1,12 +1,16 @@
 """Tests for temporal prototype selection logic."""
 
-import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
 
-from image_search_service.db.models import AgeEraBucket, FaceInstance, PersonPrototype, PrototypeRole
+from image_search_service.db.models import (
+    AgeEraBucket,
+    FaceInstance,
+    PersonPrototype,
+    PrototypeRole,
+)
 from image_search_service.services.prototype_service import (
     prune_temporal_prototypes,
     select_temporal_prototypes,

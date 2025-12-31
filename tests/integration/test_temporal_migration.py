@@ -1,10 +1,9 @@
 """Integration tests for temporal prototype migration."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.db.models import (
@@ -42,7 +41,7 @@ class TestTemporalMigration:
         """Create sample image asset for testing."""
         asset = ImageAsset(
             path="/test/image.jpg",
-            file_modified_at=datetime(2020, 5, 15, tzinfo=timezone.utc),
+            file_modified_at=datetime(2020, 5, 15, tzinfo=UTC),
             training_status="trained",
         )
         db_session.add(asset)
@@ -378,7 +377,7 @@ class TestTemporalMigration:
         # Set pinned metadata
         prototype_without_temporal.is_pinned = True
         prototype_without_temporal.pinned_by = "user@example.com"
-        prototype_without_temporal.pinned_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        prototype_without_temporal.pinned_at = datetime(2024, 1, 1, tzinfo=UTC)
         await db_session.commit()
 
         original_role = prototype_without_temporal.role

@@ -1,0 +1,987 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- /export/workspace/image-search/image-search-service/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /export/workspace/image-search/image-search-service
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.12.0, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 450 items
+
+tests/api/test_admin.py::test_delete_all_data_requires_confirm_flag FAILED [  0%]
+tests/api/test_admin.py::test_delete_all_data_requires_exact_confirmation_text FAILED [  0%]
+tests/api/test_admin.py::test_delete_all_data_accepts_optional_reason FAILED [  0%]
+tests/api/test_admin.py::test_delete_all_data_deletes_qdrant_collections FAILED [  0%]
+tests/api/test_admin.py::test_delete_all_data_truncates_postgres_tables FAILED [  1%]
+tests/api/test_admin.py::test_delete_all_data_preserves_alembic_version FAILED [  1%]
+tests/api/test_admin.py::test_delete_all_data_returns_proper_response_structure FAILED [  1%]
+tests/api/test_admin.py::test_delete_all_data_includes_reason_in_message FAILED [  1%]
+tests/api/test_admin.py::test_delete_all_data_handles_missing_alembic_version FAILED [  2%]
+tests/api/test_admin.py::test_delete_all_data_handles_qdrant_errors_gracefully FAILED [  2%]
+tests/api/test_categories.py::test_list_categories_empty PASSED          [  2%]
+tests/api/test_categories.py::test_list_categories_returns_correct_data PASSED [  2%]
+tests/api/test_categories.py::test_list_categories_includes_session_count PASSED [  2%]
+tests/api/test_categories.py::test_list_categories_pagination_works PASSED [  3%]
+tests/api/test_categories.py::test_create_category_returns_201 PASSED    [  3%]
+tests/api/test_categories.py::test_create_category_minimal_fields PASSED [  3%]
+tests/api/test_categories.py::test_create_category_duplicate_name_returns_409 PASSED [  3%]
+tests/api/test_categories.py::test_create_category_invalid_color_returns_422 PASSED [  4%]
+tests/api/test_categories.py::test_get_category_returns_200_with_session_count PASSED [  4%]
+tests/api/test_categories.py::test_get_category_zero_sessions PASSED     [  4%]
+tests/api/test_categories.py::test_get_category_not_found_returns_404 PASSED [  4%]
+tests/api/test_categories.py::test_update_category_name_works PASSED     [  4%]
+tests/api/test_categories.py::test_update_category_partial_update_color_only PASSED [  5%]
+tests/api/test_categories.py::test_update_category_all_fields PASSED     [  5%]
+tests/api/test_categories.py::test_update_category_not_found_returns_404 PASSED [  5%]
+tests/api/test_categories.py::test_update_category_duplicate_name_returns_409 PASSED [  5%]
+tests/api/test_categories.py::test_delete_empty_category_returns_204 PASSED [  6%]
+tests/api/test_categories.py::test_delete_category_not_found_returns_404 PASSED [  6%]
+tests/api/test_categories.py::test_delete_default_category_returns_400 PASSED [  6%]
+tests/api/test_categories.py::test_delete_category_with_sessions_returns_409 PASSED [  6%]
+tests/api/test_face_session_suggestions.py::TestGetSuggestion::test_get_suggestion_returns_bounding_box_fields PASSED [  6%]
+tests/api/test_face_session_suggestions.py::TestGetSuggestion::test_get_suggestion_not_found PASSED [  7%]
+tests/api/test_face_session_suggestions.py::TestListSuggestions::test_list_suggestions_includes_bbox_fields PASSED [  7%]
+tests/api/test_face_session_suggestions.py::TestAcceptSuggestion::test_accept_suggestion_returns_bbox_fields PASSED [  7%]
+tests/api/test_face_session_suggestions.py::TestRejectSuggestion::test_reject_suggestion_returns_bbox_fields PASSED [  7%]
+tests/api/test_face_session_suggestions.py::TestBoundingBoxFieldValidation::test_bbox_fields_match_exact_values PASSED [  8%]
+tests/api/test_face_session_suggestions.py::TestBoundingBoxFieldValidation::test_full_image_url_pattern PASSED [  8%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_success PASSED [  8%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_face_not_found PASSED [  8%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_invalid_uuid PASSED [  8%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_embedding_not_found PASSED [  9%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_empty_results PASSED [  9%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_respects_min_confidence PASSED [  9%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_respects_limit PASSED [  9%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_filters_inactive_persons PASSED [ 10%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_deduplicates_by_person PASSED [ 10%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_handles_missing_person_gracefully PASSED [ 10%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_default_params PASSED [ 10%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_handles_qdrant_error PASSED [ 10%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_validation_min_confidence PASSED [ 11%]
+tests/api/test_face_suggestions.py::TestGetFaceSuggestions::test_get_face_suggestions_validation_limit PASSED [ 11%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_default_behavior PASSED [ 11%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_ordering_by_confidence PASSED [ 11%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_limits_suggestions_per_group PASSED [ 12%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_pagination PASSED [ 12%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_empty_page PASSED [ 12%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_filter_by_status PASSED [ 12%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_filter_by_person PASSED [ 12%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_grouped_suggestion_metadata PASSED [ 13%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_flat_mode_legacy PASSED [ 13%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_uses_config_defaults PASSED [ 13%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_param_overrides_config PASSED [ 13%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_validation_groups_per_page PASSED [ 14%]
+tests/api/test_face_suggestions_list.py::TestListSuggestionsGrouped::test_list_suggestions_validation_suggestions_per_group PASSED [ 14%]
+tests/api/test_face_suggestions_list.py::TestFaceSuggestionSettings::test_get_face_suggestion_settings PASSED [ 14%]
+tests/api/test_face_suggestions_list.py::TestFaceSuggestionSettings::test_update_face_suggestion_settings PASSED [ 14%]
+tests/api/test_face_suggestions_list.py::TestFaceSuggestionSettings::test_update_face_suggestion_settings_validation PASSED [ 14%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_list_clusters_empty PASSED [ 15%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_list_clusters_partially_labeled PASSED [ 15%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_list_clusters_pagination PASSED [ 15%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_list_clusters_invalid_page PASSED [ 15%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_get_cluster_not_found PASSED [ 16%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_get_cluster_success PASSED [ 16%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_label_cluster_not_found PASSED [ 16%]
+tests/api/test_faces_routes.py::TestClusterEndpoints::test_split_cluster_not_found FAILED [ 16%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_list_persons_empty PASSED [ 16%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_list_persons_pagination PASSED [ 17%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_get_person_not_found PASSED [ 17%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_get_person_success SKIPPED [ 17%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_update_person_not_found PASSED [ 17%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_merge_persons_source_not_found PASSED [ 18%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_merge_persons_target_not_found PASSED [ 18%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_get_person_photos_not_found PASSED [ 18%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_get_person_photos_empty PASSED [ 18%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_get_person_photos_success PASSED [ 18%]
+tests/api/test_faces_routes.py::TestPersonEndpoints::test_get_person_photos_pagination PASSED [ 19%]
+tests/api/test_faces_routes.py::TestFaceDetectionEndpoints::test_detect_faces_asset_not_found PASSED [ 19%]
+tests/api/test_faces_routes.py::TestFaceDetectionEndpoints::test_detect_faces_invalid_confidence PASSED [ 19%]
+tests/api/test_faces_routes.py::TestFaceDetectionEndpoints::test_trigger_clustering_invalid_params PASSED [ 19%]
+tests/api/test_faces_routes.py::TestFaceDetectionEndpoints::test_list_face_instances_empty SKIPPED [ 20%]
+tests/api/test_faces_routes.py::TestFaceDetectionEndpoints::test_list_face_instances_pagination SKIPPED [ 20%]
+tests/api/test_faces_routes.py::TestFaceDetectionEndpoints::test_get_face_instance_not_found SKIPPED [ 20%]
+tests/api/test_faces_routes.py::TestFaceDetectionEndpoints::test_get_face_instance_success SKIPPED [ 20%]
+tests/api/test_faces_routes.py::TestAssignmentEndpoints::test_trigger_assignment_success SKIPPED [ 20%]
+tests/api/test_faces_routes.py::TestAssignmentEndpoints::test_trigger_assignment_invalid_params SKIPPED [ 21%]
+tests/api/test_faces_routes.py::TestUnassignFaceEndpoint::test_unassign_face_not_found PASSED [ 21%]
+tests/api/test_faces_routes.py::TestUnassignFaceEndpoint::test_unassign_face_not_assigned PASSED [ 21%]
+tests/api/test_faces_routes.py::TestUnassignFaceEndpoint::test_unassign_face_success PASSED [ 21%]
+tests/api/test_faces_routes.py::TestPrototypeEndpoints::test_create_prototype_person_not_found FAILED [ 22%]
+tests/api/test_faces_routes.py::TestPrototypeEndpoints::test_list_prototypes_person_not_found FAILED [ 22%]
+tests/api/test_faces_routes.py::TestPrototypeEndpoints::test_delete_prototype_not_found PASSED [ 22%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_remove_person_not_found PASSED [ 22%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_remove_empty_photo_ids PASSED [ 22%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_remove_no_matching_faces PASSED [ 23%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_remove_success PASSED [ 23%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_move_person_not_found PASSED [ 23%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_move_missing_destination PASSED [ 23%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_move_both_destinations PASSED [ 24%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_move_to_nonexistent_person PASSED [ 24%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_move_create_new_person PASSED [ 24%]
+tests/api/test_faces_routes.py::TestBulkOperations::test_bulk_move_to_existing_person PASSED [ 24%]
+tests/api/test_faces_routes.py::TestClusteringWorkflow::test_clustering_workflow_no_faces FAILED [ 24%]
+tests/api/test_get_faces_for_asset.py::test_get_faces_for_asset_with_person_name PASSED [ 25%]
+tests/api/test_get_faces_for_asset.py::test_get_faces_for_asset_without_person PASSED [ 25%]
+tests/api/test_get_faces_orphaned_person.py::test_get_faces_with_orphaned_person_id PASSED [ 25%]
+tests/api/test_health.py::test_health_check_returns_ok PASSED            [ 25%]
+tests/api/test_health.py::test_health_check_works_without_dependencies PASSED [ 26%]
+tests/api/test_ingest.py::test_ingest_dry_run_discovers_images PASSED    [ 26%]
+tests/api/test_ingest.py::test_ingest_invalid_path_returns_400 PASSED    [ 26%]
+tests/api/test_ingest.py::test_ingest_non_directory_returns_400 PASSED   [ 26%]
+tests/api/test_ingest.py::test_ingest_enqueues_jobs PASSED               [ 26%]
+tests/api/test_ingest.py::test_ingest_skips_already_indexed_assets PASSED [ 27%]
+tests/api/test_person_name_regression.py::TestGetClusterPersonName::test_get_cluster_returns_person_name_when_assigned PASSED [ 27%]
+tests/api/test_person_name_regression.py::TestGetClusterPersonName::test_get_cluster_returns_null_person_when_unassigned PASSED [ 27%]
+tests/api/test_person_name_regression.py::TestGetClusterPersonName::test_get_cluster_with_multiple_faces_same_person PASSED [ 27%]
+tests/api/test_person_name_regression.py::TestGetFacesForAssetPersonName::test_get_faces_for_asset_returns_person_name_when_assigned PASSED [ 28%]
+tests/api/test_person_name_regression.py::TestGetFacesForAssetPersonName::test_get_faces_for_asset_returns_null_person_when_unassigned PASSED [ 28%]
+tests/api/test_person_name_regression.py::TestGetFacesForAssetPersonName::test_get_faces_for_asset_with_multiple_faces_different_persons PASSED [ 28%]
+tests/api/test_prototype_endpoints.py::TestPinPrototype::test_pin_prototype_success PASSED [ 28%]
+tests/api/test_prototype_endpoints.py::TestPinPrototype::test_pin_quota_exceeded PASSED [ 28%]
+tests/api/test_prototype_endpoints.py::TestPinPrototype::test_pin_era_already_pinned PASSED [ 29%]
+tests/api/test_prototype_endpoints.py::TestPinPrototype::test_pin_face_not_found PASSED [ 29%]
+tests/api/test_prototype_endpoints.py::TestPinPrototype::test_pin_face_wrong_person PASSED [ 29%]
+tests/api/test_prototype_endpoints.py::TestUnpinPrototype::test_unpin_success PASSED [ 29%]
+tests/api/test_prototype_endpoints.py::TestUnpinPrototype::test_unpin_not_found PASSED [ 30%]
+tests/api/test_prototype_endpoints.py::TestListPrototypes::test_list_includes_coverage PASSED [ 30%]
+tests/api/test_prototype_endpoints.py::TestListPrototypes::test_list_empty PASSED [ 30%]
+tests/api/test_prototype_endpoints.py::TestTemporalCoverage::test_coverage_calculation PASSED [ 30%]
+tests/api/test_prototype_endpoints.py::TestRecomputePrototypes::test_recompute_placeholder PASSED [ 30%]
+tests/api/test_search.py::test_search_empty_collection_returns_empty PASSED [ 31%]
+tests/api/test_search.py::test_search_with_results PASSED                [ 31%]
+tests/api/test_search.py::test_search_respects_limit PASSED              [ 31%]
+tests/api/test_search.py::test_search_qdrant_unavailable_returns_503 PASSED [ 31%]
+tests/api/test_search.py::test_search_with_offset PASSED                 [ 32%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_list_people_returns_both_types PASSED [ 32%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_filter_identified_only PASSED [ 32%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_filter_unidentified_only PASSED [ 32%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_include_noise PASSED [ 32%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_exclude_noise_by_default PASSED [ 33%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_sort_by_face_count_desc PASSED [ 33%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_sort_by_face_count_asc PASSED [ 33%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_sort_by_name_asc PASSED [ 33%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_sort_by_name_desc PASSED [ 34%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_unidentified_person_naming PASSED [ 34%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_response_has_camel_case_keys PASSED [ 34%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_empty_database PASSED [ 34%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_thumbnail_urls_format PASSED [ 34%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_identified_person_has_uuid_id PASSED [ 35%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_unidentified_cluster_has_cluster_id PASSED [ 35%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_face_count_accuracy PASSED [ 35%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_confidence_field_for_unidentified PASSED [ 35%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_confidence_null_for_identified PASSED [ 36%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_invalid_sort_by_parameter PASSED [ 36%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_invalid_sort_order_parameter PASSED [ 36%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_only_active_persons_included PASSED [ 36%]
+tests/api/test_unified_people_endpoint.py::TestUnifiedPeopleEndpoint::test_all_filters_false_returns_empty PASSED [ 36%]
+tests/api/test_vectors.py::test_delete_vectors_by_directory_with_prefix_matching PASSED [ 37%]
+tests/api/test_vectors.py::test_delete_vectors_by_asset_for_single_asset PASSED [ 37%]
+tests/api/test_vectors.py::test_delete_vectors_by_session_with_multiple_assets PASSED [ 37%]
+tests/api/test_vectors.py::test_delete_vectors_by_category_with_filter PASSED [ 37%]
+tests/api/test_vectors.py::test_get_directory_stats_returns_proper_grouping PASSED [ 38%]
+tests/api/test_vectors.py::test_delete_orphan_vectors_identifies_orphans_correctly PASSED [ 38%]
+tests/api/test_vectors.py::test_reset_collection_clears_all_vectors PASSED [ 38%]
+tests/api/test_vectors.py::test_get_directory_stats_returns_statistics PASSED [ 38%]
+tests/api/test_vectors.py::test_delete_by_directory_requires_confirmation PASSED [ 38%]
+tests/api/test_vectors.py::test_delete_by_directory_deletes_vectors_and_creates_log PASSED [ 39%]
+tests/api/test_vectors.py::test_retrain_creates_new_session_after_deletion PASSED [ 39%]
+tests/api/test_vectors.py::test_delete_by_asset_deletes_single_asset_vector PASSED [ 39%]
+tests/api/test_vectors.py::test_delete_by_session_marks_session_as_reset PASSED [ 39%]
+tests/api/test_vectors.py::test_delete_by_category_deletes_category_vectors PASSED [ 40%]
+tests/api/test_vectors.py::test_cleanup_orphans_requires_confirmation PASSED [ 40%]
+tests/api/test_vectors.py::test_cleanup_orphans_deletes_orphaned_vectors PASSED [ 40%]
+tests/api/test_vectors.py::test_reset_requires_double_confirmation PASSED [ 40%]
+tests/api/test_vectors.py::test_reset_with_invalid_confirmation_text_returns_400 PASSED [ 40%]
+tests/api/test_vectors.py::test_reset_deletes_all_vectors PASSED         [ 41%]
+tests/api/test_vectors.py::test_get_deletion_logs_returns_paginated_logs PASSED [ 41%]
+tests/api/test_vectors.py::test_delete_non_existent_asset_returns_404 PASSED [ 41%]
+tests/api/test_vectors.py::test_delete_non_existent_session_returns_404 PASSED [ 41%]
+tests/api/test_vectors.py::test_delete_non_existent_category_returns_404 PASSED [ 42%]
+tests/api/test_vectors.py::test_retrain_with_non_existent_category_returns_404 PASSED [ 42%]
+tests/core/test_device.py::TestGetDevice::test_cuda_available PASSED     [ 42%]
+tests/core/test_device.py::TestGetDevice::test_mps_fallback PASSED       [ 42%]
+tests/core/test_device.py::TestGetDevice::test_cpu_fallback PASSED       [ 42%]
+tests/core/test_device.py::TestGetDevice::test_device_env_override PASSED [ 43%]
+tests/core/test_device.py::TestGetDevice::test_device_env_cuda_with_id PASSED [ 43%]
+tests/core/test_device.py::TestGetDevice::test_device_env_auto PASSED    [ 43%]
+tests/core/test_device.py::TestGetDevice::test_force_cpu_true PASSED     [ 43%]
+tests/core/test_device.py::TestGetDevice::test_force_cpu_one PASSED      [ 44%]
+tests/core/test_device.py::TestGetDevice::test_force_cpu_yes PASSED      [ 44%]
+tests/core/test_device.py::TestGetDevice::test_invalid_device_raises PASSED [ 44%]
+tests/core/test_device.py::TestGetDevice::test_invalid_cuda_device_id_raises PASSED [ 44%]
+tests/core/test_device.py::TestGetDevice::test_invalid_cuda_device_format_raises PASSED [ 44%]
+tests/core/test_device.py::TestGetDevice::test_device_cached PASSED      [ 45%]
+tests/core/test_device.py::TestGetDeviceInfo::test_returns_expected_keys PASSED [ 45%]
+tests/core/test_device.py::TestGetDeviceInfo::test_cpu_mode_info PASSED  [ 45%]
+tests/core/test_device.py::TestGetDeviceInfo::test_cuda_info PASSED      [ 45%]
+tests/core/test_device.py::TestGetDeviceInfo::test_mps_info PASSED       [ 46%]
+tests/core/test_device.py::TestGetDeviceInfo::test_info_cached PASSED    [ 46%]
+tests/core/test_device.py::TestGetOnnxProviders::test_returns_list PASSED [ 46%]
+tests/core/test_device.py::TestGetOnnxProviders::test_priority_order_cuda_coreml PASSED [ 46%]
+tests/core/test_device.py::TestGetOnnxProviders::test_priority_order_cuda_only PASSED [ 46%]
+tests/core/test_device.py::TestGetOnnxProviders::test_priority_order_coreml_only PASSED [ 47%]
+tests/core/test_device.py::TestGetOnnxProviders::test_cpu_only PASSED    [ 47%]
+tests/core/test_device.py::TestGetOnnxProviders::test_onnxruntime_not_installed PASSED [ 47%]
+tests/core/test_device.py::TestIsAppleSilicon::test_apple_silicon_detected PASSED [ 47%]
+tests/core/test_device.py::TestIsAppleSilicon::test_macos_intel_not_apple_silicon PASSED [ 48%]
+tests/core/test_device.py::TestIsAppleSilicon::test_linux_not_apple_silicon PASSED [ 48%]
+tests/core/test_device.py::TestIsAppleSilicon::test_linux_arm64_not_apple_silicon PASSED [ 48%]
+tests/core/test_device.py::TestIsAppleSilicon::test_windows_not_apple_silicon PASSED [ 48%]
+tests/core/test_device.py::TestClearDeviceCache::test_clears_get_device_cache PASSED [ 48%]
+tests/core/test_device.py::TestClearDeviceCache::test_clears_get_device_info_cache PASSED [ 49%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_assign_no_prototypes PASSED [ 49%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_assign_no_new_faces PASSED [ 49%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_assign_face_to_person PASSED [ 49%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_assign_filters_by_since PASSED [ 50%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_get_face_embedding_not_found PASSED [ 50%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_get_face_embedding_success PASSED [ 50%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_compute_person_centroids_no_faces PASSED [ 50%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_compute_person_centroids_creates_new PASSED [ 50%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_assigner_initialization PASSED [ 51%]
+tests/faces/test_assigner.py::TestFaceAssigner::test_get_face_assigner_factory PASSED [ 51%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_cluster_not_enough_faces PASSED [ 51%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_hdbscan_clustering PASSED [ 51%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_hdbscan_clustering_noise SKIPPED [ 52%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_cluster_unlabeled_faces_with_results PASSED [ 52%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_recluster_within_cluster_too_small PASSED [ 52%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_cluster_updates_database PASSED [ 52%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_clusterer_initialization PASSED [ 52%]
+tests/faces/test_clusterer.py::TestFaceClusterer::test_get_face_clusterer_factory PASSED [ 53%]
+tests/faces/test_detector.py::TestDetectedFace::test_landmarks_as_dict PASSED [ 53%]
+tests/faces/test_detector.py::TestDetectedFace::test_compute_quality_score PASSED [ 53%]
+tests/faces/test_detector.py::TestDetectedFace::test_quality_score_small_face PASSED [ 53%]
+tests/faces/test_detector.py::TestDetectedFace::test_quality_score_high_confidence PASSED [ 54%]
+tests/faces/test_detector.py::TestDetectFaces::test_detect_faces_returns_list PASSED [ 54%]
+tests/faces/test_detector.py::TestDetectFaces::test_detect_faces_filters_low_confidence PASSED [ 54%]
+tests/faces/test_detector.py::TestDetectFaces::test_detect_faces_filters_small_faces PASSED [ 54%]
+tests/faces/test_detector.py::TestDetectFaces::test_detect_faces_no_faces PASSED [ 54%]
+tests/faces/test_detector.py::TestDetectFaces::test_detect_faces_multiple_faces PASSED [ 55%]
+tests/faces/test_detector.py::TestDetectFaces::test_detect_faces_bbox_conversion PASSED [ 55%]
+tests/faces/test_detector.py::TestDetectFacesFromPath::test_detect_faces_from_path_invalid_image PASSED [ 55%]
+tests/faces/test_detector.py::TestDetectFacesFromPath::test_detect_faces_from_path_valid_image PASSED [ 55%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_asset_no_image PASSED [ 56%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_asset_creates_face_instance PASSED [ 56%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_asset_stores_in_qdrant PASSED [ 56%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_asset_idempotent PASSED [ 56%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch FAILED [ 56%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch_handles_errors PASSED [ 57%]
+tests/faces/test_service.py::TestFaceProcessingService::test_resolve_asset_path_from_path_attribute PASSED [ 57%]
+tests/faces/test_service.py::TestFaceProcessingService::test_resolve_asset_path_no_path PASSED [ 57%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch_empty_list PASSED [ 57%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch_with_batch_size_one PASSED [ 58%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch_all_failures PASSED [ 58%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch_with_progress_callback PASSED [ 58%]
+tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch_parallel_loading FAILED [ 58%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_sets_era_bucket PASSED [ 58%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_skips_already_migrated PASSED [ 59%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_skips_missing_face PASSED [ 59%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_skips_missing_age PASSED [ 59%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_handles_infant_age PASSED [ 59%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_handles_senior_age PASSED [ 60%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_migrate_respects_dry_run PASSED [ 60%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_with_missing_decade PASSED [ 60%]
+tests/integration/test_temporal_migration.py::TestTemporalMigration::test_backfill_preserves_other_fields PASSED [ 60%]
+tests/unit/api/test_face_schemas.py::TestPersonType::test_enum_values PASSED [ 60%]
+tests/unit/api/test_face_schemas.py::TestPersonType::test_enum_from_string PASSED [ 61%]
+tests/unit/api/test_face_schemas.py::TestPersonType::test_enum_invalid_value PASSED [ 61%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_identified_person_serialization PASSED [ 61%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_unidentified_person_serialization PASSED [ 61%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_noise_person_serialization PASSED [ 62%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_optional_fields PASSED [ 62%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_camel_case_serialization PASSED [ 62%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_snake_case_internal PASSED [ 62%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_required_fields PASSED [ 62%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPersonResponse::test_type_validation PASSED [ 63%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPeopleListResponse::test_list_response_serialization PASSED [ 63%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPeopleListResponse::test_empty_list_response PASSED [ 63%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPeopleListResponse::test_camel_case_count_fields PASSED [ 63%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPeopleListResponse::test_required_fields_list_response PASSED [ 64%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPeopleListResponse::test_count_consistency PASSED [ 64%]
+tests/unit/api/test_face_schemas.py::TestUnifiedPeopleListResponse::test_json_serialization_round_trip PASSED [ 64%]
+tests/unit/services/test_person_service.py::TestPersonService::test_generate_display_name_regular_cluster PASSED [ 64%]
+tests/unit/services/test_person_service.py::TestPersonService::test_generate_display_name_noise_cluster PASSED [ 64%]
+tests/unit/services/test_person_service.py::TestPersonService::test_generate_display_name_sequential_numbering PASSED [ 65%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_only_identified PASSED [ 65%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_only_unidentified PASSED [ 65%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_include_noise PASSED [ 65%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_all_types PASSED [ 66%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_no_noise_when_zero PASSED [ 66%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_sort_by_face_count_desc PASSED [ 66%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_sort_by_face_count_asc PASSED [ 66%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_sort_by_name_asc PASSED [ 66%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_sort_by_name_desc PASSED [ 67%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_sort_mixed_types PASSED [ 67%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_counts_are_accurate PASSED [ 67%]
+tests/unit/services/test_person_service.py::TestPersonService::test_get_all_people_empty_result PASSED [ 67%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_empty_database PASSED [ 68%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_persons_without_faces PASSED [ 68%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_with_faces PASSED [ 68%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_respects_max_faces_limit PASSED [ 68%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_orders_by_quality_then_confidence PASSED [ 68%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_excludes_inactive_persons PASSED [ 69%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_multiple_persons_ordered_by_name PASSED [ 69%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_normalizes_paths PASSED [ 69%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_verify_paths_skips_missing PASSED [ 69%]
+tests/unit/test_admin_export_import.py::test_export_person_metadata_verify_paths_false_includes_all PASSED [ 70%]
+tests/unit/test_admin_export_import.py::test_match_face_by_bbox_exact_match PASSED [ 70%]
+tests/unit/test_admin_export_import.py::test_match_face_by_bbox_within_tolerance PASSED [ 70%]
+tests/unit/test_admin_export_import.py::test_match_face_by_bbox_outside_tolerance PASSED [ 70%]
+tests/unit/test_admin_export_import.py::test_match_face_by_bbox_closest_match_selected PASSED [ 70%]
+tests/unit/test_admin_export_import.py::test_match_face_by_bbox_empty_list PASSED [ 71%]
+tests/unit/test_admin_export_import.py::test_match_face_by_bbox_all_dimensions_must_match PASSED [ 71%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_dry_run_no_changes PASSED [ 71%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_creates_new_persons PASSED [ 71%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_finds_existing_persons PASSED [ 72%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_face_matching_success PASSED [ 72%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_missing_image_handling PASSED [ 72%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_tolerance_parameter PASSED [ 72%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_image_not_in_database PASSED [ 72%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_no_faces_detected_in_image PASSED [ 73%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_updates_qdrant PASSED [ 73%]
+tests/unit/test_admin_export_import.py::test_import_person_metadata_error_handling_continues_processing PASSED [ 73%]
+tests/unit/test_admin_export_import.py::test_batch_check_missing_embeddings_empty_list SKIPPED [ 73%]
+tests/unit/test_admin_export_import.py::test_batch_check_missing_embeddings_all_exist SKIPPED [ 74%]
+tests/unit/test_admin_export_import.py::test_batch_check_missing_embeddings_some_missing SKIPPED [ 74%]
+tests/unit/test_admin_export_import.py::test_batch_check_missing_embeddings_multiple_batches SKIPPED [ 74%]
+tests/unit/test_bootstrap_qdrant.py::test_ensure_image_assets_collection_creates_new PASSED [ 74%]
+tests/unit/test_bootstrap_qdrant.py::test_ensure_image_assets_collection_already_exists PASSED [ 74%]
+tests/unit/test_bootstrap_qdrant.py::test_ensure_faces_collection_creates_new PASSED [ 75%]
+tests/unit/test_bootstrap_qdrant.py::test_ensure_faces_collection_already_exists PASSED [ 75%]
+tests/unit/test_bootstrap_qdrant.py::test_init_command_success PASSED    [ 75%]
+tests/unit/test_bootstrap_qdrant.py::test_init_command_connection_failure PASSED [ 75%]
+tests/unit/test_bootstrap_qdrant.py::test_verify_command_success PASSED  [ 76%]
+tests/unit/test_bootstrap_qdrant.py::test_verify_command_collection_not_found PASSED [ 76%]
+tests/unit/test_config_keys_sync.py::test_defaults_contains_all_face_matching_keys PASSED [ 76%]
+tests/unit/test_config_keys_sync.py::test_defaults_contains_all_face_suggestion_settings_keys PASSED [ 76%]
+tests/unit/test_config_keys_sync.py::test_all_defaults_have_migration_inserts PASSED [ 76%]
+tests/unit/test_config_keys_sync.py::test_no_orphaned_migrations PASSED  [ 77%]
+tests/unit/test_config_keys_sync.py::test_face_matching_endpoint_keys_match_defaults PASSED [ 77%]
+tests/unit/test_config_keys_sync.py::test_face_suggestions_endpoint_keys_match_defaults PASSED [ 77%]
+tests/unit/test_config_keys_sync.py::test_defaults_data_types_are_correct PASSED [ 77%]
+tests/unit/test_config_keys_sync.py::test_defaults_values_are_in_valid_ranges PASSED [ 78%]
+tests/unit/test_config_keys_sync.py::test_suggestion_threshold_less_than_auto_assign_threshold PASSED [ 78%]
+tests/unit/test_config_keys_sync.py::test_all_defaults_keys_are_documented_in_migration PASSED [ 78%]
+tests/unit/test_embedding_service.py::test_mock_embedding_service_embed_text_returns_vector PASSED [ 78%]
+tests/unit/test_embedding_service.py::test_mock_embedding_service_embed_image_returns_vector PASSED [ 78%]
+tests/unit/test_embedding_service.py::test_mock_embedding_dim_correct PASSED [ 79%]
+tests/unit/test_embedding_service.py::test_mock_embedding_deterministic PASSED [ 79%]
+tests/unit/test_embedding_service.py::test_mock_embedding_different_inputs_produce_different_vectors PASSED [ 79%]
+tests/unit/test_embedding_service.py::test_mock_embedding_image_path_affects_output PASSED [ 79%]
+tests/unit/test_faces_cli.py::test_find_orphans_no_orphans PASSED        [ 80%]
+tests/unit/test_faces_cli.py::test_find_orphans_with_orphans PASSED      [ 80%]
+tests/unit/test_faces_cli.py::test_find_orphans_with_fix PASSED          [ 80%]
+tests/unit/test_faces_cli.py::test_find_orphans_respects_limit PASSED    [ 80%]
+tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_selects_one_per_era FAILED [ 80%]
+tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_preserves_pinned FAILED [ 81%]
+tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_uses_highest_quality_per_era FAILED [ 81%]
+tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_fills_exemplars_after_temporal FAILED [ 81%]
+tests/unit/test_prototype_selection.py::TestPruneTemporalPrototypes::test_never_prunes_pinned PASSED [ 81%]
+tests/unit/test_prototype_selection.py::TestPruneTemporalPrototypes::test_prunes_lowest_priority_first FAILED [ 82%]
+tests/unit/test_prototype_selection.py::TestPruneTemporalPrototypes::test_keeps_one_per_era PASSED [ 82%]
+tests/unit/test_qdrant_safety.py::test_face_collection_name_respects_environment PASSED [ 82%]
+tests/unit/test_qdrant_safety.py::test_image_collection_name_respects_environment PASSED [ 82%]
+tests/unit/test_qdrant_safety.py::test_reset_face_collection_blocked_for_production_during_tests PASSED [ 82%]
+tests/unit/test_qdrant_safety.py::test_reset_image_collection_blocked_for_production_during_tests PASSED [ 83%]
+tests/unit/test_qdrant_safety.py::test_test_fixtures_use_safe_collection_names PASSED [ 83%]
+tests/unit/test_qdrant_safety.py::test_settings_cache_cleared_between_tests PASSED [ 83%]
+tests/unit/test_qdrant_wrapper.py::test_upsert_vector_stores_point PASSED [ 83%]
+tests/unit/test_qdrant_wrapper.py::test_search_vectors_returns_results PASSED [ 84%]
+tests/unit/test_qdrant_wrapper.py::test_search_vectors_respects_limit PASSED [ 84%]
+tests/unit/test_qdrant_wrapper.py::test_search_vectors_respects_offset PASSED [ 84%]
+tests/unit/test_qdrant_wrapper.py::test_ensure_collection_creates_if_missing PASSED [ 84%]
+tests/unit/test_qdrant_wrapper.py::test_ensure_collection_idempotent PASSED [ 84%]
+tests/unit/test_qdrant_wrapper.py::test_search_empty_collection_returns_empty PASSED [ 85%]
+tests/unit/test_qdrant_wrapper.py::test_upsert_vector_with_person_ids PASSED [ 85%]
+tests/unit/test_qdrant_wrapper.py::test_upsert_vector_without_person_ids PASSED [ 85%]
+tests/unit/test_qdrant_wrapper.py::test_search_with_person_id_filter PASSED [ 85%]
+tests/unit/test_qdrant_wrapper.py::test_search_with_person_id_snake_case PASSED [ 86%]
+tests/unit/test_qdrant_wrapper.py::test_search_without_person_filter_returns_all PASSED [ 86%]
+tests/unit/test_qdrant_wrapper.py::test_search_with_combined_filters PASSED [ 86%]
+tests/unit/test_qdrant_wrapper.py::test_search_with_nonexistent_person_returns_empty PASSED [ 86%]
+tests/unit/test_qdrant_wrapper.py::test_update_vector_payload_success PASSED [ 86%]
+tests/unit/test_qdrant_wrapper.py::test_update_vector_payload_preserves_other_fields PASSED [ 87%]
+tests/unit/test_qdrant_wrapper.py::test_update_vector_payload_with_empty_array PASSED [ 87%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_infant_age PASSED [ 87%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_child_age PASSED [ 87%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_teen_age PASSED [ 88%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_young_adult_age PASSED [ 88%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_adult_age PASSED [ 88%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_senior_age PASSED [ 88%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_none_age PASSED [ 88%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_boundary_infant_child PASSED [ 89%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_boundary_child_teen PASSED [ 89%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_boundary_teen_young_adult PASSED [ 89%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_boundary_young_adult_adult PASSED [ 89%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_boundary_adult_senior PASSED [ 90%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_zero_age PASSED [ 90%]
+tests/unit/test_temporal_service.py::TestClassifyAgeEra::test_very_old_age PASSED [ 90%]
+tests/unit/test_temporal_service.py::TestGetEraAgeRange::test_infant_range PASSED [ 90%]
+tests/unit/test_temporal_service.py::TestGetEraAgeRange::test_child_range PASSED [ 90%]
+tests/unit/test_temporal_service.py::TestGetEraAgeRange::test_teen_range PASSED [ 91%]
+tests/unit/test_temporal_service.py::TestGetEraAgeRange::test_young_adult_range PASSED [ 91%]
+tests/unit/test_temporal_service.py::TestGetEraAgeRange::test_adult_range PASSED [ 91%]
+tests/unit/test_temporal_service.py::TestGetEraAgeRange::test_senior_range PASSED [ 91%]
+tests/unit/test_temporal_service.py::TestExtractDecade::test_1990s PASSED [ 92%]
+tests/unit/test_temporal_service.py::TestExtractDecade::test_2000s PASSED [ 92%]
+tests/unit/test_temporal_service.py::TestExtractDecade::test_2020s PASSED [ 92%]
+tests/unit/test_temporal_service.py::TestExtractDecade::test_none_timestamp PASSED [ 92%]
+tests/unit/test_temporal_service.py::TestExtractDecade::test_decade_boundaries PASSED [ 92%]
+tests/unit/test_temporal_service.py::TestExtractDecade::test_historical_decades PASSED [ 93%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_base_quality_only PASSED [ 93%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_frontal_bonus PASSED [ 93%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_large_bbox_bonus PASSED [ 93%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_age_confidence_bonus PASSED [ 94%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_all_bonuses PASSED [ 94%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_max_score_capped PASSED [ 94%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_none_base_quality PASSED [ 94%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_small_bbox_no_bonus PASSED [ 94%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_non_frontal_pose PASSED [ 95%]
+tests/unit/test_temporal_service.py::TestTemporalQualityScore::test_zero_quality PASSED [ 95%]
+tests/unit/test_temporal_service.py::TestCoverageGaps::test_full_coverage PASSED [ 95%]
+tests/unit/test_temporal_service.py::TestCoverageGaps::test_missing_infant PASSED [ 95%]
+tests/unit/test_temporal_service.py::TestCoverageGaps::test_missing_multiple PASSED [ 96%]
+tests/unit/test_temporal_service.py::TestCoverageGaps::test_empty_coverage PASSED [ 96%]
+tests/unit/test_temporal_service.py::TestEstimatePersonBirthYear::test_single_face PASSED [ 96%]
+tests/unit/test_temporal_service.py::TestEstimatePersonBirthYear::test_multiple_faces_consistent PASSED [ 96%]
+tests/unit/test_temporal_service.py::TestEstimatePersonBirthYear::test_multiple_faces_outlier PASSED [ 96%]
+tests/unit/test_temporal_service.py::TestEstimatePersonBirthYear::test_no_faces PASSED [ 97%]
+tests/unit/test_temporal_service.py::TestEstimatePersonBirthYear::test_faces_missing_timestamp PASSED [ 97%]
+tests/unit/test_temporal_service.py::TestEstimatePersonBirthYear::test_faces_missing_age PASSED [ 97%]
+tests/unit/test_temporal_service.py::TestEstimatePersonBirthYear::test_mixed_valid_invalid PASSED [ 97%]
+tests/unit/test_temporal_service.py::TestExtractTemporalMetadata::test_none_landmarks PASSED [ 98%]
+tests/unit/test_temporal_service.py::TestExtractTemporalMetadata::test_full_metadata PASSED [ 98%]
+tests/unit/test_temporal_service.py::TestExtractTemporalMetadata::test_missing_age PASSED [ 98%]
+tests/unit/test_temporal_service.py::TestExtractTemporalMetadata::test_missing_bbox PASSED [ 98%]
+tests/unit/test_temporal_service.py::TestExtractTemporalMetadata::test_incomplete_bbox PASSED [ 98%]
+tests/unit/test_temporal_service.py::TestEnrichFaceWithTemporalData::test_full_enrichment PASSED [ 99%]
+tests/unit/test_temporal_service.py::TestEnrichFaceWithTemporalData::test_no_landmarks PASSED [ 99%]
+tests/unit/test_temporal_service.py::TestEnrichFaceWithTemporalData::test_no_timestamp PASSED [ 99%]
+tests/unit/test_temporal_service.py::TestEnrichFaceWithTemporalData::test_infant_classification PASSED [ 99%]
+tests/unit/test_temporal_service.py::TestEnrichFaceWithTemporalData::test_senior_classification PASSED [100%]
+
+=================================== FAILURES ===================================
+__________________ test_delete_all_data_requires_confirm_flag __________________
+tests/api/test_admin.py:148: in test_delete_all_data_requires_confirm_flag
+    assert response.status_code == 400
+E   assert 403 == 400
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:33,640 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:33,726 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+2025-12-29 17:30:33,726 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+____________ test_delete_all_data_requires_exact_confirmation_text _____________
+tests/api/test_admin.py:166: in test_delete_all_data_requires_exact_confirmation_text
+    assert response.status_code == 400
+E   assert 403 == 400
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:33,803 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:33,881 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+2025-12-29 17:30:33,881 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+_________________ test_delete_all_data_accepts_optional_reason _________________
+tests/api/test_admin.py:198: in test_delete_all_data_accepts_optional_reason
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:33,946 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:34,029 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+2025-12-29 17:30:34,029 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+_______________ test_delete_all_data_deletes_qdrant_collections ________________
+tests/api/test_admin.py:241: in test_delete_all_data_deletes_qdrant_collections
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:34,265 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:34,385 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Test deletion
+2025-12-29 17:30:34,385 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Test deletion
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+________________ test_delete_all_data_truncates_postgres_tables ________________
+tests/api/test_admin.py:301: in test_delete_all_data_truncates_postgres_tables
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:34,454 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:34,554 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Test truncation
+2025-12-29 17:30:34,555 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Test truncation
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+________________ test_delete_all_data_preserves_alembic_version ________________
+tests/api/test_admin.py:355: in test_delete_all_data_preserves_alembic_version
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:34,621 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:34,705 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+2025-12-29 17:30:34,705 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+____________ test_delete_all_data_returns_proper_response_structure ____________
+tests/api/test_admin.py:401: in test_delete_all_data_returns_proper_response_structure
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:34,767 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:34,852 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Testing response structure
+2025-12-29 17:30:34,853 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Testing response structure
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+_______________ test_delete_all_data_includes_reason_in_message ________________
+tests/api/test_admin.py:453: in test_delete_all_data_includes_reason_in_message
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:34,917 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:34,999 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Complete system reset
+2025-12-29 17:30:34,999 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: Complete system reset
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+_____________ test_delete_all_data_handles_missing_alembic_version _____________
+tests/api/test_admin.py:503: in test_delete_all_data_handles_missing_alembic_version
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:35,061 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:35,143 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+2025-12-29 17:30:35,144 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+____________ test_delete_all_data_handles_qdrant_errors_gracefully _____________
+tests/api/test_admin.py:543: in test_delete_all_data_handles_qdrant_errors_gracefully
+    assert response.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:35,209 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:35,510 - image_search_service.api.routes.admin - WARNING - Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+2025-12-29 17:30:35,512 - httpx - INFO - HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+------------------------------ Captured log call -------------------------------
+WARNING  image_search_service.api.routes.admin:admin.py:68 Delete all data blocked: ALLOW_DESTRUCTIVE_ADMIN_OPS not set. Attempted by request with reason: None
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/admin/data/delete-all "HTTP/1.1 403 Forbidden"
+______________ TestClusterEndpoints.test_split_cluster_not_found _______________
+tests/api/test_faces_routes.py:245: in test_split_cluster_not_found
+    response = await test_client.post(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1859: in post
+    return await self.request(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1540: in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_client.py:1629: in send
+    response = await self._send_handling_auth(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1657: in _send_handling_auth
+    response = await self._send_handling_redirects(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1694: in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_client.py:1730: in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_transports/asgi.py:170: in handle_async_request
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/applications.py:1135: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/applications.py:107: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.12/site-packages/starlette/middleware/cors.py:85: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/routing.py:716: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/routing.py:736: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/routing.py:290: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:118: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:104: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/fastapi/routing.py:428: in app
+    raw_response = await run_endpoint_function(
+.venv/lib/python3.12/site-packages/fastapi/routing.py:314: in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/image_search_service/api/routes/faces.py:358: in split_cluster
+    result = clusterer.recluster_within_cluster(cluster_id)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/image_search_service/faces/clusterer.py:243: in recluster_within_cluster
+    records, next_offset = qdrant.scroll_faces(
+src/image_search_service/vector/face_qdrant.py:557: in scroll_faces
+    records, next_offset = self.client.scroll(
+.venv/lib/python3.12/site-packages/qdrant_client/qdrant_client.py:761: in scroll
+    return self._client.scroll(
+.venv/lib/python3.12/site-packages/qdrant_client/qdrant_remote.py:911: in scroll
+    self.openapi_client.points_api.scroll_points(
+.venv/lib/python3.12/site-packages/qdrant_client/http/api/points_api.py:943: in scroll_points
+    return self._build_for_scroll_points(
+.venv/lib/python3.12/site-packages/qdrant_client/http/api/points_api.py:413: in _build_for_scroll_points
+    return self.api_client.request(
+.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py:95: in request
+    return self.send(request, type_)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py:130: in send
+    raise UnexpectedResponse.for_response(response)
+E   qdrant_client.http.exceptions.UnexpectedResponse: Unexpected Response: 404 (Not Found)
+E   Raw response content:
+E   b'{"status":{"error":"Not found: Collection `test_faces` doesn\'t exist!"},"time":3.186e-6}'
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:47,332 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:47,424 - image_search_service.db.session - INFO - Sync database engine initialized for workers
+2025-12-29 17:30:47,515 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-12-29 17:30:47,524 - image_search_service.vector.face_qdrant - INFO - Face Qdrant client initialized
+2025-12-29 17:30:47,527 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/test_faces/points/scroll "HTTP/1.1 404 Not Found"
+2025-12-29 17:30:47,527 - image_search_service.vector.face_qdrant - ERROR - Failed to scroll faces: Unexpected Response: 404 (Not Found)
+Raw response content:
+b'{"status":{"error":"Not found: Collection `test_faces` doesn\'t exist!"},"time":3.186e-6}'
+------------------------------ Captured log call -------------------------------
+INFO     image_search_service.db.session:session.py:96 Sync database engine initialized for workers
+INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+INFO     image_search_service.vector.face_qdrant:face_qdrant.py:96 Face Qdrant client initialized
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/test_faces/points/scroll "HTTP/1.1 404 Not Found"
+ERROR    image_search_service.vector.face_qdrant:face_qdrant.py:570 Failed to scroll faces: Unexpected Response: 404 (Not Found)
+Raw response content:
+b'{"status":{"error":"Not found: Collection `test_faces` doesn\'t exist!"},"time":3.186e-6}'
+________ TestPrototypeEndpoints.test_create_prototype_person_not_found _________
+tests/api/test_faces_routes.py:643: in test_create_prototype_person_not_found
+    assert response.status_code == 404
+E   assert 405 == 404
+E    +  where 405 = <Response [405 Method Not Allowed]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:50,791 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:50,871 - httpx - INFO - HTTP Request: POST http://test/api/v1/faces/persons/8cf92d80-2d78-4bc6-a329-90e6cb464362/prototypes "HTTP/1.1 405 Method Not Allowed"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1740 HTTP Request: POST http://test/api/v1/faces/persons/8cf92d80-2d78-4bc6-a329-90e6cb464362/prototypes "HTTP/1.1 405 Method Not Allowed"
+_________ TestPrototypeEndpoints.test_list_prototypes_person_not_found _________
+tests/api/test_faces_routes.py:652: in test_list_prototypes_person_not_found
+    assert response.status_code == 404
+E   assert 200 == 404
+E    +  where 200 = <Response [200 OK]>.status_code
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:50,942 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:51,024 - httpx - INFO - HTTP Request: GET http://test/api/v1/faces/persons/ac292947-8dc6-4b21-b709-88add7dcfa71/prototypes "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1740 HTTP Request: GET http://test/api/v1/faces/persons/ac292947-8dc6-4b21-b709-88add7dcfa71/prototypes "HTTP/1.1 200 OK"
+___________ TestClusteringWorkflow.test_clustering_workflow_no_faces ___________
+tests/api/test_faces_routes.py:901: in test_clustering_workflow_no_faces
+    response = await test_client.post(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1859: in post
+    return await self.request(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1540: in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_client.py:1629: in send
+    response = await self._send_handling_auth(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1657: in _send_handling_auth
+    response = await self._send_handling_redirects(
+.venv/lib/python3.12/site-packages/httpx/_client.py:1694: in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_client.py:1730: in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/httpx/_transports/asgi.py:170: in handle_async_request
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/applications.py:1135: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/applications.py:107: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.12/site-packages/starlette/middleware/cors.py:85: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/routing.py:716: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/routing.py:736: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/routing.py:290: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:118: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.12/site-packages/fastapi/routing.py:104: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/fastapi/routing.py:428: in app
+    raw_response = await run_endpoint_function(
+.venv/lib/python3.12/site-packages/fastapi/routing.py:314: in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/image_search_service/api/routes/faces.py:1112: in trigger_clustering
+    result = clusterer.cluster_unlabeled_faces(
+src/image_search_service/faces/clusterer.py:167: in cluster_unlabeled_faces
+    qdrant.update_cluster_ids(point_ids, cluster_id)
+src/image_search_service/vector/face_qdrant.py:346: in update_cluster_ids
+    self.client.set_payload(
+.venv/lib/python3.12/site-packages/qdrant_client/qdrant_client.py:1248: in set_payload
+    return self._client.set_payload(
+.venv/lib/python3.12/site-packages/qdrant_client/qdrant_remote.py:1501: in set_payload
+    result: types.UpdateResult | None = self.openapi_client.points_api.set_payload(
+.venv/lib/python3.12/site-packages/qdrant_client/http/api/points_api.py:960: in set_payload
+    return self._build_for_set_payload(
+.venv/lib/python3.12/site-packages/qdrant_client/http/api/points_api.py:447: in _build_for_set_payload
+    return self.api_client.request(
+.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py:95: in request
+    return self.send(request, type_)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py:130: in send
+    raise UnexpectedResponse.for_response(response)
+E   qdrant_client.http.exceptions.UnexpectedResponse: Unexpected Response: 404 (Not Found)
+E   Raw response content:
+E   b'{"status":{"error":"Not found: Collection `test_faces` doesn\'t exist!"},"time":0.000012083}'
+---------------------------- Captured stdout setup -----------------------------
+2025-12-29 17:30:53,312 - image_search_service.main - INFO - CORS middleware enabled
+------------------------------ Captured log setup ------------------------------
+INFO     image_search_service.main:main.py:69 CORS middleware enabled
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:30:53,392 - image_search_service.faces.clusterer - INFO - Starting face clustering (quality>=0.5, max=50000)
+2025-12-29 17:30:53,442 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:53,728 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:54,033 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:54,320 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:54,638 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:54,941 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:55,213 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:55,502 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:55,805 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:56,095 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:56,375 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:56,669 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:56,956 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:57,250 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:57,850 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:58,121 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:58,410 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:58,659 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+2025-12-29 17:30:58,761 - image_search_service.faces.clusterer - INFO - Clustering 17440 unlabeled faces
+2025-12-29 17:34:44,845 - httpx - INFO - HTTP Request: POST http://localhost:6333/collections/test_faces/points/payload?wait=true "HTTP/1.1 404 Not Found"
+2025-12-29 17:34:44,846 - image_search_service.vector.face_qdrant - ERROR - Failed to update cluster_ids: Unexpected Response: 404 (Not Found)
+Raw response content:
+b'{"status":{"error":"Not found: Collection `test_faces` doesn\'t exist!"},"time":0.000012083}'
+------------------------------ Captured log call -------------------------------
+INFO     image_search_service.faces.clusterer:clusterer.py:59 Starting face clustering (quality>=0.5, max=50000)
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/faces/points/scroll "HTTP/1.1 200 OK"
+INFO     image_search_service.faces.clusterer:clusterer.py:126 Clustering 17440 unlabeled faces
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:6333/collections/test_faces/points/payload?wait=true "HTTP/1.1 404 Not Found"
+ERROR    image_search_service.vector.face_qdrant:face_qdrant.py:354 Failed to update cluster_ids: Unexpected Response: 404 (Not Found)
+Raw response content:
+b'{"status":{"error":"Not found: Collection `test_faces` doesn\'t exist!"},"time":0.000012083}'
+_____________ TestFaceProcessingService.test_process_assets_batch ______________
+tests/faces/test_service.py:227: in test_process_assets_batch
+    assert result["total_faces"] == 1
+E   assert 0 == 1
+----------------------------- Captured stdout call -----------------------------
+Applied providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}, 'CUDAExecutionProvider': {'sdpa_kernel': '0', 'use_tf32': '1', 'fuse_conv_bias': '0', 'prefer_nhwc': '0', 'tunable_op_max_tuning_duration_ms': '0', 'enable_skip_layer_norm_strict_mode': '0', 'tunable_op_tuning_enable': '0', 'tunable_op_enable': '0', 'use_ep_level_unified_stream': '0', 'device_id': '0', 'has_user_compute_stream': '0', 'gpu_external_empty_cache': '0', 'cudnn_conv_algo_search': 'EXHAUSTIVE', 'cudnn_conv1d_pad_to_nc1d': '0', 'gpu_mem_limit': '18446744073709551615', 'gpu_external_alloc': '0', 'gpu_external_free': '0', 'arena_extend_strategy': 'kNextPowerOfTwo', 'do_copy_in_default_stream': '1', 'enable_cuda_graph': '0', 'user_compute_stream': '0', 'cudnn_conv_use_max_workspace': '1'}}
+find model: /export/mac/.insightface/models/buffalo_l/1k3d68.onnx landmark_3d_68 ['None', 3, 192, 192] 0.0 1.0
+Applied providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}, 'CUDAExecutionProvider': {'sdpa_kernel': '0', 'use_tf32': '1', 'fuse_conv_bias': '0', 'prefer_nhwc': '0', 'tunable_op_max_tuning_duration_ms': '0', 'enable_skip_layer_norm_strict_mode': '0', 'tunable_op_tuning_enable': '0', 'tunable_op_enable': '0', 'use_ep_level_unified_stream': '0', 'device_id': '0', 'has_user_compute_stream': '0', 'gpu_external_empty_cache': '0', 'cudnn_conv_algo_search': 'EXHAUSTIVE', 'cudnn_conv1d_pad_to_nc1d': '0', 'gpu_mem_limit': '18446744073709551615', 'gpu_external_alloc': '0', 'gpu_external_free': '0', 'arena_extend_strategy': 'kNextPowerOfTwo', 'do_copy_in_default_stream': '1', 'enable_cuda_graph': '0', 'user_compute_stream': '0', 'cudnn_conv_use_max_workspace': '1'}}
+find model: /export/mac/.insightface/models/buffalo_l/2d106det.onnx landmark_2d_106 ['None', 3, 192, 192] 0.0 1.0
+Applied providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}, 'CUDAExecutionProvider': {'sdpa_kernel': '0', 'use_tf32': '1', 'fuse_conv_bias': '0', 'prefer_nhwc': '0', 'tunable_op_max_tuning_duration_ms': '0', 'enable_skip_layer_norm_strict_mode': '0', 'tunable_op_tuning_enable': '0', 'tunable_op_enable': '0', 'use_ep_level_unified_stream': '0', 'device_id': '0', 'has_user_compute_stream': '0', 'gpu_external_empty_cache': '0', 'cudnn_conv_algo_search': 'EXHAUSTIVE', 'cudnn_conv1d_pad_to_nc1d': '0', 'gpu_mem_limit': '18446744073709551615', 'gpu_external_alloc': '0', 'gpu_external_free': '0', 'arena_extend_strategy': 'kNextPowerOfTwo', 'do_copy_in_default_stream': '1', 'enable_cuda_graph': '0', 'user_compute_stream': '0', 'cudnn_conv_use_max_workspace': '1'}}
+find model: /export/mac/.insightface/models/buffalo_l/det_10g.onnx detection [1, 3, '?', '?'] 127.5 128.0
+Applied providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}, 'CUDAExecutionProvider': {'sdpa_kernel': '0', 'use_tf32': '1', 'fuse_conv_bias': '0', 'prefer_nhwc': '0', 'tunable_op_max_tuning_duration_ms': '0', 'enable_skip_layer_norm_strict_mode': '0', 'tunable_op_tuning_enable': '0', 'tunable_op_enable': '0', 'use_ep_level_unified_stream': '0', 'device_id': '0', 'has_user_compute_stream': '0', 'gpu_external_empty_cache': '0', 'cudnn_conv_algo_search': 'EXHAUSTIVE', 'cudnn_conv1d_pad_to_nc1d': '0', 'gpu_mem_limit': '18446744073709551615', 'gpu_external_alloc': '0', 'gpu_external_free': '0', 'arena_extend_strategy': 'kNextPowerOfTwo', 'do_copy_in_default_stream': '1', 'enable_cuda_graph': '0', 'user_compute_stream': '0', 'cudnn_conv_use_max_workspace': '1'}}
+find model: /export/mac/.insightface/models/buffalo_l/genderage.onnx genderage ['None', 3, 96, 96] 0.0 1.0
+Applied providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}, 'CUDAExecutionProvider': {'sdpa_kernel': '0', 'use_tf32': '1', 'fuse_conv_bias': '0', 'prefer_nhwc': '0', 'tunable_op_max_tuning_duration_ms': '0', 'enable_skip_layer_norm_strict_mode': '0', 'tunable_op_tuning_enable': '0', 'tunable_op_enable': '0', 'use_ep_level_unified_stream': '0', 'device_id': '0', 'has_user_compute_stream': '0', 'gpu_external_empty_cache': '0', 'cudnn_conv_algo_search': 'EXHAUSTIVE', 'cudnn_conv1d_pad_to_nc1d': '0', 'gpu_mem_limit': '18446744073709551615', 'gpu_external_alloc': '0', 'gpu_external_free': '0', 'arena_extend_strategy': 'kNextPowerOfTwo', 'do_copy_in_default_stream': '1', 'enable_cuda_graph': '0', 'user_compute_stream': '0', 'cudnn_conv_use_max_workspace': '1'}}
+find model: /export/mac/.insightface/models/buffalo_l/w600k_r50.onnx recognition ['None', 3, 112, 112] 127.5 127.5
+set det-size: (640, 640)
+2025-12-29 17:35:05,880 - image_search_service.faces.detector - INFO - Loaded InsightFace model (buffalo_l) with CUDAExecutionProvider
+2025-12-29 17:35:06,140 - image_search_service.faces.service - INFO - Pipeline stats: io_time=0.00s, gpu_time=2.07s, elapsed=2.07s, efficiency=0.0%, throughput=0.48 img/s
+------------------------------ Captured log call -------------------------------
+/export/workspace/image-search/image-search-service/.venv/lib/python3.12/site-packages/_pytest/unraisableexception.py:33: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+  gc.collect()
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+INFO     image_search_service.faces.detector:detector.py:40 Loaded InsightFace model (buffalo_l) with CUDAExecutionProvider
+INFO     image_search_service.faces.service:service.py:538 Pipeline stats: io_time=0.00s, gpu_time=2.07s, elapsed=2.07s, efficiency=0.0%, throughput=0.48 img/s
+_____ TestFaceProcessingService.test_process_assets_batch_parallel_loading _____
+tests/faces/test_service.py:471: in test_process_assets_batch_parallel_loading
+    assert result["total_faces"] == 5
+E   assert 0 == 5
+----------------------------- Captured stdout call -----------------------------
+2025-12-29 17:35:06,455 - image_search_service.faces.service - INFO - Pipeline stats: io_time=0.00s, gpu_time=0.05s, elapsed=0.05s, efficiency=0.0%, throughput=98.28 img/s
+------------------------------ Captured log call -------------------------------
+INFO     image_search_service.faces.service:service.py:538 Pipeline stats: io_time=0.00s, gpu_time=0.05s, elapsed=0.05s, efficiency=0.0%, throughput=98.28 img/s
+____________ TestSelectTemporalPrototypes.test_selects_one_per_era _____________
+tests/unit/test_prototype_selection.py:100: in test_selects_one_per_era
+    result = await select_temporal_prototypes(
+src/image_search_service/services/prototype_service.py:880: in select_temporal_prototypes
+    existing_proto.role = role
+    ^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'coroutine' object has no attribute 'role'
+______________ TestSelectTemporalPrototypes.test_preserves_pinned ______________
+tests/unit/test_prototype_selection.py:137: in test_preserves_pinned
+    result = await select_temporal_prototypes(
+src/image_search_service/services/prototype_service.py:938: in select_temporal_prototypes
+    existing_proto.role = PrototypeRole.EXEMPLAR
+    ^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'coroutine' object has no attribute 'role'
+________ TestSelectTemporalPrototypes.test_uses_highest_quality_per_era ________
+tests/unit/test_prototype_selection.py:177: in test_uses_highest_quality_per_era
+    result = await select_temporal_prototypes(
+src/image_search_service/services/prototype_service.py:880: in select_temporal_prototypes
+    existing_proto.role = role
+    ^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'coroutine' object has no attribute 'role'
+_______ TestSelectTemporalPrototypes.test_fills_exemplars_after_temporal _______
+tests/unit/test_prototype_selection.py:229: in test_fills_exemplars_after_temporal
+    with patch("image_search_service.services.prototype_service.get_settings") as mock_settings:
+/usr/lib/python3.12/unittest/mock.py:1458: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/unittest/mock.py:1431: in get_original
+    raise AttributeError(
+E   AttributeError: <module 'image_search_service.services.prototype_service' from '/export/workspace/image-search/image-search-service/src/image_search_service/services/prototype_service.py'> does not have the attribute 'get_settings'
+________ TestPruneTemporalPrototypes.test_prunes_lowest_priority_first _________
+tests/unit/test_prototype_selection.py:345: in test_prunes_lowest_priority_first
+    deleted_ids = await prune_temporal_prototypes(
+src/image_search_service/services/prototype_service.py:1027: in prune_temporal_prototypes
+    faces_by_id = {f.id: f for f in result.scalars().all()}
+                                    ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'coroutine' object has no attribute 'all'
+=============================== warnings summary ===============================
+src/image_search_service/api/routes/faces.py:381
+  /export/workspace/image-search/image-search-service/src/image_search_service/api/routes/faces.py:381: DeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+    sort_by: str = Query(
+
+src/image_search_service/api/routes/faces.py:386
+  /export/workspace/image-search/image-search-service/src/image_search_service/api/routes/faces.py:386: DeprecationWarning: `regex` has been deprecated, please use `pattern` instead
+    sort_order: str = Query("desc", regex="^(asc|desc)$", description="Sort order"),
+
+tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_fills_exemplars_after_temporal
+  /usr/lib/python3.12/unittest/mock.py:1601: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+    return exit_stack.__exit__(*exc_info)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/unit/test_qdrant_wrapper.py::test_upsert_vector_stores_point
+  /usr/lib/python3.12/copy.py:118: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+    def deepcopy(x, memo=None, _nil=[]):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/api/test_admin.py::test_delete_all_data_requires_confirm_flag - ...
+FAILED tests/api/test_admin.py::test_delete_all_data_requires_exact_confirmation_text
+FAILED tests/api/test_admin.py::test_delete_all_data_accepts_optional_reason
+FAILED tests/api/test_admin.py::test_delete_all_data_deletes_qdrant_collections
+FAILED tests/api/test_admin.py::test_delete_all_data_truncates_postgres_tables
+FAILED tests/api/test_admin.py::test_delete_all_data_preserves_alembic_version
+FAILED tests/api/test_admin.py::test_delete_all_data_returns_proper_response_structure
+FAILED tests/api/test_admin.py::test_delete_all_data_includes_reason_in_message
+FAILED tests/api/test_admin.py::test_delete_all_data_handles_missing_alembic_version
+FAILED tests/api/test_admin.py::test_delete_all_data_handles_qdrant_errors_gracefully
+FAILED tests/api/test_faces_routes.py::TestClusterEndpoints::test_split_cluster_not_found
+FAILED tests/api/test_faces_routes.py::TestPrototypeEndpoints::test_create_prototype_person_not_found
+FAILED tests/api/test_faces_routes.py::TestPrototypeEndpoints::test_list_prototypes_person_not_found
+FAILED tests/api/test_faces_routes.py::TestClusteringWorkflow::test_clustering_workflow_no_faces
+FAILED tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch
+FAILED tests/faces/test_service.py::TestFaceProcessingService::test_process_assets_batch_parallel_loading
+FAILED tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_selects_one_per_era
+FAILED tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_preserves_pinned
+FAILED tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_uses_highest_quality_per_era
+FAILED tests/unit/test_prototype_selection.py::TestSelectTemporalPrototypes::test_fills_exemplars_after_temporal
+FAILED tests/unit/test_prototype_selection.py::TestPruneTemporalPrototypes::test_prunes_lowest_priority_first
+====== 21 failed, 417 passed, 12 skipped, 4 warnings in 275.69s (0:04:35) ======

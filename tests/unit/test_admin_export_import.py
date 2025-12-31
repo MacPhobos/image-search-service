@@ -330,7 +330,6 @@ async def test_export_person_metadata_multiple_persons_ordered_by_name(
 @pytest.mark.asyncio
 async def test_export_person_metadata_normalizes_paths(db_session: AsyncSession) -> None:
     """Test export normalizes paths to absolute with symlinks resolved."""
-    from image_search_service.api.admin_schemas import ExportOptions
 
     # Create image asset with relative path (simulating database data)
     asset = ImageAsset(path="./photos/alice.jpg", training_status="trained")

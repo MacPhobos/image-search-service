@@ -1,7 +1,6 @@
 """Face clustering confidence calculation and filtering service."""
 
 import logging
-from typing import Any
 from uuid import UUID
 
 import numpy as np

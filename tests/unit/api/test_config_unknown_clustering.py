@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 
 from image_search_service.main import app
 
-
 client = TestClient(app)
 
 

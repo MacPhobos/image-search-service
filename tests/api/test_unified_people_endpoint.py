@@ -3,7 +3,6 @@
 import uuid
 
 import pytest
-from sqlalchemy import select
 
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 

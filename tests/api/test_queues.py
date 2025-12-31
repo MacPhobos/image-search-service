@@ -1,6 +1,6 @@
 """Test queue monitoring endpoints."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
@@ -11,13 +11,12 @@ from image_search_service.api.queue_schemas import (
     JobInfo,
     JobStatus,
     QueueDetailResponse,
-    QueueSummary,
     QueuesOverviewResponse,
+    QueueSummary,
     WorkerInfo,
     WorkersResponse,
     WorkerState,
 )
-
 
 # Mock Fixtures
 
@@ -111,9 +110,9 @@ def mock_queue_service(monkeypatch: pytest.MonkeyPatch) -> None:
                             queueName=name,
                             args=["arg1", "arg2"],
                             kwargs={"session_id": "123"},
-                            createdAt=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                            createdAt=datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
                             enqueuedAt=datetime(
-                                2024, 1, 1, 12, 0, 1, tzinfo=timezone.utc
+                                2024, 1, 1, 12, 0, 1, tzinfo=UTC
                             ),
                             startedAt=None,
                             endedAt=None,
@@ -149,12 +148,12 @@ def mock_queue_service(monkeypatch: pytest.MonkeyPatch) -> None:
                             queueName=name,
                             args=[],
                             kwargs={},
-                            createdAt=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                            createdAt=datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
                             enqueuedAt=datetime(
-                                2024, 1, 1, 12, 0, 1, tzinfo=timezone.utc
+                                2024, 1, 1, 12, 0, 1, tzinfo=UTC
                             ),
                             startedAt=datetime(
-                                2024, 1, 1, 12, 5, 0, tzinfo=timezone.utc
+                                2024, 1, 1, 12, 5, 0, tzinfo=UTC
                             ),
                             endedAt=None,
                             timeout=3600,
@@ -197,10 +196,10 @@ def mock_queue_service(monkeypatch: pytest.MonkeyPatch) -> None:
                     queueName="training-normal",
                     args=["session123"],
                     kwargs={"force": "true"},
-                    createdAt=datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
-                    enqueuedAt=datetime(2024, 1, 1, 10, 0, 1, tzinfo=timezone.utc),
-                    startedAt=datetime(2024, 1, 1, 10, 5, 0, tzinfo=timezone.utc),
-                    endedAt=datetime(2024, 1, 1, 10, 10, 0, tzinfo=timezone.utc),
+                    createdAt=datetime(2024, 1, 1, 10, 0, 0, tzinfo=UTC),
+                    enqueuedAt=datetime(2024, 1, 1, 10, 0, 1, tzinfo=UTC),
+                    startedAt=datetime(2024, 1, 1, 10, 5, 0, tzinfo=UTC),
+                    endedAt=datetime(2024, 1, 1, 10, 10, 0, tzinfo=UTC),
                     timeout=600,
                     result=None,
                     errorMessage="Division by zero",
@@ -219,10 +218,10 @@ def mock_queue_service(monkeypatch: pytest.MonkeyPatch) -> None:
                 queueName="training-normal",
                 args=[],
                 kwargs={},
-                createdAt=datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
-                enqueuedAt=datetime(2024, 1, 1, 9, 0, 1, tzinfo=timezone.utc),
-                startedAt=datetime(2024, 1, 1, 9, 5, 0, tzinfo=timezone.utc),
-                endedAt=datetime(2024, 1, 1, 9, 15, 0, tzinfo=timezone.utc),
+                createdAt=datetime(2024, 1, 1, 9, 0, 0, tzinfo=UTC),
+                enqueuedAt=datetime(2024, 1, 1, 9, 0, 1, tzinfo=UTC),
+                startedAt=datetime(2024, 1, 1, 9, 5, 0, tzinfo=UTC),
+                endedAt=datetime(2024, 1, 1, 9, 15, 0, tzinfo=UTC),
                 timeout=600,
                 result="success",
                 errorMessage=None,
@@ -244,13 +243,13 @@ def mock_queue_service(monkeypatch: pytest.MonkeyPatch) -> None:
                         currentJob=CurrentJobInfo(
                             jobId="current-job-1",
                             funcName="train_embeddings",
-                            startedAt=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                            startedAt=datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
                         ),
                         successfulJobCount=150,
                         failedJobCount=5,
                         totalWorkingTime=36000.5,
-                        birthDate=datetime(2024, 1, 1, 8, 0, 0, tzinfo=timezone.utc),
-                        lastHeartbeat=datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc),
+                        birthDate=datetime(2024, 1, 1, 8, 0, 0, tzinfo=UTC),
+                        lastHeartbeat=datetime(2024, 1, 1, 12, 30, 0, tzinfo=UTC),
                         pid=12345,
                         hostname="hostname1",
                     ),
@@ -262,8 +261,8 @@ def mock_queue_service(monkeypatch: pytest.MonkeyPatch) -> None:
                         successfulJobCount=80,
                         failedJobCount=2,
                         totalWorkingTime=18000.2,
-                        birthDate=datetime(2024, 1, 1, 8, 0, 0, tzinfo=timezone.utc),
-                        lastHeartbeat=datetime(2024, 1, 1, 12, 29, 0, tzinfo=timezone.utc),
+                        birthDate=datetime(2024, 1, 1, 8, 0, 0, tzinfo=UTC),
+                        lastHeartbeat=datetime(2024, 1, 1, 12, 29, 0, tzinfo=UTC),
                         pid=67890,
                         hostname="hostname2",
                     ),
