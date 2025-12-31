@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -815,12 +815,12 @@ class TrainingService:
         """Enrich directory list with training status metadata.
 
         Queries the training_subdirectories table to calculate trained counts
-        and training status for each subdirectory.
+        and training status for each subdirectory across all sessions.
 
         Args:
             db: Database session
             subdirs: List of DirectoryInfo objects to enrich
-            root_path: Root path being scanned
+            root_path: Root path being scanned (unused, kept for compatibility)
 
         Returns:
             Enriched list of DirectoryInfo objects with training status
@@ -828,60 +828,77 @@ class TrainingService:
         if not subdirs:
             return subdirs
 
-        # Query training_subdirectories for all subdirectories under this root path
-        # Join with TrainingSession to filter by root_path
+        # Collect all subdirectory paths to check
+        paths_to_check = [subdir.path for subdir in subdirs]
+
+        # Query TrainingSubdirectory.path directly, aggregate across all sessions
+        # Join with TrainingSession to check for in-progress status
+        # Note: We still query ALL records (even trained_count=0) to check for in_progress status
         query = (
-            select(TrainingSubdirectory)
+            select(
+                TrainingSubdirectory.path,
+                func.sum(TrainingSubdirectory.trained_count).label("total_trained"),
+                func.sum(TrainingSubdirectory.image_count).label("total_images"),
+                func.max(TrainingSubdirectory.created_at).label("last_trained_at"),
+                # Check if any linked session is currently running
+                # Use MAX(CASE...) for SQLite compatibility (bool_or is PostgreSQL-only)
+                func.max(
+                    func.cast(
+                        TrainingSession.status == SessionStatus.RUNNING.value,
+                        Integer,
+                    )
+                ).label("is_training"),
+            )
             .join(TrainingSession)
-            .where(TrainingSession.root_path == root_path)
-            .where(TrainingSubdirectory.trained_count > 0)
+            .where(TrainingSubdirectory.path.in_(paths_to_check))
+            .group_by(TrainingSubdirectory.path)
         )
 
         result = await db.execute(query)
-        trained_subdirs = result.scalars().all()
+        trained_records = result.all()
 
         # Build lookup map: path -> training metadata
-        # Aggregate across multiple sessions if a directory was trained multiple times
-        training_map: dict[str, dict[str, object]] = {}
+        training_map: dict[str, tuple[int, datetime | None, bool]] = {}
 
-        for ts in trained_subdirs:
-            if ts.path not in training_map:
-                training_map[ts.path] = {
-                    "trained_count": ts.trained_count,
-                    "last_trained_at": ts.created_at,
-                    "total_trained": ts.trained_count,
-                }
-            else:
-                # Aggregate trained counts across sessions
-                training_map[ts.path]["total_trained"] += ts.trained_count
-
-                # Keep the most recent training timestamp
-                if ts.created_at > training_map[ts.path]["last_trained_at"]:
-                    training_map[ts.path]["last_trained_at"] = ts.created_at
+        for record in trained_records:
+            training_map[record.path] = (
+                record.total_trained or 0,
+                record.last_trained_at,
+                # is_training is 1 if any session is running, 0 otherwise (from MAX(CAST(...)))
+                bool(record.is_training),
+            )
 
         # Enrich subdirectories with training status
         for subdir in subdirs:
             if subdir.path in training_map:
-                metadata = training_map[subdir.path]
-                subdir.trained_count = metadata["total_trained"]
-                subdir.last_trained_at = metadata["last_trained_at"]
+                total_trained, last_trained_at, is_training = training_map[subdir.path]
+                subdir.trained_count = total_trained
 
                 # Calculate training status
-                if subdir.trained_count == 0:
+                # Priority: in_progress > complete > partial > never
+                if is_training:
+                    subdir.training_status = "in_progress"
+                    # For in_progress, set last_trained_at even if trained_count is 0
+                    subdir.last_trained_at = last_trained_at
+                elif total_trained == 0:
+                    # Has database record but no training completed
                     subdir.training_status = "never"
-                elif subdir.trained_count >= subdir.image_count:
+                    subdir.last_trained_at = None
+                elif total_trained >= subdir.image_count:
                     subdir.training_status = "complete"
+                    subdir.last_trained_at = last_trained_at
                 else:
                     subdir.training_status = "partial"
+                    subdir.last_trained_at = last_trained_at
             else:
-                # Never trained
+                # Never trained (no database record)
                 subdir.trained_count = 0
                 subdir.last_trained_at = None
                 subdir.training_status = "never"
 
         logger.debug(
             f"Enriched {len(subdirs)} subdirectories with training status "
-            f"({len(training_map)} have been trained)"
+            f"({len(training_map)} have training records)"
         )
 
         return subdirs
