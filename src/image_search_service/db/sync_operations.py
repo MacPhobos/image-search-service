@@ -17,6 +17,7 @@ from image_search_service.db.models import (
     TrainingEvidence,
     TrainingJob,
     TrainingSession,
+    TrainingSubdirectory,
 )
 from image_search_service.db.session import get_sync_engine
 
@@ -203,3 +204,53 @@ def get_session_by_id_sync(session: Session, session_id: int) -> TrainingSession
     """
     stmt = select(TrainingSession).where(TrainingSession.id == session_id)
     return session.execute(stmt).scalar_one_or_none()
+
+
+def increment_subdirectory_trained_count_sync(
+    session: Session, session_id: int, asset_file_path: str
+) -> None:
+    """Increment trained_count for the subdirectory containing the asset.
+
+    This function is called when a training job completes successfully.
+    It finds the TrainingSubdirectory record matching the asset's parent
+    directory and session_id, then increments its trained_count.
+
+    Args:
+        session: Database session
+        session_id: Training session ID
+        asset_file_path: Full file path of the trained asset
+
+    Returns:
+        None (silently skips if subdirectory not found)
+    """
+    from pathlib import Path
+
+    # Extract parent directory from asset path
+    parent_dir = str(Path(asset_file_path).parent)
+
+    # Find matching subdirectory for this session
+    stmt = (
+        select(TrainingSubdirectory)
+        .where(TrainingSubdirectory.session_id == session_id)
+        .where(TrainingSubdirectory.path == parent_dir)
+    )
+    subdir = session.execute(stmt).scalar_one_or_none()
+
+    if subdir:
+        # Increment trained_count
+        subdir.trained_count = (subdir.trained_count or 0) + 1
+        session.commit()
+
+        logger.debug(
+            f"Incremented trained_count for subdirectory {subdir.id} "
+            f"(path: {parent_dir}, count: {subdir.trained_count})"
+        )
+    else:
+        # This can happen if:
+        # 1. Asset was discovered but not part of selected subdirectories
+        # 2. Subdirectory record was deleted
+        # 3. Path mismatch due to symlinks or path normalization
+        logger.debug(
+            f"Subdirectory not found for asset path {asset_file_path} "
+            f"in session {session_id} (parent: {parent_dir})"
+        )

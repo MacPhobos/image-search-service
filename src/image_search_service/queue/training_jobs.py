@@ -21,6 +21,7 @@ from image_search_service.db.sync_operations import (
     get_asset_by_id_sync,
     get_session_by_id_sync,
     get_sync_session,
+    increment_subdirectory_trained_count_sync,
     update_asset_indexed_at_sync,
     update_job_progress_sync,
     update_training_job_sync,
@@ -496,6 +497,11 @@ def train_batch(
                         },
                     )
 
+                    # Increment subdirectory trained count
+                    increment_subdirectory_trained_count_sync(
+                        db_session, session_id, asset.path
+                    )
+
                     processed += 1
 
                     # Flush Qdrant buffer when full
@@ -658,6 +664,9 @@ def train_single_asset(job_id: int, asset_id: int, session_id: int) -> dict[str,
         # Update job status and timing
         update_job_progress_sync(db_session, job_id, 100, total_time_ms)
         update_training_job_sync(db_session, job_id, JobStatus.COMPLETED.value)
+
+        # Increment subdirectory trained count
+        increment_subdirectory_trained_count_sync(db_session, session_id, asset.path)
 
         # Build comprehensive metadata
         metadata = _build_evidence_metadata(
