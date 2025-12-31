@@ -1,5 +1,6 @@
 """Thumbnail generation service for image assets."""
 
+import base64
 import hashlib
 from pathlib import Path
 
@@ -90,6 +91,36 @@ class ThumbnailService:
             img = ImageOps.exif_transpose(img) or img
             width, height = img.size
             return (width, height)
+
+    def get_thumbnail_as_base64(self, asset_id: int, original_path: str) -> str | None:
+        """Get thumbnail as base64 data URI.
+
+        Args:
+            asset_id: Image asset ID
+            original_path: Original image path for on-demand generation
+
+        Returns:
+            Base64 data URI string or None if generation fails
+        """
+        thumb_path = self.get_thumbnail_path(asset_id, original_path)
+
+        # Generate if doesn't exist
+        if not thumb_path.exists():
+            try:
+                self.generate_thumbnail(original_path, asset_id)
+            except Exception as e:
+                logger.warning(f"Failed to generate thumbnail for asset {asset_id}: {e}")
+                return None
+
+        # Read and encode
+        try:
+            with open(thumb_path, "rb") as f:
+                image_data = f.read()
+            base64_data = base64.b64encode(image_data).decode("utf-8")
+            return f"data:image/jpeg;base64,{base64_data}"
+        except Exception as e:
+            logger.warning(f"Failed to read thumbnail for asset {asset_id}: {e}")
+            return None
 
     def generate_thumbnail(
         self, original_path: str, asset_id: int

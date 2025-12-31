@@ -93,6 +93,35 @@ class PaginatedResponse[T](BaseModel):
     has_more: bool = Field(alias="hasMore")
 
 
+class BatchThumbnailRequest(BaseModel):
+    """Request for batch thumbnail retrieval."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    asset_ids: list[int] = Field(
+        alias="assetIds",
+        min_length=1,
+        max_length=100,
+        description="Array of asset IDs to fetch thumbnails for",
+    )
+
+
+class BatchThumbnailResponse(BaseModel):
+    """Response containing batch thumbnails as data URIs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thumbnails: dict[str, str | None] = Field(
+        description="Map of asset ID to base64 data URI (or null if not found)"
+    )
+    found: int = Field(description="Count of successfully retrieved thumbnails")
+    not_found: list[int] = Field(
+        alias="notFound",
+        default_factory=list,
+        description="Array of asset IDs that were not found",
+    )
+
+
 class ErrorResponse(BaseModel):
     """Error response schema."""
 
