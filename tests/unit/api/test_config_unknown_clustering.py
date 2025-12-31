@@ -1,8 +1,6 @@
 """Tests for unknown face clustering configuration endpoints."""
 
-import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
 
 from image_search_service.main import app
 
@@ -13,31 +11,20 @@ client = TestClient(app)
 class TestUnknownClusteringConfig:
     """Tests for /api/v1/config/face-clustering-unknown endpoints."""
 
-    @patch("image_search_service.api.routes.config.get_settings")
-    def test_get_unknown_clustering_config_returns_defaults(self, mock_get_settings):
+    def test_get_unknown_clustering_config_returns_defaults(self):
         """GET should return current configuration."""
-        # Given: settings with default values
-        mock_settings = mock_get_settings.return_value
-        mock_settings.unknown_face_cluster_min_confidence = 0.85
-        mock_settings.unknown_face_cluster_min_size = 5
-
-        # When: get config
+        # When: get config (uses default settings from environment)
         response = client.get("/api/v1/config/face-clustering-unknown")
 
         # Then: returns 200 with config
         assert response.status_code == 200
         data = response.json()
+        # Default values from Settings class
         assert data["minConfidence"] == 0.85
         assert data["minClusterSize"] == 5
 
-    @patch("image_search_service.api.routes.config.get_settings")
-    def test_get_unknown_clustering_config_uses_camel_case(self, mock_get_settings):
+    def test_get_unknown_clustering_config_uses_camel_case(self):
         """Response should use camelCase field names."""
-        # Given: settings
-        mock_settings = mock_get_settings.return_value
-        mock_settings.unknown_face_cluster_min_confidence = 0.90
-        mock_settings.unknown_face_cluster_min_size = 10
-
         # When: get config
         response = client.get("/api/v1/config/face-clustering-unknown")
 
