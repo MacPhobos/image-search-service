@@ -3,56 +3,18 @@
 Device Selection Priority:
 1. DEVICE environment variable (explicit override)
 2. FORCE_CPU=true (force CPU mode)
-3. RQ worker subprocess context (force CPU if MPS would be selected)
-4. Auto-detect: CUDA > MPS > CPU
+3. Auto-detect: CUDA > MPS > CPU
 
 This module provides device abstraction for PyTorch and ONNX Runtime,
 supporting CUDA (NVIDIA), MPS (Apple Silicon), and CPU fallback.
-
-Note: MPS is disabled in RQ worker subprocesses on macOS because Apple's
-Metal Performance Shaders do not work reliably in forked subprocess contexts.
 """
 
-import multiprocessing
 import os
 import platform
 from functools import lru_cache
 from typing import Any
 
 import torch
-
-from image_search_service.core.logging import get_logger
-
-logger = get_logger(__name__)
-
-
-def is_rq_worker() -> bool:
-    """Detect if running in RQ worker subprocess context.
-
-    RQ workers use fork() on Unix systems, which creates a subprocess
-    with a different process name. This is unreliable for MPS on macOS.
-
-    Returns:
-        True if running in RQ worker subprocess, False otherwise
-    """
-    try:
-        current_proc = multiprocessing.current_process()
-        # RQ worker subprocesses have different process names
-        # Main process is typically "MainProcess"
-        # Worker subprocesses are named "Process-1", "Process-2", etc.
-        # or "ForkProcess-1", etc.
-        is_subprocess = (
-            current_proc.name != "MainProcess"
-            and (
-                current_proc.name.startswith("Process-")
-                or current_proc.name.startswith("ForkProcess-")
-                or current_proc.name.startswith("SpawnProcess-")
-            )
-        )
-        return is_subprocess
-    except Exception:
-        # If we can't determine, assume not in worker
-        return False
 
 
 @lru_cache(maxsize=1)
@@ -62,10 +24,9 @@ def get_device() -> str:
     Priority:
     1. DEVICE env var (explicit override)
     2. FORCE_CPU env var (forces CPU)
-    3. RQ worker subprocess check (disable MPS if in worker on Apple Silicon)
-    4. CUDA (if available)
-    5. MPS (if available on Apple Silicon and not in RQ worker)
-    6. CPU (fallback)
+    3. CUDA (if available)
+    4. MPS (if available on Apple Silicon)
+    5. CPU (fallback)
 
     Returns:
         Device string: "cuda", "cuda:0", "mps", or "cpu"
@@ -83,18 +44,7 @@ def get_device() -> str:
     if os.getenv("FORCE_CPU", "").lower() in ("true", "1", "yes"):
         return "cpu"
 
-    # Priority 3: Check if in RQ worker subprocess on Apple Silicon
-    # MPS doesn't work reliably in forked subprocesses on macOS
-    if is_rq_worker() and is_apple_silicon():
-        mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        if mps_available:
-            logger.info(
-                "Detected RQ worker subprocess on Apple Silicon. "
-                "Disabling MPS (not reliable in forked processes). Using CPU instead."
-            )
-            return "cpu"
-
-    # Priority 4: Auto-detect best available
+    # Priority 3: Auto-detect best available
     if torch.cuda.is_available():
         return "cuda"
 
