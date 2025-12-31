@@ -112,6 +112,9 @@ class DirectoryService:
                             name=entry.name,
                             imageCount=image_count,
                             selected=False,
+                            trainedCount=None,
+                            lastTrainedAt=None,
+                            trainingStatus=None,
                         )
                     )
         except Exception as e:
