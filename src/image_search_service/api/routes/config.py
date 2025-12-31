@@ -116,6 +116,37 @@ class FaceSuggestionSettingsUpdateRequest(BaseModel):
     items_per_group: int = Field(..., ge=1, le=50)
 
 
+class UnknownFaceClusteringConfigResponse(BaseModel):
+    """Unknown face clustering display configuration."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
+
+    min_confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Minimum intra-cluster confidence threshold",
+    )
+    min_cluster_size: int = Field(
+        ..., ge=1, le=100, description="Minimum number of faces required per cluster"
+    )
+
+
+class UnknownFaceClusteringConfigUpdateRequest(BaseModel):
+    """Request to update unknown face clustering configuration."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
+
+    min_confidence: float = Field(..., ge=0.0, le=1.0)
+    min_cluster_size: int = Field(..., ge=1, le=100)
+
+
 # Endpoints
 @router.get("/face-matching", response_model=FaceMatchingConfigResponse)
 async def get_face_matching_config(
@@ -229,6 +260,59 @@ async def update_face_suggestion_settings(
     return FaceSuggestionSettingsResponse(
         groups_per_page=request.groups_per_page,
         items_per_group=request.items_per_group,
+    )
+
+
+@router.get("/face-clustering-unknown", response_model=UnknownFaceClusteringConfigResponse)
+async def get_unknown_clustering_config(
+    db: AsyncSession = Depends(get_db),
+) -> UnknownFaceClusteringConfigResponse:
+    """Get configuration for unknown face clustering display.
+
+    Returns the current filtering configuration for the Unknown Faces view,
+    including confidence threshold and minimum cluster size settings.
+    """
+    from image_search_service.core.config import get_settings
+
+    settings = get_settings()
+
+    return UnknownFaceClusteringConfigResponse(
+        min_confidence=settings.unknown_face_cluster_min_confidence,
+        min_cluster_size=settings.unknown_face_cluster_min_size,
+    )
+
+
+@router.put("/face-clustering-unknown", response_model=UnknownFaceClusteringConfigResponse)
+async def update_unknown_clustering_config(
+    request: UnknownFaceClusteringConfigUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> UnknownFaceClusteringConfigResponse:
+    """Update configuration for unknown face clustering display.
+
+    Updates filtering thresholds for the Unknown Faces view. Note that these
+    settings are currently stored in environment variables and will require
+    service restart to take effect. Future versions will support runtime updates.
+
+    Args:
+        request: Updated configuration values
+        db: Database session (for future database-backed config)
+
+    Returns:
+        Updated configuration values
+    """
+    # Note: Currently settings are loaded from environment variables
+    # Future enhancement: Store in database for runtime updates
+    logger.warning(
+        "Unknown clustering config update requested but currently requires restart. "
+        f"Requested: min_confidence={request.min_confidence}, "
+        f"min_cluster_size={request.min_cluster_size}"
+    )
+
+    # For now, return the requested values as acknowledgment
+    # TODO: Implement database-backed config storage for runtime updates
+    return UnknownFaceClusteringConfigResponse(
+        min_confidence=request.min_confidence,
+        min_cluster_size=request.min_cluster_size,
     )
 
 

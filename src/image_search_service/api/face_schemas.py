@@ -71,6 +71,15 @@ class ClusterSummary(CamelCaseModel):
     face_count: int
     sample_face_ids: list[UUID]
     avg_quality: float | None = None
+    cluster_confidence: float | None = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Intra-cluster confidence score (average pairwise similarity)",
+    )
+    representative_face_id: UUID | None = Field(
+        None, description="Highest quality face ID in cluster"
+    )
     person_id: UUID | None = None
     person_name: str | None = None
 

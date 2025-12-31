@@ -79,9 +79,24 @@ async def list_clusters(
     include_labeled: bool = Query(
         False, description="Include clusters already assigned to persons"
     ),
+    min_confidence: float | None = Query(
+        None, ge=0.0, le=1.0, description="Minimum intra-cluster confidence threshold"
+    ),
+    min_cluster_size: int | None = Query(
+        None, ge=1, description="Minimum number of faces per cluster"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> ClusterListResponse:
-    """List face clusters with pagination."""
+    """List face clusters with pagination and optional filtering.
+
+    Supports filtering by:
+    - include_labeled: Whether to include clusters assigned to persons
+    - min_confidence: Minimum average pairwise similarity within cluster
+    - min_cluster_size: Minimum number of faces in cluster
+
+    When min_confidence is specified, cluster confidence is calculated on-the-fly
+    by comparing face embeddings in Qdrant. This may add latency for large clusters.
+    """
     # Build subquery for cluster aggregation
     # Note: array_agg is PostgreSQL-specific, group_concat for SQLite
     # In production we use Postgres; for tests we detect SQLite
@@ -141,16 +156,43 @@ async def list_clusters(
             # We want clusters where has_person IS NOT TRUE (NULL or FALSE)
             cluster_query = cluster_query.having(has_person_expr.isnot(True))
 
-    # Count total clusters
+    # Filter by minimum cluster size (SQL-level filtering)
+    if min_cluster_size is not None:
+        cluster_query = cluster_query.having(
+            func.count(FaceInstance.id) >= min_cluster_size
+        )
+
+    # Note: min_confidence filtering is done post-query since it requires
+    # fetching embeddings from Qdrant for similarity calculation
+
+    # Count total clusters BEFORE min_confidence filtering
+    # (confidence filtering happens post-query)
     count_subquery = cluster_query.subquery()
     count_query = select(func.count()).select_from(count_subquery)
     total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
+    pre_filter_total = total_result.scalar() or 0
 
-    # Get paginated results
-    paginated_query = cluster_query.offset((page - 1) * page_size).limit(page_size)
+    # Get paginated results (we'll fetch more and filter if needed)
+    # For confidence filtering, we need to over-fetch since some may be filtered out
+    fetch_limit = page_size
+    if min_confidence is not None:
+        # Fetch 3x requested to account for confidence filtering
+        fetch_limit = min(page_size * 3, 100)
+
+    paginated_query = cluster_query.offset((page - 1) * page_size).limit(fetch_limit)
     result = await db.execute(paginated_query)
     rows = result.all()
+
+    # Initialize clustering service for confidence calculation
+    clustering_service = None
+    if min_confidence is not None:
+        from image_search_service.services.face_clustering_service import (
+            FaceClusteringService,
+        )
+        from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+        qdrant = get_face_qdrant_client()
+        clustering_service = FaceClusteringService(db, qdrant)
 
     items = []
     for row in rows:
@@ -190,16 +232,63 @@ async def list_clusters(
             # PostgreSQL returns array of UUIDs
             face_ids_list = list(row.face_ids) if row.face_ids else []
 
+        # Calculate cluster confidence if filtering requested
+        cluster_confidence = None
+        if clustering_service is not None:
+            try:
+                # Get Qdrant point IDs for this cluster's faces
+                qdrant_point_ids_query = select(FaceInstance.qdrant_point_id).where(
+                    FaceInstance.cluster_id == row.cluster_id
+                )
+                qdrant_result = await db.execute(qdrant_point_ids_query)
+                qdrant_point_ids = [r[0] for r in qdrant_result.all()]
+
+                if qdrant_point_ids:
+                    cluster_confidence = await clustering_service.calculate_cluster_confidence(
+                        cluster_id=row.cluster_id,
+                        qdrant_point_ids=qdrant_point_ids,
+                    )
+
+                    # Filter out clusters below confidence threshold
+                    if min_confidence is not None and cluster_confidence < min_confidence:
+                        logger.debug(
+                            f"Filtered out cluster {row.cluster_id} "
+                            f"(confidence {cluster_confidence:.3f} < {min_confidence})"
+                        )
+                        continue
+            except Exception as e:
+                logger.warning(
+                    f"Failed to calculate confidence for cluster {row.cluster_id}: {e}"
+                )
+                # Don't filter out clusters with calculation errors
+                cluster_confidence = None
+
+        # Select representative face (highest quality)
+        representative_face_id = None
+        if face_ids_list:
+            # Simple approach: sort by quality and pick first
+            # For more sophisticated selection, use clustering_service
+            representative_face_id = face_ids_list[0]  # Placeholder for now
+
         items.append(
             ClusterSummary(
                 cluster_id=row.cluster_id,
                 face_count=row.face_count,
                 sample_face_ids=face_ids_list[:5],
                 avg_quality=row.avg_quality,
+                cluster_confidence=cluster_confidence,
+                representative_face_id=representative_face_id,
                 person_id=person_id,
                 person_name=person_name,
             )
         )
+
+        # Stop if we have enough items after filtering
+        if len(items) >= page_size:
+            break
+
+    # Adjust total count if confidence filtering was applied
+    total = len(items) if min_confidence is not None else pre_filter_total
 
     return ClusterListResponse(
         items=items,

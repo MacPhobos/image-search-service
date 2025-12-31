@@ -86,6 +86,22 @@ class Settings(BaseSettings):
     )
     face_unknown_eps: float = Field(default=0.5, alias="FACE_UNKNOWN_EPS")
 
+    # Unknown face clustering display settings
+    unknown_face_cluster_min_confidence: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        alias="UNKNOWN_FACE_CLUSTER_MIN_CONFIDENCE",
+        description="Minimum intra-cluster confidence threshold for displaying unknown faces (0.0-1.0)",
+    )
+    unknown_face_cluster_min_size: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        alias="UNKNOWN_FACE_CLUSTER_MIN_SIZE",
+        description="Minimum number of faces required per cluster for displaying unknown faces",
+    )
+
     # Face suggestion settings
     face_suggestion_min_confidence: float = Field(
         default=0.7,
