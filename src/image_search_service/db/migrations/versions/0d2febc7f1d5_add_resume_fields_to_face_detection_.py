@@ -1,7 +1,7 @@
 """add_resume_fields_to_face_detection_sessions
 
 Revision ID: 0d2febc7f1d5
-Revises: a1b2c3d4e5f6
+Revises: 974bfe0f68ed
 Create Date: 2025-12-27 16:49:39.669594
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '0d2febc7f1d5'
-down_revision: Union[str, Sequence[str], None] = 'a1b2c3d4e5f6'
+down_revision: Union[str, Sequence[str], None] = '974bfe0f68ed'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
