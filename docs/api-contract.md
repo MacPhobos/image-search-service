@@ -1,6 +1,6 @@
 # Image Search API Contract
 
-> **Version**: 1.7.0
+> **Version**: 1.8.0
 > **Last Updated**: 2025-12-30
 > **Status**: FROZEN - Changes require version bump and UI sync
 
@@ -20,7 +20,9 @@ This document defines the API contract between `image-search-service` (backend) 
    - [Search](#search)
    - [People/Faces](#peoplefaces)
    - [Face Suggestions](#face-suggestions)
+   - [Face Clusters](#face-clusters)
    - [Temporal Prototypes](#temporal-prototypes)
+   - [Configuration](#configuration)
    - [Jobs](#jobs)
    - [Corrections](#corrections)
    - [Queue Monitoring](#queue-monitoring)
@@ -1033,6 +1035,118 @@ Accept or reject multiple suggestions in a single request.
 
 ---
 
+### Face Clusters
+
+Face clustering groups similar unidentified faces for efficient labeling. Clusters represent groups of faces that likely belong to the same person based on visual similarity.
+
+#### ClusterSummary Schema
+
+```typescript
+interface ClusterSummary {
+	clusterId: string; // Cluster identifier
+	faceCount: number; // Number of faces in cluster
+	sampleFaceIds: string[]; // Array of sample face IDs (max 5, sorted by quality)
+	avgQuality: number | null; // Average face quality score (0.0-1.0)
+	clusterConfidence: number | null; // Average pairwise cosine similarity (0.0-1.0)
+	representativeFaceId: string | null; // Highest quality face ID in cluster
+	personId: string | null; // Assigned person ID (null if unlabeled)
+	personName: string | null; // Assigned person name (null if unlabeled)
+}
+```
+
+#### ClusterListResponse Schema
+
+```typescript
+interface ClusterListResponse {
+	items: ClusterSummary[]; // Array of clusters
+	total: number; // Total number of clusters
+	page: number; // Current page (1-indexed)
+	pageSize: number; // Items per page
+	hasMore: boolean; // Whether more pages available
+}
+```
+
+#### `GET /api/v1/faces/clusters`
+
+List face clusters with optional filtering.
+
+**Query Parameters**
+
+| Parameter         | Type    | Default | Description                                      |
+| ----------------- | ------- | ------- | ------------------------------------------------ |
+| `page`            | integer | 1       | Page number (1-indexed)                          |
+| `page_size`       | integer | 20      | Items per page (max: 100)                        |
+| `include_labeled` | boolean | false   | Include labeled clusters (default: false)        |
+| `min_confidence`  | number  | -       | Minimum intra-cluster confidence (0.0-1.0)       |
+| `min_cluster_size`| integer | -       | Minimum faces per cluster (≥1)                   |
+
+**Response** `200 OK`
+
+```json
+{
+	"items": [
+		{
+			"clusterId": "clu_abc123",
+			"faceCount": 12,
+			"sampleFaceIds": ["uuid1", "uuid2", "uuid3", "uuid4", "uuid5"],
+			"avgQuality": 0.78,
+			"clusterConfidence": 0.91,
+			"representativeFaceId": "uuid1",
+			"personId": null,
+			"personName": null
+		},
+		{
+			"clusterId": "clu_def456",
+			"faceCount": 8,
+			"sampleFaceIds": ["uuid6", "uuid7", "uuid8"],
+			"avgQuality": 0.82,
+			"clusterConfidence": 0.88,
+			"representativeFaceId": "uuid6",
+			"personId": null,
+			"personName": null
+		}
+	],
+	"total": 45,
+	"page": 1,
+	"pageSize": 20,
+	"hasMore": true
+}
+```
+
+**Response Fields**:
+- `clusterConfidence` (number, optional): Average pairwise cosine similarity score between all faces in cluster (0.0-1.0). Higher values indicate more cohesive clusters.
+- `representativeFaceId` (string UUID, optional): ID of the highest quality face in the cluster, useful for displaying a primary thumbnail.
+- `sampleFaceIds` (array): Face IDs sorted by quality score descending, up to 5 faces.
+
+**Example Requests**
+
+```bash
+# Get unlabeled clusters only (default)
+GET /api/v1/faces/clusters
+
+# Get high-confidence unlabeled clusters with at least 5 faces
+GET /api/v1/faces/clusters?min_confidence=0.85&min_cluster_size=5
+
+# Get all clusters including labeled ones
+GET /api/v1/faces/clusters?include_labeled=true
+
+# Pagination
+GET /api/v1/faces/clusters?page=2&page_size=50
+```
+
+**Response** `400 Bad Request` - Invalid parameters
+
+```json
+{
+	"error": {
+		"code": "VALIDATION_ERROR",
+		"message": "min_confidence must be between 0.0 and 1.0"
+	}
+}
+```
+
+---
+
 ### Temporal Prototypes
 
 Manage person prototypes with temporal diversity. Prototypes are exemplar faces representing a person across different age eras. The system supports pinned (user-selected) and automatic prototypes with temporal coverage reporting.
@@ -1339,6 +1453,94 @@ Trigger temporal re-diversification of prototypes. This recomputes automatic pro
 	"error": {
 		"code": "PERSON_NOT_FOUND",
 		"message": "Person with ID '550e8400-...' not found"
+	}
+}
+```
+
+---
+
+### Configuration
+
+Application configuration management for user preferences and system settings.
+
+#### UnknownFaceClusteringConfig Schema
+
+```typescript
+interface UnknownFaceClusteringConfig {
+	minConfidence: number; // Minimum intra-cluster confidence threshold (0.0-1.0)
+	minClusterSize: number; // Minimum number of faces per cluster (1-100)
+}
+```
+
+#### `GET /api/v1/config/face-clustering-unknown`
+
+Get current configuration for unknown face clustering filtering.
+
+**Response** `200 OK`
+
+```json
+{
+	"minConfidence": 0.85,
+	"minClusterSize": 5
+}
+```
+
+**Response Fields**:
+- `minConfidence` (number): Minimum intra-cluster confidence threshold (0.0-1.0). Only clusters with average pairwise similarity above this value are displayed in the Unknown Faces view.
+- `minClusterSize` (number): Minimum number of faces required per cluster (1-100). Clusters with fewer faces are filtered out.
+
+**Default Values**:
+- `minConfidence`: 0.85 (85% similarity)
+- `minClusterSize`: 5 faces
+
+#### `PUT /api/v1/config/face-clustering-unknown`
+
+Update configuration for unknown face clustering filtering.
+
+**Request Body**
+
+```json
+{
+	"minConfidence": 0.90,
+	"minClusterSize": 10
+}
+```
+
+**Request Fields**:
+- `minConfidence` (number, required): Minimum confidence threshold (0.0-1.0)
+- `minClusterSize` (number, required): Minimum cluster size (1-100)
+
+**Response** `200 OK`
+
+Returns updated configuration (same schema as GET).
+
+```json
+{
+	"minConfidence": 0.90,
+	"minClusterSize": 10
+}
+```
+
+**Response** `422 Unprocessable Entity`
+
+Validation error if values are out of range.
+
+```json
+{
+	"error": {
+		"code": "VALIDATION_ERROR",
+		"message": "minConfidence must be between 0.0 and 1.0"
+	}
+}
+```
+
+or
+
+```json
+{
+	"error": {
+		"code": "VALIDATION_ERROR",
+		"message": "minClusterSize must be between 1 and 100"
 	}
 }
 ```
@@ -1837,6 +2039,7 @@ All endpoints except:
 
 | Version | Date       | Changes                                                                                      |
 | ------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 1.8.0   | 2025-12-30 | Added Face Clusters section with GET /api/v1/faces/clusters endpoint supporting optional filtering by min_confidence and min_cluster_size query parameters. Enhanced ClusterSummary schema with clusterConfidence (average pairwise similarity) and representativeFaceId (highest quality face) fields. Added Configuration section with GET /api/v1/config/face-clustering-unknown and PUT /api/v1/config/face-clustering-unknown endpoints for managing unknown face clustering display settings. |
 | 1.7.0   | 2025-12-30 | Added Queue Monitoring section with 3 new endpoints: GET /api/v1/queues (overview), GET /api/v1/queues/{queue_name} (queue details), GET /api/v1/jobs/{job_id} (job details), GET /api/v1/workers (worker information). Added QUEUE_NOT_FOUND error code. Read-only endpoints for monitoring RQ queue status, jobs, and worker health. |
 | 1.6.0   | 2025-12-29 | Added Temporal Prototypes section with 5 new endpoints: POST /api/v1/faces/persons/{personId}/prototypes/pin (pin prototype), DELETE /api/v1/faces/persons/{personId}/prototypes/{prototypeId}/pin (unpin), GET /api/v1/faces/persons/{personId}/prototypes (list), GET /api/v1/faces/persons/{personId}/temporal-coverage (coverage report), POST /api/v1/faces/persons/{personId}/prototypes/recompute (recompute). Added Prototype, TemporalCoverage, and PrototypeListResponse schemas. Added PROTOTYPE_NOT_FOUND, PROTOTYPE_QUOTA_EXCEEDED, TEMPORAL_QUOTA_EXCEEDED, and FACE_PERSON_MISMATCH error codes. Documented age era buckets (infant, child, teen, young_adult, adult, senior) and prototype roles (primary, temporal, exemplar, fallback). |
 | 1.5.0   | 2025-12-28 | Enhanced FaceSuggestion schema with bounding box data: added fullImageUrl, bboxX, bboxY, bboxW, bboxH, detectionConfidence, qualityScore fields for face overlay display support. |
