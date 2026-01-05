@@ -207,12 +207,19 @@ class EmbeddingService:
         This is significantly faster than calling embed_image() multiple times
         as it batches the GPU inference.
 
+        Memory Management:
+        - Explicitly deletes batch tensors after inference to prevent GPU memory
+          accumulation on MPS (Metal Performance Shaders on macOS)
+        - MPS relies on Python garbage collection and doesn't have cuda.empty_cache()
+        - Explicit deletion + gc.collect() ensures timely memory release
+
         Args:
             images: List of PIL Image objects (already loaded)
 
         Returns:
             List of normalized embedding vectors
         """
+        import gc
         import torch
 
         if not images:
@@ -236,6 +243,19 @@ class EmbeddingService:
 
         # Convert to list of lists
         results: list[list[float]] = image_features.cpu().numpy().tolist()
+
+        # Explicit GPU memory cleanup (critical for MPS on macOS)
+        # Delete intermediate tensors immediately
+        del batch_tensor
+        del image_features
+        # Delete preprocessing tensors list
+        del tensors
+
+        # Force garbage collection to free GPU memory
+        # This is especially important for MPS which doesn't have empty_cache()
+        # Safe on CUDA (just adds small overhead) and CPU (no-op)
+        gc.collect()
+
         return results
 
 

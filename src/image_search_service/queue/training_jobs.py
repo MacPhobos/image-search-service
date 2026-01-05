@@ -1,5 +1,6 @@
 """Training job functions for RQ background processing."""
 
+import gc
 import hashlib
 import queue
 import threading
@@ -262,7 +263,7 @@ def train_batch(
     session_id: int,
     asset_ids: list[int],
     batch_num: int,
-    gpu_batch_size: int = 16,
+    gpu_batch_size: int | None = None,
     io_workers: int = 4,
     pipeline_queue_size: int = 4,
 ) -> dict[str, int | float]:
@@ -272,11 +273,17 @@ def train_batch(
     - Background thread: loads images in parallel using ThreadPoolExecutor
     - Main thread: batched GPU embedding + Qdrant upserts + DB operations
 
+    Memory Management:
+    - Explicit tensor cleanup in embed_images_batch() (embedding.py)
+    - Periodic garbage collection during batch processing (configurable interval)
+    - Both critical for MPS on macOS to prevent GPU memory accumulation
+    - Safe on CUDA (minimal overhead) and CPU (no-op)
+
     Args:
         session_id: Training session ID
         asset_ids: List of asset IDs to process
         batch_num: Batch number for logging
-        gpu_batch_size: Number of images per GPU batch (default: 16)
+        gpu_batch_size: Number of images per GPU batch (from config if None)
         io_workers: Number of I/O threads for parallel image loading (default: 4)
         pipeline_queue_size: Number of batches to buffer (default: 2)
 
@@ -290,6 +297,11 @@ def train_batch(
     tracker = ProgressTracker(session_id)
     embedding_service = get_embedding_service()
     settings = get_settings()
+
+    # Use config-provided batch size if not specified
+    if gpu_batch_size is None:
+        gpu_batch_size = settings.gpu_batch_size
+        logger.debug(f"Using GPU batch size from config: {gpu_batch_size}")
 
     # Ensure collection exists (cached - only hits API once per process)
     ensure_collection(embedding_service.embedding_dim)
@@ -503,6 +515,17 @@ def train_batch(
                     )
 
                     processed += 1
+
+                    # Periodic GPU memory cleanup (critical for MPS on macOS)
+                    # Forces garbage collection every N images to free accumulated tensors
+                    if (
+                        settings.gpu_memory_cleanup_enabled
+                        and processed % settings.gpu_memory_cleanup_interval == 0
+                    ):
+                        gc.collect()
+                        logger.debug(
+                            f"Periodic garbage collection after {processed} images processed"
+                        )
 
                     # Flush Qdrant buffer when full
                     if len(qdrant_buffer) >= qdrant_batch_size:

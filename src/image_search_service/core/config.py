@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     watch_auto_train: bool = Field(default=False, alias="WATCH_AUTO_TRAIN")
     training_batch_size: int = Field(default=32, alias="TRAINING_BATCH_SIZE")
 
+    # GPU memory management (for MPS/CUDA)
+    # Size of batches for GPU inference (default 16 for CUDA, consider 8 for MPS)
+    gpu_batch_size: int = Field(default=16, alias="GPU_BATCH_SIZE")
+    # Enable explicit GPU memory cleanup (delete tensors, call gc.collect())
+    gpu_memory_cleanup_enabled: bool = Field(default=True, alias="GPU_MEMORY_CLEANUP_ENABLED")
+    # Interval for periodic garbage collection (every N images processed)
+    gpu_memory_cleanup_interval: int = Field(default=50, alias="GPU_MEMORY_CLEANUP_INTERVAL")
+
     # Face recognition model settings
     face_model_name: str = Field(default="buffalo_l", alias="FACE_MODEL_NAME")
     face_model_checkpoint: str = Field(default="", alias="FACE_MODEL_CHECKPOINT")
