@@ -4,7 +4,7 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Integer, func, select
+from sqlalchemy import Integer, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.api.face_schemas import (
@@ -56,6 +56,8 @@ from image_search_service.api.face_schemas import (
 from image_search_service.db.models import (
     FaceAssignmentEvent,
     FaceInstance,
+    FaceSuggestion,
+    FaceSuggestionStatus,
     ImageAsset,
     Person,
     PersonPrototype,
@@ -854,6 +856,28 @@ async def bulk_remove_from_person(
         qdrant = get_face_qdrant_client()
         qdrant.update_person_ids(qdrant_point_ids, None)
 
+        # Step 4.5: Expire all pending suggestions where these faces were the source
+        from datetime import UTC, datetime
+
+        expire_result = await db.execute(
+            update(FaceSuggestion)
+            .where(
+                FaceSuggestion.source_face_id.in_(face_ids),
+                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+            )
+            .values(
+                status=FaceSuggestionStatus.EXPIRED.value,
+                reviewed_at=datetime.now(UTC),
+            )
+        )
+        expired_count = expire_result.rowcount  # type: ignore[attr-defined]
+
+        if expired_count > 0:
+            logger.info(
+                f"Expired {expired_count} pending suggestions based on "
+                f"{len(face_ids)} unassigned faces"
+            )
+
         # Step 5: Create audit event
         event = FaceAssignmentEvent(
             operation="REMOVE_FROM_PERSON",
@@ -1035,6 +1059,28 @@ async def bulk_move_to_person(
         # Step 5: Update Qdrant payloads
         qdrant = get_face_qdrant_client()
         qdrant.update_person_ids(qdrant_point_ids, target_person.id)
+
+        # Step 5.5: Expire pending suggestions based on old person assignment
+        # When faces move to a different person, old suggestions are no longer valid
+        from datetime import UTC, datetime
+
+        expire_result = await db.execute(
+            update(FaceSuggestion)
+            .where(
+                FaceSuggestion.source_face_id.in_(face_ids),
+                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+            )
+            .values(
+                status=FaceSuggestionStatus.EXPIRED.value,
+                reviewed_at=datetime.now(UTC),
+            )
+        )
+        expired_count = expire_result.rowcount  # type: ignore[attr-defined]
+
+        if expired_count > 0:
+            logger.info(
+                f"Expired {expired_count} pending suggestions based on {len(face_ids)} moved faces"
+            )
 
         # Step 6: Create audit event
         event = FaceAssignmentEvent(
@@ -1413,6 +1459,28 @@ async def unassign_face_from_person(
         qdrant = get_face_qdrant_client()
         qdrant.update_person_ids([face.qdrant_point_id], None)
 
+        # Expire all pending suggestions where this face was the source
+        # When a face is unassigned, suggestions based on it are no longer valid
+        from datetime import UTC, datetime
+
+        expire_result = await db.execute(
+            update(FaceSuggestion)
+            .where(
+                FaceSuggestion.source_face_id == face_id,
+                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+            )
+            .values(
+                status=FaceSuggestionStatus.EXPIRED.value,
+                reviewed_at=datetime.now(UTC),
+            )
+        )
+        expired_count = expire_result.rowcount  # type: ignore[attr-defined]
+
+        if expired_count > 0:
+            logger.info(
+                f"Expired {expired_count} pending suggestions based on face {face_id}"
+            )
+
         # Create audit event
         event = FaceAssignmentEvent(
             operation="UNASSIGN_FROM_PERSON",
@@ -1748,6 +1816,33 @@ async def unpin_prototype_endpoint(
     await db.commit()
 
     return {"status": "unpinned"}
+
+
+@router.delete(
+    "/persons/{person_id}/prototypes/{prototype_id}",
+    summary="Delete prototype",
+)
+async def delete_prototype_endpoint(
+    person_id: UUID,
+    prototype_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Delete a prototype assignment entirely."""
+    from image_search_service.services import prototype_service
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    qdrant = get_face_qdrant_client()
+
+    await prototype_service.delete_prototype(
+        db=db,
+        qdrant=qdrant,
+        person_id=person_id,
+        prototype_id=prototype_id,
+    )
+
+    await db.commit()
+
+    return {"status": "deleted"}
 
 
 @router.get(

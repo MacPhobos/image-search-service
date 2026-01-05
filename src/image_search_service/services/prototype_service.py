@@ -664,6 +664,62 @@ async def unpin_prototype(
     return True
 
 
+async def delete_prototype(
+    db: AsyncSession,
+    qdrant: FaceQdrantClient,
+    person_id: UUID,
+    prototype_id: UUID,
+) -> bool:
+    """Delete a prototype assignment entirely.
+
+    This removes the prototype from the database and updates Qdrant to mark
+    the face as no longer a prototype.
+
+    Args:
+        db: Async database session
+        qdrant: Qdrant client for vector operations
+        person_id: UUID of the person
+        prototype_id: UUID of prototype to delete
+
+    Returns:
+        True if deleted successfully
+
+    Raises:
+        HTTPException: 404 if prototype not found, 400 if belongs to wrong person
+    """
+    from fastapi import HTTPException
+
+    # Get prototype
+    prototype = await db.get(PersonPrototype, prototype_id)
+    if not prototype:
+        raise HTTPException(status_code=404, detail="Prototype not found")
+
+    if prototype.person_id != person_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prototype {prototype_id} does not belong to person {person_id}",
+        )
+
+    # Store qdrant_point_id before deletion
+    qdrant_point_id = prototype.qdrant_point_id
+
+    # Delete the prototype
+    await db.delete(prototype)
+    await db.flush()
+
+    # Update Qdrant: set is_prototype=False
+    try:
+        qdrant.update_payload(qdrant_point_id, {"is_prototype": False})
+        logger.info(f"Deleted prototype {prototype_id} for person {person_id}")
+    except Exception as e:
+        logger.error(
+            f"Failed to update Qdrant payload for deleted prototype {prototype_id}: {e}"
+        )
+        # Continue - prototype is deleted from DB, Qdrant update can be retried
+
+    return True
+
+
 async def get_prototypes_for_person(
     db: AsyncSession,
     person_id: UUID,
