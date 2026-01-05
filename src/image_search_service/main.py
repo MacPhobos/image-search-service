@@ -22,10 +22,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     Note: Database and external clients are lazily initialized on first use,
     so we only need to handle cleanup here.
+
+    Model Preloading
+    ================
+    The embedding model is preloaded during startup in the main process.
+    This ensures it's cached in memory before RQ workers fork, avoiding
+    Metal compiler service initialization issues in subprocesses on macOS.
+    Workers inherit the already-loaded model object, allowing safe inference
+    without re-initialization.
     """
+    from image_search_service.services.embedding import preload_embedding_model
     from image_search_service.services.watcher_manager import WatcherManager
 
     logger.info("Application starting up")
+
+    # Preload embedding model in main process before workers fork
+    # This avoids Metal compiler service issues on macOS in subprocesses
+    try:
+        preload_embedding_model()
+    except Exception as e:
+        logger.warning(f"Failed to preload embedding model: {e}. Will load on first use.")
 
     # Start file watcher if enabled
     watcher = WatcherManager.get_instance()

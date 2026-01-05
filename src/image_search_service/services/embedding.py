@@ -1,7 +1,22 @@
-"""Embedding service using OpenCLIP for image and text embeddings."""
+"""Embedding service using OpenCLIP for image and text embeddings.
 
+Model Caching in Parent Process
+================================
+To avoid MPS (Metal Performance Shaders) crashes in RQ worker subprocesses
+on macOS, the embedding model is preloaded in the main process before
+workers fork. Workers then inherit the already-loaded model object in
+memory, allowing them to use it without re-initialization.
+
+The model is loaded once in the main FastAPI process (via preload_embedding_model())
+during application startup. Worker subprocesses that fork after this point
+will inherit the model in their memory space and can safely use it for
+inference without triggering Metal compiler service initialization.
+"""
+
+import multiprocessing
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from PIL import Image
@@ -16,10 +31,55 @@ logger = get_logger(__name__)
 _model = None
 _preprocess = None
 _tokenizer = None
+_model_lock = Lock()
+
+
+def _is_main_process() -> bool:
+    """Check if running in main process (not a subprocess).
+
+    Returns:
+        True if in main process, False if in subprocess
+    """
+    try:
+        return multiprocessing.current_process().name == "MainProcess"
+    except Exception:
+        # If we can't determine, assume main process (safe default)
+        return True
+
+
+def preload_embedding_model() -> None:
+    """Preload embedding model in main process before workers fork.
+
+    This function should be called during application startup in the main
+    FastAPI process. It ensures the model is loaded and cached in memory
+    before RQ workers fork, so workers inherit the already-loaded model
+    object. This avoids Metal compiler service initialization issues in
+    subprocess contexts on macOS.
+
+    Safe to call multiple times - only loads once due to global state check.
+    """
+    if not _is_main_process():
+        logger.debug("preload_embedding_model called in subprocess, skipping")
+        return
+
+    global _model, _preprocess, _tokenizer
+
+    with _model_lock:
+        if _model is not None:
+            logger.debug("Embedding model already preloaded, skipping")
+            return
+
+        logger.info("Preloading embedding model in main process")
+        _load_model()
+        logger.info("Embedding model preloaded successfully")
 
 
 def _load_model() -> tuple[Any, Any, Any]:
     """Lazy load OpenCLIP model.
+
+    Loads the model on first call and caches globally. In the main process,
+    this is called during startup via preload_embedding_model(). In worker
+    subprocesses, the model should already be cached from inheritance.
 
     Returns:
         Tuple of (model, preprocess, tokenizer)
