@@ -7,6 +7,11 @@ Device Selection Priority:
 
 This module provides device abstraction for PyTorch and ONNX Runtime,
 supporting CUDA (NVIDIA), MPS (Apple Silicon), and CPU fallback.
+
+MPS Known Issues & Workarounds:
+- PyTorch MPS has broken memory accounting on macOS (reports exabytes when only GBs used)
+- Solution: Disable high watermark check (official PyTorch workaround)
+- See: https://github.com/pytorch/pytorch/issues
 """
 
 import os
@@ -15,6 +20,35 @@ from functools import lru_cache
 from typing import Any
 
 import torch
+
+
+def _initialize_mps_workarounds() -> None:
+    """Initialize MPS workarounds for known PyTorch bugs on macOS.
+
+    PyTorch MPS backend has broken memory accounting that incorrectly reports
+    "other allocations" in the exabytes range when only gigabytes are actually
+    used. This causes the high watermark check to fail even when memory is
+    available.
+
+    The official PyTorch workaround is to disable the high watermark check
+    by setting PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0. This does not remove
+    memory limits - the OS still enforces hard memory caps.
+
+    This must be called before any GPU operations occur.
+
+    See: https://github.com/pytorch/pytorch/issues (MPS memory accounting)
+    """
+    if not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+        return
+
+    # Disable MPS high watermark to work around broken memory accounting
+    # The high watermark check was failing due to incorrect memory reporting,
+    # not actual memory shortage. Disabling it allows GPU operations to proceed.
+    os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+
+
+# Initialize MPS workarounds at module import time (before any GPU operations)
+_initialize_mps_workarounds()
 
 
 @lru_cache(maxsize=1)
