@@ -65,7 +65,7 @@ configure_logging()
 logger = get_logger(__name__)
 
 # Test configuration
-REDIS_TEST_DB = int(os.environ.get("REDIS_TEST_DB", "1"))
+REDIS_TEST_DB = int(os.environ.get("REDIS_TEST_DB", "0"))  # Use same DB as worker (default is 0)
 QDRANT_TEST_COLLECTION = os.environ.get("QDRANT_TEST_COLLECTION", "test_rq_worker_assets")
 SAMPLE_IMAGE_PATH = Path(__file__).parent.parent / "tests" / "sample-images" / "Charlize Theron_30.jpg"
 
@@ -153,6 +153,7 @@ class TestEnvironment:
             now = datetime.now(UTC)
             self.test_training_session = TrainingSession(
                 name=f"test_rq_worker_{now.timestamp()}",
+                root_path=str(SAMPLE_IMAGE_PATH.parent),  # Use test image directory as root
                 category_id=1,
                 status=SessionStatus.PENDING.value,
                 created_at=now,
@@ -172,10 +173,7 @@ class TestEnvironment:
             # Create image asset
             self.test_asset = ImageAsset(
                 path=str(SAMPLE_IMAGE_PATH),
-                filename=SAMPLE_IMAGE_PATH.name,
-                training_session_id=self.test_training_session.id,
                 created_at=now,
-                updated_at=now,
             )
             self.db_session.add(self.test_asset)
             self.db_session.flush()  # Get the ID
