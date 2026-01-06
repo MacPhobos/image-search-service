@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageFile
 from sqlalchemy import select
 
 from image_search_service.core.config import get_settings
@@ -37,6 +37,17 @@ from image_search_service.vector.qdrant import (
 
 logger = get_logger(__name__)
 
+# PIL configuration to prevent EXIF parsing crashes
+# PIL's TIFF/EXIF parser is not thread-safe and crashes on malformed metadata
+# when called from multiple threads simultaneously
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# Lock for thread-safe PIL image loading
+# PIL's C extensions (especially TIFF/EXIF parsing) crash in multi-threaded
+# contexts when encountering corrupted metadata. Using a lock serializes image
+# loading to prevent race conditions in PIL's C code.
+_image_load_lock = threading.Lock()
+
 # Sentinel for producer completion
 _SENTINEL = object()
 
@@ -58,12 +69,20 @@ class LoadedImageBatch:
 def _load_image_pil(path: str) -> tuple[str, Image.Image | None]:
     """Load image from disk as PIL Image (I/O bound operation).
 
+    Protected against EXIF parsing crashes via serialized PIL operations.
+    PIL's TIFF/EXIF parser (native C code) is not thread-safe and crashes
+    with segfaults on malformed EXIF data when called from multiple threads
+    simultaneously. Uses a module-level lock to serialize image loading,
+    preventing race conditions in PIL's C extensions.
+
     Returns (path, image) where image is None if loading failed.
     """
     try:
-        img = Image.open(path)
-        # Load image data into memory (otherwise it's lazy)
-        img.load()
+        # Serialize PIL operations to prevent thread-safety issues in C code
+        # when parsing corrupted EXIF data
+        with _image_load_lock:
+            img = Image.open(path)
+            img.load()  # Load image data into memory
         return (path, img)
     except Exception as e:
         logger.warning(f"Failed to load image {path}: {e}")
