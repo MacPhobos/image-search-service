@@ -42,10 +42,15 @@ logger = get_logger(__name__)
 # when called from multiple threads simultaneously
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+# Disable EXIF data loading to prevent segfaults on corrupted EXIF
+# PIL's native C EXIF parser crashes with signal 11 when parsing malformed
+# EXIF data, especially in multi-threaded contexts. Since EXIF data is not
+# needed for embedding generation, we disable it entirely at the class level.
+Image.Image._getexif = lambda self: None
+
 # Lock for thread-safe PIL image loading
-# PIL's C extensions (especially TIFF/EXIF parsing) crash in multi-threaded
-# contexts when encountering corrupted metadata. Using a lock serializes image
-# loading to prevent race conditions in PIL's C code.
+# PIL's C code is not thread-safe. Even with EXIF disabled, use a lock
+# to serialize image operations and prevent race conditions.
 _image_load_lock = threading.Lock()
 
 # Sentinel for producer completion
