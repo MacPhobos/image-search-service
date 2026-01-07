@@ -238,21 +238,8 @@ async def create_or_update_prototypes_temporal(
     except Exception as e:
         logger.error(f"Failed to update Qdrant payload for prototype {prototype.id}: {e}")
 
-    # Step 9: Check if pruning needed
-    all_protos = await get_prototypes_for_person(db, person_id)
-    if len(all_protos) > settings.face_prototype_max_total:
-        logger.info(
-            f"Person {person_id} has {len(all_protos)} prototypes, "
-            f"pruning to {settings.face_prototype_max_total}"
-        )
-        await prune_temporal_prototypes(
-            db=db,
-            qdrant=qdrant,
-            person_id=person_id,
-            max_total=settings.face_prototype_max_total,
-            preserve_pins=True,
-        )
-
+    # Step 9: No automatic pruning - only prune based on prototype_max_exemplars
+    # in legacy mode or when explicitly requested via recompute_prototypes_for_person
     return prototype
 
 
@@ -488,7 +475,7 @@ async def validate_pin_request(
             status_code=400, detail="age_era_bucket is required for temporal prototypes"
         )
 
-    # Check PRIMARY quota
+    # Check PRIMARY quota - limited by max_exemplars
     if role_upper == "PRIMARY":
         primary_count_query = select(func.count()).where(
             PersonPrototype.person_id == person_id,
@@ -498,11 +485,16 @@ async def validate_pin_request(
         result = await db.execute(primary_count_query)
         primary_count = result.scalar() or 0
 
-        if primary_count >= settings.face_prototype_primary_slots:
-            max_slots = settings.face_prototype_primary_slots
+        # PRIMARY prototypes count toward max_exemplars limit
+        max_primaries = settings.face_prototype_max_exemplars // 2  # Reserve half for primaries
+        if primary_count >= max_primaries:
+            max_ex = settings.face_prototype_max_exemplars
             raise HTTPException(
                 status_code=400,
-                detail=f"Maximum {max_slots} PRIMARY prototypes already pinned",
+                detail=(
+                    f"Maximum {max_primaries} PRIMARY prototypes already pinned "
+                    f"(based on max_exemplars={max_ex})"
+                ),
             )
 
     # Check TEMPORAL era quota
@@ -964,17 +956,17 @@ async def select_temporal_prototypes(
                 break
 
     # Phase 2: Fill remaining slots with EXEMPLAR (highest quality overall)
-    max_total = settings.face_prototype_max_total
+    max_exemplars = settings.face_prototype_max_exemplars
     current_count = len(pinned_protos) + len(selected_protos)
 
-    if current_count < max_total:
+    if current_count < max_exemplars:
         # Get all faces sorted by quality
         all_faces_sorted = sorted(
             [(f, f.quality_score or 0.0) for f in faces], key=lambda x: x[1], reverse=True
         )
 
         for face, quality in all_faces_sorted:
-            if current_count >= max_total:
+            if current_count >= max_exemplars:
                 break
 
             if face.id in used_face_ids:
@@ -1023,10 +1015,10 @@ async def prune_temporal_prototypes(
     db: AsyncSession,
     qdrant: FaceQdrantClient,
     person_id: UUID,
-    max_total: int,
+    max_exemplars: int,
     preserve_pins: bool = True,
 ) -> list[UUID]:
-    """Prune prototypes to max_total while respecting temporal coverage.
+    """Prune prototypes to max_exemplars while respecting temporal coverage.
 
     Priority (highest to lowest):
     1. Pinned PRIMARY prototypes (never pruned if preserve_pins=True)
@@ -1039,7 +1031,7 @@ async def prune_temporal_prototypes(
         db: Async database session
         qdrant: Qdrant client for vector operations
         person_id: UUID of the person
-        max_total: Maximum total prototypes allowed
+        max_exemplars: Maximum total prototypes allowed
         preserve_pins: If True, never prune pinned prototypes
 
     Returns:
@@ -1048,7 +1040,7 @@ async def prune_temporal_prototypes(
     # Get all prototypes
     all_protos = await get_prototypes_for_person(db, person_id)
 
-    if len(all_protos) <= max_total:
+    if len(all_protos) <= max_exemplars:
         return []
 
     # Separate pinned and unpinned
@@ -1056,16 +1048,16 @@ async def prune_temporal_prototypes(
     unpinned = [p for p in all_protos if not (p.is_pinned and preserve_pins)]
 
     # If pinned prototypes exceed limit, we have a problem
-    if len(pinned) > max_total:
+    if len(pinned) > max_exemplars:
         logger.warning(
             f"Person {person_id} has {len(pinned)} pinned prototypes "
-            f"exceeding max_total={max_total}"
+            f"exceeding max_exemplars={max_exemplars}"
         )
         # Don't prune pinned if preserve_pins=True
         return []
 
     # Calculate how many unpinned we can keep
-    slots_available = max_total - len(pinned)
+    slots_available = max_exemplars - len(pinned)
 
     if slots_available <= 0:
         # Must prune all unpinned
@@ -1180,7 +1172,7 @@ async def recompute_prototypes_for_person(
         db=db,
         qdrant=qdrant,
         person_id=person_id,
-        max_total=settings.face_prototype_max_total,
+        max_exemplars=settings.face_prototype_max_exemplars,
         preserve_pins=preserve_pins,
     )
 

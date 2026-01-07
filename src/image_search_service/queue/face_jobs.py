@@ -966,3 +966,70 @@ def expire_old_suggestions_job(
         return {"status": "error", "message": str(e)}
     finally:
         db_session.close()
+
+
+def cleanup_orphaned_suggestions_job() -> dict[str, Any]:
+    """Clean up orphaned FaceSuggestion records where source face assignments changed.
+
+    Finds and expires all pending suggestions where:
+    - source_face.person_id is NULL (face was unassigned), OR
+    - source_face.person_id != suggestion.suggested_person_id (face moved to different person)
+
+    This job should be run periodically to fix any orphaned suggestions that
+    weren't cleaned up during face assignment changes.
+
+    Returns:
+        Dictionary with job results
+    """
+    from sqlalchemy import and_, or_
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    logger.info(f"[{job_id}] Starting cleanup of orphaned face suggestions")
+
+    db_session = get_sync_session()
+
+    try:
+        # Find pending suggestions where source face assignment is invalid
+        # Join with FaceInstance to check current person assignment
+        query = (
+            select(FaceSuggestion)
+            .join(FaceInstance, FaceSuggestion.source_face_id == FaceInstance.id)
+            .where(
+                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+                or_(
+                    # Source face is no longer assigned to any person
+                    FaceInstance.person_id.is_(None),
+                    # Source face moved to a different person
+                    and_(
+                        FaceInstance.person_id.isnot(None),
+                        FaceInstance.person_id != FaceSuggestion.suggested_person_id,
+                    ),
+                ),
+            )
+        )
+
+        result = db_session.execute(query)
+        orphaned_suggestions = result.scalars().all()
+
+        expired_count = 0
+        for suggestion in orphaned_suggestions:
+            suggestion.status = FaceSuggestionStatus.EXPIRED.value
+            suggestion.reviewed_at = datetime.now(UTC)
+            expired_count += 1
+
+        db_session.commit()
+
+        logger.info(f"[{job_id}] Expired {expired_count} orphaned suggestions")
+
+        return {
+            "status": "completed",
+            "expired_count": expired_count,
+        }
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Error cleaning up orphaned suggestions: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        db_session.close()

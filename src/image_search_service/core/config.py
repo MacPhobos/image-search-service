@@ -143,21 +143,6 @@ class Settings(BaseSettings):
     )
 
     # Temporal prototype settings
-    face_prototype_max_total: int = Field(
-        default=12,
-        alias="FACE_PROTOTYPE_MAX_TOTAL",
-        description="Maximum total prototypes per person (including all types)",
-    )
-    face_prototype_temporal_slots: int = Field(
-        default=6,
-        alias="FACE_PROTOTYPE_TEMPORAL_SLOTS",
-        description="Number of slots reserved for temporal prototypes",
-    )
-    face_prototype_primary_slots: int = Field(
-        default=3,
-        alias="FACE_PROTOTYPE_PRIMARY_SLOTS",
-        description="Number of slots reserved for primary (pinned) prototypes",
-    )
     face_prototype_temporal_mode: bool = Field(
         default=True,
         alias="FACE_PROTOTYPE_TEMPORAL_MODE",

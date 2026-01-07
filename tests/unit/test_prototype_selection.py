@@ -95,18 +95,35 @@ class TestSelectTemporalPrototypes:
                 mock_get_protos.return_value = []
 
                 # Mock DB operations
-                mock_db.execute = AsyncMock()
-                mock_db.execute.return_value.scalar_one_or_none.return_value = None
+                # The execute() call is async and returns a result that has scalar_one_or_none() method
+                mock_result = MagicMock()
+                mock_result.scalar_one_or_none.return_value = None
+
+                async def mock_execute(*args, **kwargs):
+                    return mock_result
+
+                mock_db.execute = mock_execute
                 mock_db.add = MagicMock()
                 mock_db.flush = AsyncMock()
 
-                # Call function
-                result = await select_temporal_prototypes(
-                    db=mock_db, qdrant=mock_qdrant, person_id=mock_person_id, preserve_pins=True
-                )
+                # Mock settings
+                with patch("image_search_service.core.config.get_settings") as mock_settings:
+                    mock_settings.return_value.face_prototype_max_exemplars = 10
+                    mock_settings.return_value.face_prototype_min_quality = 0.5
+                    # Age era thresholds
+                    mock_settings.return_value.age_era_infant_max = 3
+                    mock_settings.return_value.age_era_child_max = 12
+                    mock_settings.return_value.age_era_teen_max = 19
+                    mock_settings.return_value.age_era_young_adult_max = 35
+                    mock_settings.return_value.age_era_adult_max = 60
 
-                # Verify we created prototypes for all eras represented
-                assert len(result) >= 3  # At least one per era
+                    # Call function
+                    result = await select_temporal_prototypes(
+                        db=mock_db, qdrant=mock_qdrant, person_id=mock_person_id, preserve_pins=True
+                    )
+
+                    # Verify we created prototypes for all eras represented
+                    assert len(result) >= 3  # At least one per era
 
     @pytest.mark.asyncio
     async def test_preserves_pinned(self, mock_person_id, mock_qdrant, mock_face_instance):
@@ -133,21 +150,38 @@ class TestSelectTemporalPrototypes:
             ) as mock_get_protos:
                 mock_get_protos.return_value = [pinned_proto]
 
-                mock_db.execute = AsyncMock()
-                mock_db.execute.return_value.scalar_one_or_none.return_value = None
+                # Mock DB operations
+                mock_result = MagicMock()
+                mock_result.scalar_one_or_none.return_value = None
+
+                async def mock_execute(*args, **kwargs):
+                    return mock_result
+
+                mock_db.execute = mock_execute
                 mock_db.add = MagicMock()
                 mock_db.flush = AsyncMock()
 
-                result = await select_temporal_prototypes(
-                    db=mock_db, qdrant=mock_qdrant, person_id=mock_person_id, preserve_pins=True
-                )
+                # Mock settings
+                with patch("image_search_service.core.config.get_settings") as mock_settings:
+                    mock_settings.return_value.face_prototype_max_exemplars = 10
+                    mock_settings.return_value.face_prototype_min_quality = 0.5
+                    # Age era thresholds
+                    mock_settings.return_value.age_era_infant_max = 3
+                    mock_settings.return_value.age_era_child_max = 12
+                    mock_settings.return_value.age_era_teen_max = 19
+                    mock_settings.return_value.age_era_young_adult_max = 35
+                    mock_settings.return_value.age_era_adult_max = 60
 
-                # Should not create prototype for era that already has pinned one
-                # Result should not include duplicate for YOUNG_ADULT era
-                era_buckets = [p.age_era_bucket for p in result if hasattr(p, "age_era_bucket")]
-                assert (
-                    AgeEraBucket.YOUNG_ADULT.value not in era_buckets
-                )  # Pinned era should be skipped
+                    result = await select_temporal_prototypes(
+                        db=mock_db, qdrant=mock_qdrant, person_id=mock_person_id, preserve_pins=True
+                    )
+
+                    # Should not create prototype for era that already has pinned one
+                    # Result should not include duplicate for YOUNG_ADULT era
+                    era_buckets = [p.age_era_bucket for p in result if hasattr(p, "age_era_bucket")]
+                    assert (
+                        AgeEraBucket.YOUNG_ADULT.value not in era_buckets
+                    )  # Pinned era should be skipped
 
     @pytest.mark.asyncio
     async def test_uses_highest_quality_per_era(
@@ -173,32 +207,49 @@ class TestSelectTemporalPrototypes:
             ) as mock_get_protos:
                 mock_get_protos.return_value = []
 
-                mock_db.execute = AsyncMock()
-                mock_db.execute.return_value.scalar_one_or_none.return_value = None
+                # Mock DB operations
+                mock_result = MagicMock()
+                mock_result.scalar_one_or_none.return_value = None
+
+                async def mock_execute(*args, **kwargs):
+                    return mock_result
+
+                mock_db.execute = mock_execute
                 mock_db.add = MagicMock()
                 mock_db.flush = AsyncMock()
 
-                result = await select_temporal_prototypes(
-                    db=mock_db, qdrant=mock_qdrant, person_id=mock_person_id, preserve_pins=True
-                )
+                # Mock settings
+                with patch("image_search_service.core.config.get_settings") as mock_settings:
+                    mock_settings.return_value.face_prototype_max_exemplars = 10
+                    mock_settings.return_value.face_prototype_min_quality = 0.5
+                    # Age era thresholds
+                    mock_settings.return_value.age_era_infant_max = 3
+                    mock_settings.return_value.age_era_child_max = 12
+                    mock_settings.return_value.age_era_teen_max = 19
+                    mock_settings.return_value.age_era_young_adult_max = 35
+                    mock_settings.return_value.age_era_adult_max = 60
 
-                # Verify at least one prototype was created
-                assert len(result) > 0
+                    result = await select_temporal_prototypes(
+                        db=mock_db, qdrant=mock_qdrant, person_id=mock_person_id, preserve_pins=True
+                    )
 
-                # The selected face should be the highest quality one (0.9)
-                # We can verify this by checking the order of db.add calls
-                added_protos = [call.args[0] for call in mock_db.add.call_args_list]
-                if added_protos:
-                    # Check that the first added prototype for YOUNG_ADULT era uses highest quality face
-                    young_adult_protos = [
-                        p
-                        for p in added_protos
-                        if hasattr(p, "age_era_bucket")
-                        and p.age_era_bucket == AgeEraBucket.YOUNG_ADULT.value
-                    ]
-                    if young_adult_protos:
-                        # The highest quality face (0.9) should be selected
-                        assert young_adult_protos[0].face_instance_id == faces[1].id
+                    # Verify at least one prototype was created
+                    assert len(result) > 0
+
+                    # The selected face should be the highest quality one (0.9)
+                    # We can verify this by checking the order of db.add calls
+                    added_protos = [call.args[0] for call in mock_db.add.call_args_list]
+                    if added_protos:
+                        # Check that the first added prototype for YOUNG_ADULT era uses highest quality face
+                        young_adult_protos = [
+                            p
+                            for p in added_protos
+                            if hasattr(p, "age_era_bucket")
+                            and p.age_era_bucket == AgeEraBucket.YOUNG_ADULT.value
+                        ]
+                        if young_adult_protos:
+                            # The highest quality face (0.9) should be selected
+                            assert young_adult_protos[0].face_instance_id == faces[1].id
 
     @pytest.mark.asyncio
     async def test_fills_exemplars_after_temporal(
@@ -224,15 +275,27 @@ class TestSelectTemporalPrototypes:
             ) as mock_get_protos:
                 mock_get_protos.return_value = []
 
-                mock_db.execute = AsyncMock()
-                mock_db.execute.return_value.scalar_one_or_none.return_value = None
+                # Mock DB operations
+                mock_result = MagicMock()
+                mock_result.scalar_one_or_none.return_value = None
+
+                async def mock_execute(*args, **kwargs):
+                    return mock_result
+
+                mock_db.execute = mock_execute
                 mock_db.add = MagicMock()
                 mock_db.flush = AsyncMock()
 
-                # Mock settings with max_total that allows for exemplars
-                with patch("image_search_service.services.prototype_service.get_settings") as mock_settings:
-                    mock_settings.return_value.face_prototype_max_total = 10
+                # Mock settings with max_exemplars that allows for exemplars
+                with patch("image_search_service.core.config.get_settings") as mock_settings:
+                    mock_settings.return_value.face_prototype_max_exemplars = 10
                     mock_settings.return_value.face_prototype_min_quality = 0.5
+                    # Age era thresholds
+                    mock_settings.return_value.age_era_infant_max = 3
+                    mock_settings.return_value.age_era_child_max = 12
+                    mock_settings.return_value.age_era_teen_max = 19
+                    mock_settings.return_value.age_era_young_adult_max = 35
+                    mock_settings.return_value.age_era_adult_max = 60
 
                     result = await select_temporal_prototypes(
                         db=mock_db,
@@ -279,12 +342,12 @@ class TestPruneTemporalPrototypes:
             mock_db.delete = AsyncMock()
             mock_db.flush = AsyncMock()
 
-            # Prune to max_total=1 (should delete unpinned, keep pinned)
+            # Prune to max_exemplars=1 (should delete unpinned, keep pinned)
             deleted_ids = await prune_temporal_prototypes(
                 db=mock_db,
                 qdrant=mock_qdrant,
                 person_id=mock_person_id,
-                max_total=1,
+                max_exemplars=1,
                 preserve_pins=True,
             )
 
@@ -340,17 +403,27 @@ class TestPruneTemporalPrototypes:
         ) as mock_get_protos:
             mock_get_protos.return_value = all_protos
 
-            mock_db.execute = AsyncMock()
-            mock_db.execute.return_value.scalars.return_value.all.return_value = [face1, face2, face3]
+            # Setup mock for await db.execute(query) -> result.scalars().all() chain
+            # The execute() call returns an awaitable that gives us a result object
+            mock_scalars = MagicMock()
+            mock_scalars.all.return_value = [face1, face2, face3]
+            mock_result = MagicMock()
+            mock_result.scalars.return_value = mock_scalars
+
+            # Create an async function that returns the mock result
+            async def mock_execute(*args, **kwargs):
+                return mock_result
+
+            mock_db.execute = mock_execute
             mock_db.delete = AsyncMock()
             mock_db.flush = AsyncMock()
 
-            # Prune to max_total=1 (should keep TEMPORAL, delete others)
+            # Prune to max_exemplars=1 (should keep TEMPORAL, delete others)
             deleted_ids = await prune_temporal_prototypes(
                 db=mock_db,
                 qdrant=mock_qdrant,
                 person_id=mock_person_id,
-                max_total=1,
+                max_exemplars=1,
                 preserve_pins=True,
             )
 
@@ -403,12 +476,12 @@ class TestPruneTemporalPrototypes:
             mock_db.delete = AsyncMock()
             mock_db.flush = AsyncMock()
 
-            # Prune to max_total=2 (should keep both - one per era)
+            # Prune to max_exemplars=2 (should keep both - one per era)
             deleted_ids = await prune_temporal_prototypes(
                 db=mock_db,
                 qdrant=mock_qdrant,
                 person_id=mock_person_id,
-                max_total=2,
+                max_exemplars=2,
                 preserve_pins=True,
             )
 
