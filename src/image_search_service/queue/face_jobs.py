@@ -1,4 +1,30 @@
-"""RQ background jobs for face detection, clustering, and assignment."""
+"""RQ background jobs for face detection, clustering, and assignment.
+
+FORK-SAFETY REQUIREMENTS FOR MACOS
+==================================
+All job functions in this module are executed by RQ work-horse subprocesses.
+On macOS, these subprocesses are created via spawn() (not fork()), requiring:
+
+1. SYNCHRONOUS database operations ONLY
+   ✓ Use: get_sync_session() for all database access
+   ✗ Don't use: async/await, asyncio, greenlets
+
+2. No fork-unsafe libraries:
+   ✓ All jobs use sync_operations (PostgreSQL sync layer)
+   ✗ GSS authentication disabled on macOS (fork-unsafe)
+   ✗ No gRPC async operations
+
+3. Verified job functions:
+   ✓ detect_faces_job() - Sync operations
+   ✓ cluster_faces_job() - Sync operations
+   ✓ assign_faces_job() - Sync operations
+   ✓ compute_centroids_job() - Sync operations
+   ✓ detect_faces_for_session_job() - Sync operations
+   ✓ propagate_person_label_job() - Sync operations
+   ✓ expire_old_suggestions_job() - Sync operations
+
+See worker.py for complete macOS fork-safety architecture.
+"""
 
 import json
 import logging

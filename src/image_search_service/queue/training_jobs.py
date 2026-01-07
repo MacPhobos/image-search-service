@@ -1,4 +1,36 @@
-"""Training job functions for RQ background processing."""
+"""Training job functions for RQ background processing.
+
+FORK-SAFETY REQUIREMENTS FOR MACOS
+==================================
+All job functions in this module are executed by RQ work-horse subprocesses.
+On macOS, these subprocesses are created via spawn() (not fork()), meaning:
+
+1. Job functions MUST use SYNCHRONOUS operations only
+   ✓ Use: get_sync_session() for database operations
+   ✗ Don't use: async/await, asyncio, greenlets, or async connection pools
+
+2. Why sync-only:
+   - Async operations use greenlet state that doesn't survive subprocess spawn
+   - Thread state from connection pools can corrupt in child processes
+   - GPU state needs clean initialization in each work-horse
+   - Single worker + sync ops = predictable, safe execution
+
+3. Current job functions (all sync-compliant):
+   ✓ train_session() - Uses sync database operations
+   ✓ train_batch() - Uses ThreadPoolExecutor for I/O (not multiprocessing)
+   ✓ train_single_asset() - Direct sync operations
+
+4. Memory management (critical for MPS):
+   - Explicit gc.collect() every N images
+   - Explicit tensor deletion (del + gc.collect())
+   - PIL operations protected by module-level lock
+   - No EXIF parsing (disabled entirely)
+
+5. GPU model initialization:
+   - EmbeddingPreloadWorker preloads in work-horse subprocess
+   - Ensures clean GPU state in child process
+   - PyTorch MPS high watermark disabled
+"""
 
 import gc
 import hashlib
