@@ -488,3 +488,11 @@ class UnifiedPeopleListResponse(CamelCaseModel):
     identified_count: int
     unidentified_count: int
     noise_count: int
+
+
+class SuggestionRegenerationResponse(CamelCaseModel):
+    """Response for suggestion regeneration request."""
+
+    status: str
+    message: str
+    expired_count: int | None = None
