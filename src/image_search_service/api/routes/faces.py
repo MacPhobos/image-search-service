@@ -34,6 +34,7 @@ from image_search_service.api.face_schemas import (
     LabelClusterResponse,
     MergePersonsRequest,
     MergePersonsResponse,
+    PersonDetailResponse,
     PersonListResponse,
     PersonPhotoGroup,
     PersonPhotosResponse,
@@ -562,6 +563,63 @@ async def list_persons(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/persons/{person_id}", response_model=PersonDetailResponse)
+async def get_person(
+    person_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> PersonDetailResponse:
+    """Get a single person by ID with detailed information.
+
+    Returns:
+        PersonDetailResponse with face_count, photo_count, and thumbnail_url
+
+    Raises:
+        HTTPException: 404 if person not found
+    """
+    # Get person from database
+    person = await db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    # Count faces assigned to this person
+    face_count_query = select(func.count()).where(FaceInstance.person_id == person_id)
+    face_count = (await db.execute(face_count_query)).scalar() or 0
+
+    # Count distinct photos (assets) containing this person's faces
+    photo_count_query = (
+        select(func.count(func.distinct(FaceInstance.asset_id)))
+        .where(FaceInstance.person_id == person_id)
+    )
+    photo_count = (await db.execute(photo_count_query)).scalar() or 0
+
+    # Get thumbnail URL from the highest quality face
+    thumbnail_url = None
+    if face_count > 0:
+        # Get highest quality face for this person
+        best_face_query = (
+            select(FaceInstance)
+            .where(FaceInstance.person_id == person_id)
+            .order_by(FaceInstance.quality_score.desc())
+            .limit(1)
+        )
+        best_face_result = await db.execute(best_face_query)
+        best_face = best_face_result.scalar_one_or_none()
+
+        if best_face:
+            thumbnail_url = f"/api/v1/images/{best_face.asset_id}/thumbnail"
+
+    return PersonDetailResponse(
+        id=person.id,
+        name=person.name,
+        status=person.status.value,
+        face_count=face_count,
+        photo_count=photo_count,
+        thumbnail_url=thumbnail_url,
+        created_at=person.created_at,
+        updated_at=person.updated_at,
     )
 
 

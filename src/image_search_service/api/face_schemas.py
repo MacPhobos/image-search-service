@@ -114,6 +114,19 @@ class PersonResponse(CamelCaseModel):
     updated_at: datetime
 
 
+class PersonDetailResponse(CamelCaseModel):
+    """Detailed response schema for a single person with photo count and thumbnail."""
+
+    id: UUID
+    name: str
+    status: str
+    face_count: int
+    photo_count: int
+    thumbnail_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PersonListResponse(CamelCaseModel):
     """Paginated list of persons."""
 

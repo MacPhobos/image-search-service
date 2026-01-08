@@ -620,6 +620,50 @@ Create a new person entity.
 }
 ```
 
+#### `GET /api/v1/faces/persons/{personId}`
+
+Get a single person by ID with detailed information including face count, photo count, and thumbnail.
+
+**Path Parameters**
+
+| Parameter  | Type   | Required | Description      |
+| ---------- | ------ | -------- | ---------------- |
+| `personId` | string | Yes      | Person ID (UUID) |
+
+**Response** `200 OK`
+
+```json
+{
+	"id": "550e8400-e29b-41d4-a716-446655440000",
+	"name": "John Smith",
+	"status": "active",
+	"faceCount": 42,
+	"photoCount": 15,
+	"thumbnailUrl": "/api/v1/images/123/thumbnail",
+	"createdAt": "2024-12-24T10:00:00Z",
+	"updatedAt": "2024-12-25T14:30:00Z"
+}
+```
+
+| Field         | Type         | Description                                    |
+| ------------- | ------------ | ---------------------------------------------- |
+| `id`          | string       | Person UUID                                    |
+| `name`        | string       | Person name                                    |
+| `status`      | string       | Status: `active`, `merged`, `hidden`           |
+| `faceCount`   | integer      | Total number of face instances                 |
+| `photoCount`  | integer      | Total number of distinct photos (assets)       |
+| `thumbnailUrl`| string\|null | Thumbnail URL from highest quality face        |
+| `createdAt`   | string       | ISO 8601 timestamp                             |
+| `updatedAt`   | string       | ISO 8601 timestamp                             |
+
+**Response** `404 Not Found` - Person not found
+
+```json
+{
+	"detail": "Person not found"
+}
+```
+
 #### `GET /api/v1/people`
 
 List all identified people.
@@ -2089,6 +2133,7 @@ All endpoints except:
 
 | Version | Date       | Changes                                                                                      |
 | ------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 1.10.0  | 2026-01-07 | Added GET /api/v1/faces/persons/{personId} endpoint to retrieve a single person by ID with detailed information including faceCount, photoCount, and thumbnailUrl fields. |
 | 1.9.0   | 2025-12-31 | Added batch thumbnail endpoint POST /api/v1/images/thumbnails/batch for fetching multiple thumbnails in a single request with base64-encoded data URIs. Supports up to 100 asset IDs per request with validation error responses. |
 | 1.8.0   | 2025-12-30 | Added Face Clusters section with GET /api/v1/faces/clusters endpoint supporting optional filtering by min_confidence and min_cluster_size query parameters. Enhanced ClusterSummary schema with clusterConfidence (average pairwise similarity) and representativeFaceId (highest quality face) fields. Added Configuration section with GET /api/v1/config/face-clustering-unknown and PUT /api/v1/config/face-clustering-unknown endpoints for managing unknown face clustering display settings. |
 | 1.7.0   | 2025-12-30 | Added Queue Monitoring section with 3 new endpoints: GET /api/v1/queues (overview), GET /api/v1/queues/{queue_name} (queue details), GET /api/v1/jobs/{job_id} (job details), GET /api/v1/workers (worker information). Added QUEUE_NOT_FOUND error code. Read-only endpoints for monitoring RQ queue status, jobs, and worker health. |

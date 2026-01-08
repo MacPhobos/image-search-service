@@ -285,17 +285,168 @@ class TestPersonEndpoints:
         response = await test_client.get(f"/api/v1/faces/persons/{fake_id}")
 
         assert response.status_code == 404
+        data = response.json()
+        assert "not found" in data["detail"].lower()
 
-    @pytest.mark.skip(reason="Endpoint GET /faces/persons/{id} not implemented")
     @pytest.mark.asyncio
     async def test_get_person_success(self, test_client, db_session, mock_person):
-        """Test getting existing person."""
+        """Test getting existing person with basic fields."""
         response = await test_client.get(f"/api/v1/faces/persons/{mock_person.id}")
 
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == str(mock_person.id)
         assert data["name"] == mock_person.name
+        assert data["status"] == mock_person.status
+        assert "faceCount" in data
+        assert "photoCount" in data
+        assert "thumbnailUrl" in data
+        assert "createdAt" in data
+        assert "updatedAt" in data
+
+    @pytest.mark.asyncio
+    async def test_get_person_no_faces(self, test_client, db_session, mock_person):
+        """Test getting person with no face instances."""
+        response = await test_client.get(f"/api/v1/faces/persons/{mock_person.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == str(mock_person.id)
+        assert data["name"] == mock_person.name
+        assert data["faceCount"] == 0
+        assert data["photoCount"] == 0
+        assert data["thumbnailUrl"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_person_with_faces_counts(self, test_client, db_session, mock_person):
+        """Test getting person with multiple faces across multiple photos."""
+        from image_search_service.db.models import FaceInstance, ImageAsset
+
+        # Create 2 photos
+        photo1 = ImageAsset(
+            path="/test/photo1.jpg",
+            training_status="pending",
+        )
+        photo2 = ImageAsset(
+            path="/test/photo2.jpg",
+            training_status="pending",
+        )
+        db_session.add(photo1)
+        db_session.add(photo2)
+        await db_session.flush()
+
+        # Create 3 faces in photo1, 2 faces in photo2
+        for i in range(3):
+            face = FaceInstance(
+                id=uuid.uuid4(),
+                asset_id=photo1.id,
+                bbox_x=100 + i * 100,
+                bbox_y=100,
+                bbox_w=80,
+                bbox_h=80,
+                detection_confidence=0.95,
+                quality_score=0.85 - i * 0.1,
+                qdrant_point_id=uuid.uuid4(),
+                person_id=mock_person.id,
+            )
+            db_session.add(face)
+
+        for i in range(2):
+            face = FaceInstance(
+                id=uuid.uuid4(),
+                asset_id=photo2.id,
+                bbox_x=100 + i * 100,
+                bbox_y=100,
+                bbox_w=80,
+                bbox_h=80,
+                detection_confidence=0.92,
+                quality_score=0.78 - i * 0.05,
+                qdrant_point_id=uuid.uuid4(),
+                person_id=mock_person.id,
+            )
+            db_session.add(face)
+
+        await db_session.commit()
+
+        response = await test_client.get(f"/api/v1/faces/persons/{mock_person.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == str(mock_person.id)
+        assert data["faceCount"] == 5  # 3 + 2 faces
+        assert data["photoCount"] == 2  # 2 distinct photos
+
+    @pytest.mark.asyncio
+    async def test_get_person_with_thumbnail(self, test_client, db_session, mock_person, mock_image_asset):
+        """Test getting person with thumbnail URL from highest quality face."""
+        from image_search_service.db.models import FaceInstance
+
+        # Create 3 faces with different quality scores
+        face1 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=100,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.95,
+            quality_score=0.65,  # Lower quality
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        face2 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=200,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.98,
+            quality_score=0.95,  # Highest quality
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        face3 = FaceInstance(
+            id=uuid.uuid4(),
+            asset_id=mock_image_asset.id,
+            bbox_x=300,
+            bbox_y=100,
+            bbox_w=80,
+            bbox_h=80,
+            detection_confidence=0.90,
+            quality_score=0.70,  # Medium quality
+            qdrant_point_id=uuid.uuid4(),
+            person_id=mock_person.id,
+        )
+        db_session.add(face1)
+        db_session.add(face2)
+        db_session.add(face3)
+        await db_session.commit()
+
+        response = await test_client.get(f"/api/v1/faces/persons/{mock_person.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == str(mock_person.id)
+        assert data["faceCount"] == 3
+        assert data["photoCount"] == 1
+        # Thumbnail URL should point to the image containing the highest quality face
+        # Implementation uses /api/v1/images/{asset_id}/thumbnail, not face-specific thumbnail
+        assert data["thumbnailUrl"] == f"/api/v1/images/{mock_image_asset.id}/thumbnail"
+
+    @pytest.mark.asyncio
+    async def test_get_person_timestamps(self, test_client, db_session, mock_person):
+        """Test that timestamps are returned correctly."""
+        response = await test_client.get(f"/api/v1/faces/persons/{mock_person.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "createdAt" in data
+        assert "updatedAt" in data
+        # Validate ISO format (basic check)
+        from datetime import datetime
+        datetime.fromisoformat(data["createdAt"].replace("Z", "+00:00"))
+        datetime.fromisoformat(data["updatedAt"].replace("Z", "+00:00"))
 
     @pytest.mark.asyncio
     async def test_update_person_not_found(self, test_client):
