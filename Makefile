@@ -35,8 +35,11 @@ makemigrations: ## Create new migration
 	@read -p "Enter migration message: " msg; \
 	uv run alembic revision --autogenerate -m "$$msg"
 
-worker: ## Start RQ worker
-	uv run python -m image_search_service.queue.worker
+worker: ## Start RQ Listener-based worker
+	@echo "Starting RQ Listener-based worker..."
+	@echo "Platform: Auto-detected (MPS on macOS, CUDA on Linux, CPU fallback)"
+	@echo ""
+	uv run python -m image_search_service.queue.listener_worker
 
 api: ## Run API without reload (production-like)
 	uv run uvicorn image_search_service.main:app --host 0.0.0.0 --port 8000

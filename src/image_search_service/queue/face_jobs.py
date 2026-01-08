@@ -52,6 +52,9 @@ def detect_faces_job(
 ) -> dict[str, Any]:
     """RQ job to detect and embed faces for a batch of assets.
 
+    FORK-SAFETY (macOS): Disable proxy detection immediately to prevent
+    urllib from forking in multi-threaded work-horse context.
+
     Args:
         asset_ids: List of asset ID strings to process
         min_confidence: Minimum detection confidence
@@ -99,6 +102,8 @@ def cluster_faces_job(
 ) -> dict[str, Any]:
     """RQ job to cluster unlabeled faces using HDBSCAN.
 
+    FORK-SAFETY (macOS): Disable proxy detection in work-horse subprocess.
+
     Args:
         quality_threshold: Minimum quality score for faces
         max_faces: Maximum faces to cluster at once
@@ -145,6 +150,8 @@ def assign_faces_job(
     similarity_threshold: float = 0.6,
 ) -> dict[str, Any]:
     """RQ job to assign new faces to known persons via prototype matching.
+
+    FORK-SAFETY (macOS): Disable proxy detection in work-horse subprocess.
 
     Args:
         since: Only process faces created after this ISO datetime string
@@ -423,6 +430,8 @@ def detect_faces_for_session_job(
     4. Updates progress after each batch
     5. Auto-assigns faces to known persons using the existing assigner
     6. Marks session as COMPLETED or FAILED
+
+    FORK-SAFETY (macOS): Disable proxy detection in work-horse subprocess.
 
     Args:
         session_id: UUID string of the FaceDetectionSession
@@ -778,6 +787,8 @@ def propagate_person_label_job(
 
     This job is triggered when a user assigns a face to a person. It searches for
     similar unassigned faces and creates FaceSuggestion records for user review.
+
+    FORK-SAFETY (macOS): Disable proxy detection in work-horse subprocess.
 
     Args:
         source_face_id: UUID string of the face that was just labeled

@@ -132,6 +132,10 @@ def train_session(session_id: int) -> dict[str, object]:
     This is the entry point job enqueued by the API. It discovers all assets,
     creates TrainingJob records, and processes them in batches.
 
+    FORK-SAFETY (macOS): This function runs in RQ work-horse subprocess.
+    We disable proxy detection immediately to prevent urllib from forking
+    in multi-threaded context (which causes Signal 11 crashes).
+
     Args:
         session_id: Training session ID
 
@@ -334,6 +338,9 @@ def train_batch(
     - Periodic garbage collection during batch processing (configurable interval)
     - Both critical for MPS on macOS to prevent GPU memory accumulation
     - Safe on CUDA (minimal overhead) and CPU (no-op)
+
+    FORK-SAFETY (macOS): Can be called directly as job or from train_session.
+    If called directly as job, ensure proxy detection is disabled.
 
     Args:
         session_id: Training session ID
@@ -647,6 +654,9 @@ def train_batch(
 
 def train_single_asset(job_id: int, asset_id: int, session_id: int) -> dict[str, object]:
     """Train single image with full evidence capture.
+
+    FORK-SAFETY (macOS): Disable proxy detection immediately to prevent
+    urllib from forking in multi-threaded work-horse context.
 
     Args:
         job_id: Training job ID
