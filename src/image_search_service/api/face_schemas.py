@@ -447,7 +447,14 @@ class PrototypeListResponse(CamelCaseModel):
 class RecomputePrototypesRequest(CamelCaseModel):
     """Request to recompute prototypes."""
 
-    preserve_pins: bool = True
+    preserve_pins: bool = Field(
+        default=True,
+        description="Whether to preserve manually pinned prototypes"
+    )
+    trigger_rescan: bool | None = Field(
+        default=None,
+        description="Trigger suggestion rescan after recompute. If None, uses config default."
+    )
 
 
 class RecomputePrototypesResponse(CamelCaseModel):
@@ -456,6 +463,8 @@ class RecomputePrototypesResponse(CamelCaseModel):
     prototypes_created: int
     prototypes_removed: int
     coverage: TemporalCoverage
+    rescan_triggered: bool = False
+    rescan_message: str | None = None
 
 
 # ============ Unified Person-Centric Model Schemas ============

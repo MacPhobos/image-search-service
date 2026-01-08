@@ -125,6 +125,11 @@ class Settings(BaseSettings):
         alias="FACE_SUGGESTION_MAX_RESULTS",
         description="Maximum number of face suggestions to return",
     )
+    face_suggestions_auto_rescan_on_recompute: bool = Field(
+        default=False,
+        alias="FACE_SUGGESTIONS_AUTO_RESCAN_ON_RECOMPUTE",
+        description="Automatically regenerate suggestions when prototypes are recomputed",
+    )
 
     # Prototype creation settings
     face_prototype_min_quality: float = Field(

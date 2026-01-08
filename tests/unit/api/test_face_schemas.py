@@ -7,6 +7,9 @@ from pydantic import ValidationError
 
 from image_search_service.api.face_schemas import (
     PersonType,
+    RecomputePrototypesRequest,
+    RecomputePrototypesResponse,
+    TemporalCoverage,
     UnifiedPeopleListResponse,
     UnifiedPersonResponse,
 )
@@ -382,3 +385,104 @@ class TestUnifiedPeopleListResponse:
         assert restored.total == original.total
         assert restored.identified_count == original.identified_count
         assert len(restored.people) == len(original.people)
+
+
+class TestRecomputePrototypesRequest:
+    """Tests for RecomputePrototypesRequest schema."""
+
+    def test_default_values(self):
+        """Should use default values when not provided."""
+        request = RecomputePrototypesRequest()
+
+        assert request.preserve_pins is True
+        assert request.trigger_rescan is None
+
+    def test_explicit_values(self):
+        """Should accept explicit values."""
+        request = RecomputePrototypesRequest(preserve_pins=False, trigger_rescan=True)
+
+        assert request.preserve_pins is False
+        assert request.trigger_rescan is True
+
+    def test_trigger_rescan_none(self):
+        """Should allow trigger_rescan to be None (uses config default)."""
+        request = RecomputePrototypesRequest(preserve_pins=True, trigger_rescan=None)
+
+        assert request.preserve_pins is True
+        assert request.trigger_rescan is None
+
+    def test_camel_case_serialization(self):
+        """Should use camelCase for JSON serialization."""
+        request = RecomputePrototypesRequest(preserve_pins=False, trigger_rescan=True)
+        data = request.model_dump(by_alias=True)
+
+        assert "preservePins" in data
+        assert "triggerRescan" in data
+        assert data["preservePins"] is False
+        assert data["triggerRescan"] is True
+
+
+class TestRecomputePrototypesResponse:
+    """Tests for RecomputePrototypesResponse schema."""
+
+    def test_minimal_response(self):
+        """Should work with minimal required fields."""
+        coverage = TemporalCoverage(
+            covered_eras=["infant", "child"],
+            missing_eras=["teen", "young_adult"],
+            coverage_percentage=0.4,
+            total_prototypes=2,
+        )
+        response = RecomputePrototypesResponse(
+            prototypes_created=2,
+            prototypes_removed=1,
+            coverage=coverage,
+        )
+
+        assert response.prototypes_created == 2
+        assert response.prototypes_removed == 1
+        assert response.rescan_triggered is False
+        assert response.rescan_message is None
+
+    def test_with_rescan_info(self):
+        """Should include rescan information when provided."""
+        coverage = TemporalCoverage(
+            covered_eras=["infant"],
+            missing_eras=["child", "teen"],
+            coverage_percentage=0.2,
+            total_prototypes=1,
+        )
+        response = RecomputePrototypesResponse(
+            prototypes_created=1,
+            prototypes_removed=0,
+            coverage=coverage,
+            rescan_triggered=True,
+            rescan_message="Rescan queued successfully",
+        )
+
+        assert response.rescan_triggered is True
+        assert response.rescan_message == "Rescan queued successfully"
+
+    def test_camel_case_serialization(self):
+        """Should use camelCase for JSON serialization."""
+        coverage = TemporalCoverage(
+            covered_eras=["infant"],
+            missing_eras=[],
+            coverage_percentage=1.0,
+            total_prototypes=1,
+        )
+        response = RecomputePrototypesResponse(
+            prototypes_created=1,
+            prototypes_removed=0,
+            coverage=coverage,
+            rescan_triggered=True,
+            rescan_message="Test message",
+        )
+        data = response.model_dump(by_alias=True)
+
+        assert "prototypesCreated" in data
+        assert "prototypesRemoved" in data
+        assert "rescanTriggered" in data
+        assert "rescanMessage" in data
+        assert data["rescanTriggered"] is True
+        assert data["rescanMessage"] == "Test message"

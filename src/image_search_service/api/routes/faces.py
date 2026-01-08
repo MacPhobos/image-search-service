@@ -2125,9 +2125,25 @@ async def recompute_prototypes_endpoint(
     - Ensures coverage across age eras
     - Respects pinned prototypes (if preserve_pins=True)
     - Prunes excess prototypes while maintaining quality
+    - Optionally triggers suggestion rescan after recomputation
     """
+    from datetime import UTC, datetime
+
+    from redis import Redis
+    from rq import Queue
+
+    from image_search_service.core.config import get_settings
+    from image_search_service.queue.face_jobs import propagate_person_label_job
     from image_search_service.services import prototype_service
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # Get settings to determine if auto-rescan is enabled
+    settings = get_settings()
+
+    # Determine if we should trigger rescan
+    trigger_rescan = request.trigger_rescan
+    if trigger_rescan is None:
+        trigger_rescan = settings.face_suggestions_auto_rescan_on_recompute
 
     # Get Qdrant client
     qdrant = get_face_qdrant_client()
@@ -2160,6 +2176,73 @@ async def recompute_prototypes_endpoint(
     assert isinstance(coverage_percentage, float)
     assert isinstance(total_prototypes, int)
 
+    # Initialize rescan status
+    rescan_triggered = False
+    rescan_message = None
+
+    # Optional auto-rescan after recomputation
+    if trigger_rescan:
+        # Get person for logging
+        person = await db.get(Person, person_id)
+        if person:
+            # Get prototypes for this person
+            prototypes = await prototype_service.get_prototypes_for_person(db, person_id)
+
+            if prototypes:
+                # Find highest quality prototype by loading face instances
+                face_ids = [p.face_instance_id for p in prototypes if p.face_instance_id]
+                if face_ids:
+                    face_query = select(FaceInstance).where(FaceInstance.id.in_(face_ids))
+                    face_result = await db.execute(face_query)
+                    faces = list(face_result.scalars().all())
+
+                    if faces:
+                        # Find face with highest quality score
+                        best_face = max(faces, key=lambda f: f.quality_score or 0.0)
+
+                        # Expire existing pending suggestions for this person
+                        expire_result = await db.execute(
+                            update(FaceSuggestion)
+                            .where(
+                                FaceSuggestion.suggested_person_id == person_id,
+                                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+                            )
+                            .values(
+                                status=FaceSuggestionStatus.EXPIRED.value,
+                                reviewed_at=datetime.now(UTC),
+                            )
+                        )
+                        expired_count = expire_result.rowcount  # type: ignore[attr-defined]
+                        await db.commit()
+
+                        # Queue propagation job with best prototype
+                        try:
+                            redis_conn = Redis.from_url(settings.redis_url)
+                            queue = Queue("default", connection=redis_conn)
+
+                            queue.enqueue(
+                                propagate_person_label_job,
+                                source_face_id=str(best_face.id),
+                                person_id=str(person_id),
+                                min_confidence=0.7,
+                                max_suggestions=50,
+                                job_timeout="10m",
+                            )
+
+                            rescan_triggered = True
+                            rescan_message = (
+                                f"Suggestion rescan queued for {person.name}. "
+                                f"{expired_count} old suggestions expired."
+                            )
+                            logger.info(
+                                f"Auto-triggered suggestion rescan for {person.name} "
+                                f"using prototype face {best_face.id} "
+                                f"(quality={best_face.quality_score:.2f})"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to queue auto-rescan job: {e}")
+                            rescan_message = f"Failed to queue rescan job: {str(e)}"
+
     return RecomputePrototypesResponse(
         prototypes_created=prototypes_created,
         prototypes_removed=prototypes_removed,
@@ -2169,6 +2252,8 @@ async def recompute_prototypes_endpoint(
             coverage_percentage=coverage_percentage,
             total_prototypes=total_prototypes,
         ),
+        rescan_triggered=rescan_triggered,
+        rescan_message=rescan_message,
     )
 
 
