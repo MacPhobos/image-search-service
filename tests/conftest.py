@@ -26,6 +26,7 @@ from image_search_service.vector.qdrant import get_qdrant_client
 
 # Use SQLite for tests (no external dependencies)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+TEST_SYNC_DATABASE_URL = "sqlite:///:memory:"
 
 
 @pytest.fixture(autouse=True)
@@ -135,6 +136,41 @@ async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, Non
     async with async_session() as session:
         yield session
         await session.rollback()
+
+
+@pytest.fixture
+def sync_db_engine():
+    """Create synchronous test database engine with SQLite in-memory.
+
+    Used for testing synchronous background jobs.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(TEST_SYNC_DATABASE_URL, echo=False)
+
+    # Create all tables
+    Base.metadata.create_all(engine)
+
+    yield engine
+
+    # Cleanup
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.fixture
+def sync_db_session(sync_db_engine):
+    """Create synchronous test database session.
+
+    Used for testing synchronous background jobs.
+    """
+    from sqlalchemy.orm import Session
+
+    session = Session(sync_db_engine)
+    yield session
+    session.rollback()
+    session.close()
 
 
 @pytest.fixture

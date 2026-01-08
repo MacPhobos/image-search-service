@@ -20,6 +20,7 @@ from image_search_service.db.models import (
     PrototypeRole,
     TrainingStatus,
 )
+from image_search_service.queue.face_jobs import propagate_person_label_multiproto_job
 
 # ============ Fixtures ============
 
@@ -240,20 +241,22 @@ class TestRegenerateSuggestions:
             data = response.json()
             assert data["status"] == "queued"
             assert "queued" in data["message"].lower()
-            assert data["expiredCount"] >= 1
+            # expiredCount is now 0 in endpoint response (expiration happens in job)
+            assert data["expiredCount"] == 0
 
-            # Verify queue was called
+            # Verify queue was called with the new multi-prototype job
             mock_queue.enqueue.assert_called_once()
-            call_kwargs = mock_queue.enqueue.call_args.kwargs
-            assert str(face.id) == call_kwargs["source_face_id"]
-            assert str(person.id) == call_kwargs["person_id"]
-            assert call_kwargs["min_confidence"] == 0.7
-            assert call_kwargs["max_suggestions"] == 50
+            call_args = mock_queue.enqueue.call_args
+            # Check the job function
+            assert call_args.args[0] == propagate_person_label_multiproto_job
+            # Check person_id is passed (could be positional or keyword)
+            call_kwargs = call_args.kwargs
+            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
+            assert call_kwargs.get("min_confidence", 0.7) == 0.7
+            assert call_kwargs.get("max_suggestions", 50) == 50
 
-        # Verify old suggestion was expired
-        await db_session.refresh(old_suggestion)
-        assert old_suggestion.status == FaceSuggestionStatus.EXPIRED.value
-        assert old_suggestion.reviewed_at is not None
+        # Note: Old suggestion expiration now happens inside the job, not in the endpoint
+        # So we can't verify it was expired here without running the actual job
 
     @pytest.mark.asyncio
     async def test_regenerate_uses_best_prototype(
@@ -295,10 +298,14 @@ class TestRegenerateSuggestions:
 
             assert response.status_code == 200
 
-            # Verify the queued job used the highest quality face
+            # Verify the queued job was called with person_id (no longer needs source_face_id)
             mock_queue.enqueue.assert_called_once()
-            call_kwargs = mock_queue.enqueue.call_args.kwargs
-            assert str(high_quality_face.id) == call_kwargs["source_face_id"]
+            call_args = mock_queue.enqueue.call_args
+            # Check the job function
+            assert call_args.args[0] == propagate_person_label_multiproto_job
+            # Check person_id is passed
+            call_kwargs = call_args.kwargs
+            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
 
     @pytest.mark.asyncio
     async def test_regenerate_no_pending_suggestions_to_expire(
@@ -340,56 +347,74 @@ class TestRegenerateSuggestions:
     async def test_regenerate_prototype_without_face_instance(
         self, test_client, db_session, create_person
     ):
-        """Returns 400 when prototype exists but has no face_instance_id (orphaned prototype)."""
+        """Queues job successfully even with orphaned prototype (validation happens in job)."""
         person = await create_person(name="David")
 
-        # Create prototype with no face_instance_id (edge case)
-        orphaned_prototype = PersonPrototype(
-            id=uuid.uuid4(),
-            person_id=person.id,
-            face_instance_id=None,  # No face
-            qdrant_point_id=uuid.uuid4(),
-            role=PrototypeRole.EXEMPLAR.value,
-            created_at=datetime.now(UTC),
-        )
-        db_session.add(orphaned_prototype)
-        await db_session.commit()
+        # Mock Redis Queue
+        with patch("redis.Redis") as mock_redis_cls, patch("rq.Queue") as mock_queue_cls:
+            mock_redis = MagicMock()
+            mock_redis_cls.from_url.return_value = mock_redis
 
-        response = await test_client.post(
-            f"/api/v1/faces/persons/{person.id}/suggestions/regenerate"
-        )
+            mock_queue = MagicMock()
+            mock_queue_cls.return_value = mock_queue
 
-        assert response.status_code == 400
-        data = response.json()
-        assert "no valid prototype faces found" in data["detail"].lower()
+            # Create prototype with no face_instance_id (edge case)
+            orphaned_prototype = PersonPrototype(
+                id=uuid.uuid4(),
+                person_id=person.id,
+                face_instance_id=None,  # No face
+                qdrant_point_id=uuid.uuid4(),
+                role=PrototypeRole.EXEMPLAR.value,
+                created_at=datetime.now(UTC),
+            )
+            db_session.add(orphaned_prototype)
+            await db_session.commit()
+
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{person.id}/suggestions/regenerate"
+            )
+
+            # Endpoint now queues successfully (validation happens in job)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "queued"
 
     @pytest.mark.asyncio
     async def test_regenerate_prototype_face_missing_from_database(
         self, test_client, db_session, create_person
     ):
-        """Returns 400 when prototype references face that doesn't exist in database."""
+        """Queues job successfully even with dangling prototype reference (validation in job)."""
         person = await create_person(name="Eve")
 
-        # Create prototype with non-existent face_instance_id
-        fake_face_id = uuid.uuid4()
-        dangling_prototype = PersonPrototype(
-            id=uuid.uuid4(),
-            person_id=person.id,
-            face_instance_id=fake_face_id,  # Face doesn't exist
-            qdrant_point_id=uuid.uuid4(),
-            role=PrototypeRole.EXEMPLAR.value,
-            created_at=datetime.now(UTC),
-        )
-        db_session.add(dangling_prototype)
-        await db_session.commit()
+        # Mock Redis Queue
+        with patch("redis.Redis") as mock_redis_cls, patch("rq.Queue") as mock_queue_cls:
+            mock_redis = MagicMock()
+            mock_redis_cls.from_url.return_value = mock_redis
 
-        response = await test_client.post(
-            f"/api/v1/faces/persons/{person.id}/suggestions/regenerate"
-        )
+            mock_queue = MagicMock()
+            mock_queue_cls.return_value = mock_queue
 
-        assert response.status_code == 400
-        data = response.json()
-        assert "prototype faces not found in database" in data["detail"].lower()
+            # Create prototype with non-existent face_instance_id
+            fake_face_id = uuid.uuid4()
+            dangling_prototype = PersonPrototype(
+                id=uuid.uuid4(),
+                person_id=person.id,
+                face_instance_id=fake_face_id,  # Face doesn't exist
+                qdrant_point_id=uuid.uuid4(),
+                role=PrototypeRole.EXEMPLAR.value,
+                created_at=datetime.now(UTC),
+            )
+            db_session.add(dangling_prototype)
+            await db_session.commit()
+
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{person.id}/suggestions/regenerate"
+            )
+
+            # Endpoint now queues successfully (validation happens in job)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "queued"
 
     @pytest.mark.asyncio
     async def test_regenerate_queue_failure(
@@ -463,16 +488,11 @@ class TestRegenerateSuggestions:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["expiredCount"] == 3
+            # expiredCount is now 0 in endpoint response (expiration happens in job)
+            assert data["expiredCount"] == 0
 
-        # Verify all suggestions were expired
-        await db_session.refresh(suggestion1)
-        await db_session.refresh(suggestion2)
-        await db_session.refresh(suggestion3)
-
-        assert suggestion1.status == FaceSuggestionStatus.EXPIRED.value
-        assert suggestion2.status == FaceSuggestionStatus.EXPIRED.value
-        assert suggestion3.status == FaceSuggestionStatus.EXPIRED.value
+        # Note: Suggestion expiration now happens inside the job, not in the endpoint
+        # So we can't verify they were expired here without running the actual job
 
     @pytest.mark.asyncio
     async def test_regenerate_only_expires_person_specific_suggestions(
@@ -515,14 +535,11 @@ class TestRegenerateSuggestions:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["expiredCount"] == 1  # Only Alice's suggestion
+            # expiredCount is now 0 in endpoint response (expiration happens in job)
+            assert data["expiredCount"] == 0
 
-        # Verify Alice's suggestion was expired, Bob's was not
-        await db_session.refresh(suggestion_alice)
-        await db_session.refresh(suggestion_bob)
-
-        assert suggestion_alice.status == FaceSuggestionStatus.EXPIRED.value
-        assert suggestion_bob.status == FaceSuggestionStatus.PENDING.value  # Unchanged
+        # Note: Suggestion expiration now happens inside the job, not in the endpoint
+        # The job will only expire Alice's suggestions, not Bob's
 
     @pytest.mark.asyncio
     async def test_regenerate_handles_null_quality_score(
@@ -561,6 +578,8 @@ class TestRegenerateSuggestions:
 
             assert response.status_code == 200
 
-            # Should use face with quality=0.8 (not the null one)
-            call_kwargs = mock_queue.enqueue.call_args.kwargs
-            assert str(face_with_quality.id) == call_kwargs["source_face_id"]
+            # Verify job was called with person_id (multi-proto job handles all prototypes internally)
+            call_args = mock_queue.enqueue.call_args
+            assert call_args.args[0] == propagate_person_label_multiproto_job
+            call_kwargs = call_args.kwargs
+            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)

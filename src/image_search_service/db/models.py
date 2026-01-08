@@ -723,11 +723,38 @@ class FaceSuggestion(Base):
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Multi-prototype scoring fields
+    matching_prototype_ids: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        doc="List of prototype face IDs that matched this suggestion",
+    )
+    prototype_scores: Mapped[dict[str, float] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        doc="Map of prototype_id -> similarity score for each matching prototype",
+    )
+    aggregate_confidence: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        default=None,
+        doc="Aggregated confidence score across all matching prototypes (e.g., max or weighted avg)",
+    )
+    prototype_match_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+        doc="Number of prototypes that matched this face above threshold",
+    )
+
     # Indexes for efficient querying
     __table_args__ = (
         Index("ix_face_suggestions_face_instance_id", "face_instance_id"),
         Index("ix_face_suggestions_suggested_person_id", "suggested_person_id"),
         Index("ix_face_suggestions_status", "status"),
+        Index("ix_face_suggestions_aggregate_confidence", "aggregate_confidence"),
     )
 
     def __repr__(self) -> str:

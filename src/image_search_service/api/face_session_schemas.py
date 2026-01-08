@@ -110,6 +110,18 @@ class FaceSuggestionResponse(CamelCaseModel):
     detection_confidence: float | None = None
     quality_score: float | None = None
 
+    # Multi-prototype scoring fields (for temporal/multi-era matching)
+    matching_prototype_ids: list[str] | None = None
+    prototype_scores: dict[str, float] | None = None
+    aggregate_confidence: float | None = None
+    prototype_match_count: int | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_multi_prototype_match(self) -> bool:
+        """True if multiple prototypes matched this face."""
+        return (self.prototype_match_count or 0) > 1
+
 
 class FaceSuggestionListResponse(CamelCaseModel):
     """Paginated list of face suggestions (legacy flat pagination)."""

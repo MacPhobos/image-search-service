@@ -1033,3 +1033,215 @@ def cleanup_orphaned_suggestions_job() -> dict[str, Any]:
         return {"status": "error", "message": str(e)}
     finally:
         db_session.close()
+
+
+def propagate_person_label_multiproto_job(
+    person_id: str,
+    min_confidence: float = 0.7,
+    max_suggestions: int = 50,
+) -> dict[str, Any]:
+    """Generate face suggestions using ALL prototypes for a person.
+
+    Instead of using a single source face, this searches with each prototype
+    and aggregates the results for better matching quality.
+
+    For each candidate face:
+    - Searches against ALL prototypes for the person
+    - Records which prototypes matched and their scores
+    - Uses MAX score as aggregate_confidence
+    - Stores prototype match count
+
+    Args:
+        person_id: UUID string of the person
+        min_confidence: Minimum cosine similarity (default: 0.7)
+        max_suggestions: Maximum suggestions to create (default: 50)
+
+    Returns:
+        dict with counts: suggestions_created, prototypes_used, candidates_evaluated
+    """
+    import uuid as uuid_lib
+
+    from image_search_service.db.models import Person, PersonPrototype
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    logger.info(f"[{job_id}] Starting multi-prototype propagation for person {person_id}")
+
+    db_session = get_sync_session()
+
+    try:
+        # 1. Get person
+        person_uuid = uuid_lib.UUID(person_id)
+        person = db_session.get(Person, person_uuid)
+
+        if not person:
+            logger.warning(f"[{job_id}] Person {person_id} not found")
+            return {"status": "error", "message": "Person not found"}
+
+        # 2. Get all prototypes for this person
+        prototypes_query = select(PersonPrototype).where(
+            PersonPrototype.person_id == person_uuid
+        )
+        prototypes = list(db_session.execute(prototypes_query).scalars().all())
+
+        if not prototypes:
+            logger.warning(f"[{job_id}] No prototypes found for person {person_id}")
+            return {"status": "error", "message": "No prototypes"}
+
+        # 3. Get prototype embeddings from Qdrant
+        qdrant = get_face_qdrant_client()
+        prototype_embeddings: dict[str, dict[str, Any]] = {}
+
+        for proto in prototypes:
+            # Get face instance for quality score
+            face = db_session.get(FaceInstance, proto.face_instance_id)
+
+            if face and face.qdrant_point_id:
+                embedding = qdrant.get_embedding_by_point_id(face.qdrant_point_id)
+                if embedding:
+                    prototype_embeddings[str(proto.face_instance_id)] = {
+                        "embedding": embedding,
+                        "face_id": str(face.id),
+                        "quality": face.quality_score or 0.0,
+                    }
+
+        if not prototype_embeddings:
+            logger.warning(f"[{job_id}] No prototype embeddings found for person {person_id}")
+            return {"status": "error", "message": "No prototype embeddings found"}
+
+        logger.info(
+            f"[{job_id}] Found {len(prototype_embeddings)} prototypes for person {person.name}"
+        )
+
+        # 4. Search using each prototype and aggregate results
+        candidate_faces: dict[str, dict[str, Any]] = {}  # face_id -> {scores, max_score, ...}
+
+        for proto_face_id, proto_data in prototype_embeddings.items():
+            # Search for similar faces
+            results = qdrant.search_similar_faces(
+                query_embedding=proto_data["embedding"],
+                limit=max_suggestions * 3,  # Get more candidates for aggregation
+                score_threshold=min_confidence,
+            )
+
+            logger.debug(
+                f"[{job_id}] Prototype {proto_face_id}: found {len(results)} similar faces"
+            )
+
+            for result in results:
+                # Extract face_id from payload
+                if result.payload is None:
+                    continue
+
+                face_id_str = result.payload.get("face_id")
+                if not face_id_str:
+                    continue
+
+                try:
+                    face_id_uuid = uuid_lib.UUID(face_id_str)
+                except ValueError:
+                    logger.warning(f"[{job_id}] Invalid face_id in payload: {face_id_str}")
+                    continue
+
+                score = result.score
+
+                # Get the face instance to check person assignment
+                face = db_session.get(FaceInstance, face_id_uuid)
+
+                if not face:
+                    continue
+
+                # Skip if this face belongs to any person already
+                if face.person_id is not None:
+                    continue
+
+                # Aggregate results
+                face_id = str(face_id_uuid)
+                if face_id not in candidate_faces:
+                    candidate_faces[face_id] = {
+                        "scores": {},
+                        "max_score": 0.0,
+                        "face_instance": face,
+                    }
+
+                candidate_faces[face_id]["scores"][proto_face_id] = score
+                candidate_faces[face_id]["max_score"] = max(
+                    candidate_faces[face_id]["max_score"],
+                    score,
+                )
+
+        logger.info(
+            f"[{job_id}] Aggregated {len(candidate_faces)} candidate faces from all prototypes"
+        )
+
+        # 5. Sort by aggregate confidence (max score) and take top N
+        sorted_candidates = sorted(
+            candidate_faces.items(),
+            key=lambda x: x[1]["max_score"],
+            reverse=True,
+        )[:max_suggestions]
+
+        # 6. Expire old pending suggestions for this person
+        now = datetime.now(UTC)
+        expire_result = db_session.execute(
+            select(FaceSuggestion).where(
+                FaceSuggestion.suggested_person_id == person_uuid,
+                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+            )
+        )
+        old_suggestions = expire_result.scalars().all()
+
+        for old_suggestion in old_suggestions:
+            old_suggestion.status = FaceSuggestionStatus.EXPIRED.value
+            old_suggestion.reviewed_at = now
+
+        expired_count = len(old_suggestions)
+        if expired_count > 0:
+            logger.info(f"[{job_id}] Expired {expired_count} old pending suggestions")
+
+        # 7. Create new suggestions with multi-prototype data
+        suggestions_created = 0
+
+        for face_id, data in sorted_candidates:
+            # Find best prototype for source_face_id (highest quality among matches)
+            best_proto_id = max(
+                data["scores"].keys(),
+                key=lambda pid: prototype_embeddings[pid]["quality"],
+            )
+
+            suggestion = FaceSuggestion(
+                face_instance_id=uuid_lib.UUID(face_id),
+                suggested_person_id=person_uuid,
+                source_face_id=uuid_lib.UUID(best_proto_id),  # Best quality matching prototype
+                confidence=data["scores"][best_proto_id],  # Score from that prototype
+                aggregate_confidence=data["max_score"],  # MAX score across all
+                matching_prototype_ids=list(data["scores"].keys()),
+                prototype_scores=data["scores"],
+                prototype_match_count=len(data["scores"]),
+                status=FaceSuggestionStatus.PENDING.value,
+            )
+            db_session.add(suggestion)
+            suggestions_created += 1
+
+        db_session.commit()
+
+        logger.info(
+            f"[{job_id}] Multi-prototype propagation complete for {person.name}: "
+            f"{suggestions_created} suggestions created, {len(prototype_embeddings)} prototypes used"
+        )
+
+        return {
+            "status": "completed",
+            "suggestions_created": suggestions_created,
+            "prototypes_used": len(prototype_embeddings),
+            "candidates_evaluated": len(candidate_faces),
+            "expired_count": expired_count,
+        }
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Error in multi-prototype propagation job: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        db_session.close()

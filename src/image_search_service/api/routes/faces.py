@@ -795,13 +795,11 @@ async def regenerate_suggestions_for_person(
     Raises:
         HTTPException: 404 if person not found, 400 if no prototypes exist
     """
-    from datetime import UTC, datetime
-
     from redis import Redis
     from rq import Queue
 
     from image_search_service.core.config import get_settings
-    from image_search_service.queue.face_jobs import propagate_person_label_job
+    from image_search_service.queue.face_jobs import propagate_person_label_multiproto_job
     from image_search_service.services.prototype_service import get_prototypes_for_person
 
     # Step 1: Verify person exists
@@ -818,64 +816,23 @@ async def regenerate_suggestions_for_person(
             detail=f"Cannot regenerate suggestions: person {person.name} has no prototypes",
         )
 
-    # Step 3: Find highest quality prototype
-    # Load face instances for prototypes to access quality scores
-    face_ids = [p.face_instance_id for p in prototypes if p.face_instance_id]
-    if not face_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot regenerate suggestions: no valid prototype faces found",
-        )
-
-    face_query = select(FaceInstance).where(FaceInstance.id.in_(face_ids))
-    face_result = await db.execute(face_query)
-    faces = list(face_result.scalars().all())
-
-    if not faces:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot regenerate suggestions: prototype faces not found in database",
-        )
-
-    # Find face with highest quality score
-    best_face = max(faces, key=lambda f: f.quality_score or 0.0)
-
-    # Step 4: Expire existing pending suggestions for this person
-    expire_result = await db.execute(
-        update(FaceSuggestion)
-        .where(
-            FaceSuggestion.suggested_person_id == person_id,
-            FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
-        )
-        .values(
-            status=FaceSuggestionStatus.EXPIRED.value,
-            reviewed_at=datetime.now(UTC),
-        )
-    )
-    expired_count = expire_result.rowcount  # type: ignore[attr-defined]
-
-    await db.commit()
-
-    if expired_count > 0:
-        logger.info(f"Expired {expired_count} pending suggestions for person {person.name}")
-
-    # Step 5: Queue propagation job with best prototype
+    # Step 3: Queue multi-prototype propagation job
+    # Note: Expiration of old suggestions is handled inside the job
     try:
         settings = get_settings()
         redis_conn = Redis.from_url(settings.redis_url)
         queue = Queue("default", connection=redis_conn)
 
         queue.enqueue(
-            propagate_person_label_job,
-            source_face_id=str(best_face.id),
+            propagate_person_label_multiproto_job,
             person_id=str(person_id),
             min_confidence=0.7,
             max_suggestions=50,
             job_timeout="10m",
         )
         logger.info(
-            f"Queued suggestion regeneration job for person {person.name} "
-            f"using prototype face {best_face.id} (quality={best_face.quality_score:.2f})"
+            f"Queued multi-prototype suggestion regeneration job for person {person.name} "
+            f"using {len(prototypes)} prototypes"
         )
     except Exception as e:
         logger.error(f"Failed to queue suggestion regeneration job: {e}")
@@ -886,8 +843,8 @@ async def regenerate_suggestions_for_person(
 
     return SuggestionRegenerationResponse(
         status="queued",
-        message=f"Suggestion regeneration queued for person {person.name}",
-        expired_count=expired_count,
+        message=f"Multi-prototype suggestion regeneration queued for person {person.name}",
+        expired_count=0,  # Will be reported in job result
     )
 
 
@@ -2133,7 +2090,7 @@ async def recompute_prototypes_endpoint(
     from rq import Queue
 
     from image_search_service.core.config import get_settings
-    from image_search_service.queue.face_jobs import propagate_person_label_job
+    from image_search_service.queue.face_jobs import propagate_person_label_multiproto_job
     from image_search_service.services import prototype_service
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
@@ -2215,14 +2172,13 @@ async def recompute_prototypes_endpoint(
                         expired_count = expire_result.rowcount  # type: ignore[attr-defined]
                         await db.commit()
 
-                        # Queue propagation job with best prototype
+                        # Queue multi-prototype propagation job
                         try:
                             redis_conn = Redis.from_url(settings.redis_url)
                             queue = Queue("default", connection=redis_conn)
 
                             queue.enqueue(
-                                propagate_person_label_job,
-                                source_face_id=str(best_face.id),
+                                propagate_person_label_multiproto_job,
                                 person_id=str(person_id),
                                 min_confidence=0.7,
                                 max_suggestions=50,
@@ -2231,13 +2187,13 @@ async def recompute_prototypes_endpoint(
 
                             rescan_triggered = True
                             rescan_message = (
-                                f"Suggestion rescan queued for {person.name}. "
-                                f"{expired_count} old suggestions expired."
+                                f"Multi-prototype suggestion rescan queued for {person.name}. "
+                                f"{expired_count} old suggestions expired. "
+                                f"Using {len(prototypes)} prototypes."
                             )
                             logger.info(
-                                f"Auto-triggered suggestion rescan for {person.name} "
-                                f"using prototype face {best_face.id} "
-                                f"(quality={best_face.quality_score:.2f})"
+                                f"Auto-triggered multi-prototype suggestion rescan for {person.name} "
+                                f"using {len(prototypes)} prototypes"
                             )
                         except Exception as e:
                             logger.error(f"Failed to queue auto-rescan job: {e}")

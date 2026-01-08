@@ -76,6 +76,11 @@ async def _build_suggestion_response(
         bbox_h=face_instance.bbox_h if face_instance else None,
         detection_confidence=face_instance.detection_confidence if face_instance else None,
         quality_score=face_instance.quality_score if face_instance else None,
+        # Multi-prototype scoring fields
+        matching_prototype_ids=suggestion.matching_prototype_ids,
+        prototype_scores=suggestion.prototype_scores,
+        aggregate_confidence=suggestion.aggregate_confidence,
+        prototype_match_count=suggestion.prototype_match_count,
     )
 
 
@@ -440,6 +445,11 @@ async def get_suggestion(
         bbox_h=face_instance.bbox_h if face_instance else None,
         detection_confidence=face_instance.detection_confidence if face_instance else None,
         quality_score=face_instance.quality_score if face_instance else None,
+        # Multi-prototype scoring fields
+        matching_prototype_ids=suggestion.matching_prototype_ids,
+        prototype_scores=suggestion.prototype_scores,
+        aggregate_confidence=suggestion.aggregate_confidence,
+        prototype_match_count=suggestion.prototype_match_count,
     )
 
 
@@ -571,6 +581,11 @@ async def reject_suggestion(
         bbox_h=face_instance.bbox_h if face_instance else None,
         detection_confidence=face_instance.detection_confidence if face_instance else None,
         quality_score=face_instance.quality_score if face_instance else None,
+        # Multi-prototype scoring fields
+        matching_prototype_ids=suggestion.matching_prototype_ids,
+        prototype_scores=suggestion.prototype_scores,
+        aggregate_confidence=suggestion.aggregate_confidence,
+        prototype_match_count=suggestion.prototype_match_count,
     )
 
 

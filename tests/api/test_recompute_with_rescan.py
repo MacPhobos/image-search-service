@@ -22,6 +22,7 @@ from image_search_service.db.models import (
     PrototypeRole,
     TrainingStatus,
 )
+from image_search_service.queue.face_jobs import propagate_person_label_multiproto_job
 
 # ============ Fixtures ============
 
@@ -239,11 +240,14 @@ class TestRecomputeWithRescan:
         assert data["rescanMessage"] is not None
         assert "queued" in data["rescanMessage"].lower()
 
-        # Verify queue was called
+        # Verify queue was called with the new multi-prototype job
         mock_queue.enqueue.assert_called_once()
-        call_kwargs = mock_queue.enqueue.call_args.kwargs
-        assert str(face.id) == call_kwargs["source_face_id"]
-        assert str(person.id) == call_kwargs["person_id"]
+        call_args = mock_queue.enqueue.call_args
+        # Check the job function
+        assert call_args.args[0] == propagate_person_label_multiproto_job
+        # Check person_id is passed
+        call_kwargs = call_args.kwargs
+        assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
 
     @pytest.mark.asyncio
     async def test_recompute_with_explicit_rescan_false(
@@ -369,9 +373,11 @@ class TestRecomputeWithRescan:
         data = response.json()
         assert data["rescanTriggered"] is True
 
-        # Verify the queued job uses high quality face
-        call_kwargs = mock_queue.enqueue.call_args.kwargs
-        assert str(high_face.id) == call_kwargs["source_face_id"]
+        # Verify the queued job was called with person_id (multi-proto job handles all prototypes)
+        call_args = mock_queue.enqueue.call_args
+        assert call_args.args[0] == propagate_person_label_multiproto_job
+        call_kwargs = call_args.kwargs
+        assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
 
     @pytest.mark.asyncio
     async def test_rescan_skipped_when_no_prototypes(
@@ -546,9 +552,11 @@ class TestRecomputeWithRescan:
         data = response.json()
         assert data["rescanTriggered"] is True
 
-        # Should use face with quality=0.8 (not the null one)
-        call_kwargs = mock_queue.enqueue.call_args.kwargs
-        assert str(face_with_quality.id) == call_kwargs["source_face_id"]
+        # Verify job was called with person_id (multi-proto job handles all prototypes internally)
+        call_args = mock_queue.enqueue.call_args
+        assert call_args.args[0] == propagate_person_label_multiproto_job
+        call_kwargs = call_args.kwargs
+        assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
 
     @pytest.mark.asyncio
     async def test_rescan_no_pending_suggestions_to_expire(
