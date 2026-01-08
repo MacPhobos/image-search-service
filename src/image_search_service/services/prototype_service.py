@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.db.models import FaceInstance, PersonPrototype, PrototypeRole
+from image_search_service.services.config_service import ConfigService
 from image_search_service.vector.face_qdrant import FaceQdrantClient
 
 logger = logging.getLogger(__name__)
@@ -447,9 +448,10 @@ async def validate_pin_request(
     """
     from fastapi import HTTPException
 
-    from image_search_service.core.config import get_settings
+    config_service = ConfigService(db)
 
-    settings = get_settings()
+    # Read max_exemplars from database (falls back to env setting if not in DB)
+    max_exemplars = await config_service.get_int("face_prototype_max_exemplars")
 
     # Verify face exists and belongs to person
     face = await db.get(FaceInstance, face_instance_id)
@@ -486,14 +488,13 @@ async def validate_pin_request(
         primary_count = result.scalar() or 0
 
         # PRIMARY prototypes count toward max_exemplars limit
-        max_primaries = settings.face_prototype_max_exemplars // 2  # Reserve half for primaries
+        max_primaries = max_exemplars // 2  # Reserve half for primaries
         if primary_count >= max_primaries:
-            max_ex = settings.face_prototype_max_exemplars
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"Maximum {max_primaries} PRIMARY prototypes already pinned "
-                    f"(based on max_exemplars={max_ex})"
+                    f"(based on max_exemplars={max_exemplars})"
                 ),
             )
 
@@ -849,6 +850,10 @@ async def select_temporal_prototypes(
     from image_search_service.services import temporal_service
 
     settings = get_settings()
+    config_service = ConfigService(db)
+
+    # Read max_exemplars from database (falls back to env setting if not in DB)
+    max_exemplars = await config_service.get_int("face_prototype_max_exemplars")
 
     # Get all faces with temporal metadata
     faces = await get_faces_with_temporal_metadata(db, person_id)
@@ -956,7 +961,7 @@ async def select_temporal_prototypes(
                 break
 
     # Phase 2: Fill remaining slots with EXEMPLAR (highest quality overall)
-    max_exemplars = settings.face_prototype_max_exemplars
+    # max_exemplars already loaded from database at start of function
     current_count = len(pinned_protos) + len(selected_protos)
 
     if current_count < max_exemplars:
@@ -1151,9 +1156,10 @@ async def recompute_prototypes_for_person(
             - prototypes_removed: int
             - coverage: TemporalCoverage dict
     """
-    from image_search_service.core.config import get_settings
+    config_service = ConfigService(db)
 
-    settings = get_settings()
+    # Read max_exemplars from database (falls back to env setting if not in DB)
+    max_exemplars = await config_service.get_int("face_prototype_max_exemplars")
 
     # Count prototypes before
     initial_protos = await get_prototypes_for_person(db, person_id)
@@ -1172,7 +1178,7 @@ async def recompute_prototypes_for_person(
         db=db,
         qdrant=qdrant,
         person_id=person_id,
-        max_exemplars=settings.face_prototype_max_exemplars,
+        max_exemplars=max_exemplars,
         preserve_pins=preserve_pins,
     )
 
