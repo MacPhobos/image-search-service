@@ -131,7 +131,9 @@ class ExifService:
                             )
                             continue
 
-                    result["exif_metadata"] = exif_dict
+                    # Sanitize EXIF metadata for JSON/JSONB storage
+                    # (removes null bytes that PostgreSQL JSONB cannot store)
+                    result["exif_metadata"] = _sanitize_for_json(exif_dict)
 
                     # Extract taken_at (CRITICAL: only from DateTimeOriginal/DateTimeDigitized)
                     taken_at_str = exif_data.get(EXIF_TAG_DATETIME_ORIGINAL)
@@ -291,6 +293,42 @@ class ExifService:
 
         # Convert to decimal degrees
         return d + (m / 60.0) + (s / 3600.0)
+
+
+def _sanitize_for_json(value: Any) -> Any:
+    """Remove null bytes and other non-JSON-safe characters from values.
+
+    PostgreSQL JSONB columns cannot store null bytes (\x00 or \u0000).
+    Some EXIF data (especially MakerNote fields) contains these characters.
+
+    Args:
+        value: EXIF value to sanitize
+
+    Returns:
+        Sanitized value safe for JSON/JSONB storage
+    """
+    if isinstance(value, str):
+        # Remove null bytes (both representations)
+        return value.replace('\x00', '').replace('\u0000', '')
+    elif isinstance(value, bytes):
+        # Decode bytes, removing null bytes
+        try:
+            decoded = value.decode('utf-8', errors='replace')
+            return decoded.replace('\x00', '').replace('\u0000', '')
+        except Exception:
+            # If decoding fails completely, return None
+            return None
+    elif isinstance(value, dict):
+        # Recursively sanitize dictionary values
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    elif isinstance(value, (list, tuple)):
+        # Recursively sanitize list/tuple items
+        sanitized = [_sanitize_for_json(v) for v in value]
+        # Preserve tuple type
+        return tuple(sanitized) if isinstance(value, tuple) else sanitized
+    else:
+        # Return other types as-is (int, float, bool, None)
+        return value
 
 
 # Global service instance (lazy initialization)

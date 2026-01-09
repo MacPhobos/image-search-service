@@ -487,3 +487,106 @@ def test_extract_exif_complete_example(
     assert abs(result["gps_latitude"] - 40.7128) < 0.01
     assert abs(result["gps_longitude"] - (-74.0060)) < 0.01
     assert len(result["exif_metadata"]) > 0
+
+
+def test_sanitize_null_bytes_from_exif_metadata(
+    exif_service: ExifService, tmp_path: Path
+) -> None:
+    """Test that null bytes are removed from EXIF metadata.
+
+    PostgreSQL JSONB cannot store null bytes (\x00 or \u0000).
+    Some EXIF data (particularly MakerNote fields) contains these characters.
+    """
+    # Create image with EXIF containing null bytes
+    # We'll add this after creating the base image with PIL
+    img = Image.new("RGB", (100, 100), color=(128, 128, 128))
+    exif = Image.Exif()
+
+    # Add EXIF data with null bytes (simulating MakerNote or other binary data)
+    # Note: PIL may not allow us to set raw bytes directly in all tags,
+    # so we'll test the sanitization function directly
+
+    # First, test that normal EXIF extraction works
+    exif[EXIF_TAG_MAKE] = "Apple"
+    exif[EXIF_TAG_MODEL] = "iPhone"
+
+    image_path = tmp_path / "test.jpg"
+    img.save(image_path, exif=exif)
+
+    result = exif_service.extract_exif(str(image_path))
+
+    # Verify that exif_metadata exists and contains no null bytes
+    metadata = result["exif_metadata"]
+    assert isinstance(metadata, dict)
+
+    # Check that all string values in metadata don't contain null bytes
+    def check_no_null_bytes(value):
+        if isinstance(value, str):
+            assert '\x00' not in value
+            assert '\u0000' not in value
+        elif isinstance(value, dict):
+            for v in value.values():
+                check_no_null_bytes(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                check_no_null_bytes(v)
+
+    check_no_null_bytes(metadata)
+
+
+def test_sanitize_for_json_string_with_null_bytes() -> None:
+    """Test _sanitize_for_json removes null bytes from strings."""
+    from image_search_service.services.exif_service import _sanitize_for_json
+
+    # Test \x00 representation
+    assert _sanitize_for_json("hello\x00world") == "helloworld"
+
+    # Test \u0000 representation
+    assert _sanitize_for_json("hello\u0000world") == "helloworld"
+
+    # Test mixed
+    assert _sanitize_for_json("test\x00data\u0000here") == "testdatahere"
+
+    # Test string without null bytes (should be unchanged)
+    assert _sanitize_for_json("clean string") == "clean string"
+
+
+def test_sanitize_for_json_bytes_with_null_bytes() -> None:
+    """Test _sanitize_for_json handles bytes with null bytes."""
+    from image_search_service.services.exif_service import _sanitize_for_json
+
+    # Bytes with null byte
+    assert _sanitize_for_json(b"hello\x00world") == "helloworld"
+
+    # Clean bytes
+    assert _sanitize_for_json(b"hello world") == "hello world"
+
+
+def test_sanitize_for_json_nested_structures() -> None:
+    """Test _sanitize_for_json handles nested dicts and lists."""
+    from image_search_service.services.exif_service import _sanitize_for_json
+
+    # Nested dict
+    input_dict = {
+        "key1": "value\x00with\u0000nulls",
+        "key2": {"nested": "data\x00here"},
+        "key3": ["list\x00item", "clean item"]
+    }
+
+    result = _sanitize_for_json(input_dict)
+
+    assert result["key1"] == "valuewithnulls"
+    assert result["key2"]["nested"] == "datahere"
+    assert result["key3"][0] == "listitem"
+    assert result["key3"][1] == "clean item"
+
+
+def test_sanitize_for_json_preserves_other_types() -> None:
+    """Test _sanitize_for_json preserves int, float, bool, None."""
+    from image_search_service.services.exif_service import _sanitize_for_json
+
+    assert _sanitize_for_json(123) == 123
+    assert _sanitize_for_json(45.67) == 45.67
+    assert _sanitize_for_json(True) is True
+    assert _sanitize_for_json(False) is False
+    assert _sanitize_for_json(None) is None

@@ -161,9 +161,15 @@ async def backfill_exif_metadata(
                             )
 
                     except Exception as e:
-                        logger.error(f"Asset {asset.id}: failed to extract EXIF: {e}")
+                        logger.error(
+                            f"Asset {asset.id}: failed to extract EXIF: {e}",
+                            exc_info=True
+                        )
                         stats["failed"] += 1
                         batch_failed += 1
+                        # Important: Rollback the session to clear any bad state
+                        # This allows us to continue processing other assets
+                        await db.rollback()
                         continue
 
                 # Commit batch (unless dry run)
@@ -172,11 +178,24 @@ async def backfill_exif_metadata(
                         await db.commit()
                         logger.debug(f"Committed batch {batch_idx + 1}/{batch_count}")
                     except Exception as e:
-                        logger.error(f"Failed to commit batch {batch_idx + 1}: {e}")
+                        logger.error(
+                            f"Failed to commit batch {batch_idx + 1}: {e}",
+                            exc_info=True
+                        )
                         await db.rollback()
+
                         # Count failed commits as failures
                         stats["failed"] += batch_updated
                         stats["updated"] -= batch_updated
+
+                        # Log which assets were affected by the batch failure
+                        affected_ids = [a.id for a in batch_assets[:batch_updated]]
+                        id_preview = affected_ids[:10]
+                        more_marker = '...' if len(affected_ids) > 10 else ''
+                        logger.warning(
+                            f"Batch commit failed for {batch_updated} assets. "
+                            f"Affected asset IDs: {id_preview}{more_marker}"
+                        )
                         continue
 
                 # Progress logging
