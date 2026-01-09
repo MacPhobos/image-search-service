@@ -13,7 +13,7 @@ CRITICAL DATE EXTRACTION RULES:
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from PIL import Image
 from PIL.ExifTags import IFD, TAGS
@@ -134,9 +134,8 @@ class ExifService:
                             )
                             continue
 
-                    # Sanitize EXIF metadata for JSON/JSONB storage
-                    # (removes null bytes that PostgreSQL JSONB cannot store)
-                    result["exif_metadata"] = _sanitize_for_json(exif_dict)
+                    # Store raw EXIF metadata
+                    result["exif_metadata"] = exif_dict
 
                     # Extract taken_at (CRITICAL: only from DateTimeOriginal/DateTimeDigitized)
                     # These tags are in the EXIF sub-IFD, NOT the main IFD
@@ -186,7 +185,12 @@ class ExifService:
                     exc_info=True
                 )
 
-        return result
+        # CRITICAL: Sanitize entire result dictionary before returning
+        # This removes null bytes from ALL fields (camera_make, camera_model, exif_metadata)
+        # PostgreSQL JSONB cannot store null bytes, so we must strip them
+        sanitized = _sanitize_for_json(result)
+        # Cast to satisfy mypy - we know _sanitize_for_json returns dict[str, Any]
+        return cast(dict[str, Any], sanitized)
 
     def _parse_exif_datetime(self, value: Any) -> datetime | None:
         """Parse EXIF datetime string to datetime object.
@@ -322,12 +326,13 @@ def _sanitize_for_json(value: Any) -> Any:
     """
     if isinstance(value, str):
         # Remove null bytes (both representations)
-        return value.replace('\x00', '').replace('\u0000', '')
+        # Also handle raw byte representation in string literals
+        return value.replace('\x00', '').replace('\u0000', '').replace('\0', '')
     elif isinstance(value, bytes):
         # Decode bytes, removing null bytes
         try:
             decoded = value.decode('utf-8', errors='replace')
-            return decoded.replace('\x00', '').replace('\u0000', '')
+            return decoded.replace('\x00', '').replace('\u0000', '').replace('\0', '')
         except Exception:
             # If decoding fails completely, return None
             return None
@@ -339,8 +344,11 @@ def _sanitize_for_json(value: Any) -> Any:
         sanitized = [_sanitize_for_json(v) for v in value]
         # Preserve tuple type
         return tuple(sanitized) if isinstance(value, tuple) else sanitized
+    elif isinstance(value, (datetime, int, float, bool, type(None))):
+        # Return datetime and primitive types as-is (no sanitization needed)
+        return value
     else:
-        # Return other types as-is (int, float, bool, None)
+        # For any other type, return as-is (might be custom objects)
         return value
 
 

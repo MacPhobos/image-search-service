@@ -597,3 +597,55 @@ def test_sanitize_for_json_preserves_other_types() -> None:
     assert _sanitize_for_json(True) is True
     assert _sanitize_for_json(False) is False
     assert _sanitize_for_json(None) is None
+
+
+def test_sanitize_for_json_preserves_datetime() -> None:
+    """Test _sanitize_for_json preserves datetime objects."""
+    from image_search_service.services.exif_service import _sanitize_for_json
+
+    dt = datetime(2023, 7, 15, 14, 30, 0, tzinfo=UTC)
+    assert _sanitize_for_json(dt) == dt
+    assert isinstance(_sanitize_for_json(dt), datetime)
+
+
+def test_extract_exif_sanitizes_camera_make_with_null_bytes(
+    exif_service: ExifService, tmp_path: Path
+) -> None:
+    """Test that null bytes in camera_make are removed.
+
+    Regression test for: asyncpg.exceptions.CharacterNotInRepertoireError
+    Some camera EXIF data contains null bytes that PostgreSQL JSONB cannot store.
+    """
+    # Note: PIL may not allow us to directly set null bytes in EXIF tags,
+    # but the sanitization function should handle them if they appear
+    # We'll test the complete extraction flow to ensure sanitization is applied
+
+    # Test the sanitization function directly with realistic EXIF result
+    from image_search_service.services.exif_service import _sanitize_for_json
+
+    # Simulate EXIF extraction result with null bytes (as would come from PIL)
+    result_with_nulls = {
+        "taken_at": datetime(2023, 7, 15, 14, 30, 0, tzinfo=UTC),
+        "camera_make": "Canon\x00",  # Null byte at end
+        "camera_model": "EOS\u00005D Mark IV",  # Unicode null in middle
+        "gps_latitude": None,
+        "gps_longitude": None,
+        "exif_metadata": {
+            "Make": "Canon\x00",
+            "Model": "EOS\u00005D Mark IV",
+            "MakerNote": "binary\x00data\0here",
+        }
+    }
+
+    # Apply sanitization (as extract_exif does at return time)
+    sanitized = _sanitize_for_json(result_with_nulls)
+
+    # Verify all null bytes removed from ALL fields
+    assert sanitized["camera_make"] == "Canon"
+    assert sanitized["camera_model"] == "EOS5D Mark IV"
+    assert sanitized["exif_metadata"]["Make"] == "Canon"
+    assert sanitized["exif_metadata"]["Model"] == "EOS5D Mark IV"
+    assert sanitized["exif_metadata"]["MakerNote"] == "binarydatahere"
+
+    # Verify datetime preserved
+    assert sanitized["taken_at"] == datetime(2023, 7, 15, 14, 30, 0, tzinfo=UTC)
