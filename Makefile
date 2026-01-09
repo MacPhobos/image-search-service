@@ -1,5 +1,5 @@
 .PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
-	bootstrap-qdrant verify-qdrant \
+	bootstrap-qdrant verify-qdrant exif-backfill \
 	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection \
 	faces-cluster-dual faces-train-matching faces-pipeline faces-pipeline-dual faces-pipeline-full
 
@@ -58,6 +58,14 @@ bootstrap-qdrant: ## Initialize Qdrant collections for fresh install
 verify-qdrant: ## Verify Qdrant collections are properly configured
 	@echo "Verifying Qdrant collections..."
 	uv run python -m image_search_service.scripts.bootstrap_qdrant verify
+
+# EXIF metadata backfill
+exif-backfill: ## Backfill EXIF metadata for existing images
+	@echo "Running EXIF backfill (limit=$(or $(LIMIT),unlimited), batch-size=$(or $(BATCH_SIZE),100))..."
+	uv run python scripts/backfill_exif.py \
+		$(if $(LIMIT),--limit $(LIMIT)) \
+		--batch-size $(or $(BATCH_SIZE),100) \
+		$(if $(DRY_RUN),--dry-run)
 
 # Face detection and recognition targets
 faces-backfill: ## Backfill face detection for assets without faces

@@ -1,11 +1,29 @@
 """Pydantic schemas for API requests and responses."""
 
 from datetime import datetime
-from typing import TypeVar
+from typing import Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 T = TypeVar("T")
+
+
+class LocationMetadata(BaseModel):
+    """GPS location from EXIF."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    latitude: float = Field(alias="lat")
+    longitude: float = Field(alias="lng")
+
+
+class CameraMetadata(BaseModel):
+    """Camera info from EXIF."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    make: str | None = None
+    model: str | None = None
 
 
 class Asset(BaseModel):
@@ -17,6 +35,56 @@ class Asset(BaseModel):
     path: str
     created_at: datetime = Field(alias="createdAt")
     indexed_at: datetime | None = Field(None, alias="indexedAt")
+    taken_at: datetime | None = Field(None, alias="takenAt")
+    camera: CameraMetadata | None = None
+    location: LocationMetadata | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def build_nested_metadata(cls, data: Any) -> dict[str, Any]:
+        """Transform flat DB fields into nested EXIF metadata objects.
+
+        Constructs camera and location objects from flat fields in ImageAsset model.
+        Only creates nested objects when underlying data is present.
+
+        Args:
+            data: SQLAlchemy model instance or dict
+
+        Returns:
+            Dict with nested camera and location objects (or None)
+        """
+        # If already a dict (e.g., from JSON), pass through
+        if isinstance(data, dict):
+            return data
+
+        # Convert SQLAlchemy model to dict
+        values: dict[str, Any] = {}
+        for field in ["id", "path", "created_at", "indexed_at", "taken_at"]:
+            values[field] = getattr(data, field, None)
+
+        # Build camera metadata if any camera field is present
+        camera_make = getattr(data, "camera_make", None)
+        camera_model = getattr(data, "camera_model", None)
+        if camera_make is not None or camera_model is not None:
+            values["camera"] = {
+                "make": camera_make,
+                "model": camera_model,
+            }
+        else:
+            values["camera"] = None
+
+        # Build location metadata only if both lat and lng are present
+        gps_latitude = getattr(data, "gps_latitude", None)
+        gps_longitude = getattr(data, "gps_longitude", None)
+        if gps_latitude is not None and gps_longitude is not None:
+            values["location"] = {
+                "lat": gps_latitude,
+                "lng": gps_longitude,
+            }
+        else:
+            values["location"] = None
+
+        return values
 
     @computed_field(alias="url")
     def url(self) -> str:

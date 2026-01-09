@@ -141,9 +141,42 @@ gps_longitude: Mapped[float | None]         # Decimal degrees longitude
 exif_metadata: Mapped[dict | None]          # Full EXIF blob (JSONB)
 ```
 
+## Backfill Script
+
+For existing assets that were uploaded before EXIF integration, use the backfill script:
+
+```bash
+# Backfill all assets without EXIF data (taken_at IS NULL)
+make exif-backfill
+
+# Process limited number with custom batch size
+make exif-backfill LIMIT=1000 BATCH_SIZE=50
+
+# Dry run to preview what would be done
+make exif-backfill DRY_RUN=1 LIMIT=100
+
+# Direct script invocation
+python scripts/backfill_exif.py --limit 1000 --batch-size 100 --dry-run
+```
+
+**Script behavior**:
+- Queries assets where `taken_at IS NULL`
+- Extracts EXIF metadata from image files
+- Updates database in batches (default: 100 assets per commit)
+- Reports statistics: processed, updated, skipped (no EXIF), failed (errors)
+- Gracefully handles missing files and corrupt EXIF data
+
+**Output example**:
+```
+Processing batch 1/50... (87 assets updated, 13 skipped)
+Processing batch 2/50... (92 assets updated, 8 skipped)
+...
+Done! Processed: 5000, Updated: 4350, Skipped: 620, Failed: 30
+```
+
 ## Future Enhancements
 
-1. **Backfill existing assets** - Create script to extract EXIF from already-uploaded images
+1. ✅ **Backfill existing assets** - Implemented via `scripts/backfill_exif.py`
 2. **API response** - Return EXIF metadata in asset GET endpoints
 3. **Search filters** - Enable filtering by date taken, camera, location
 4. **Map visualization** - Display photos on map using GPS coordinates
@@ -161,6 +194,7 @@ exif_metadata: Mapped[dict | None]          # Full EXIF blob (JSONB)
 - **Integration**: `src/image_search_service/queue/thumbnail_jobs.py`
 - **Service**: `src/image_search_service/services/exif_service.py`
 - **Model**: `src/image_search_service/db/models.py` (ImageAsset)
+- **Backfill Script**: `scripts/backfill_exif.py`
 - **Tests**: `tests/unit/services/test_exif_service.py`
 
 ---

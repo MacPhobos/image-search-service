@@ -164,6 +164,17 @@ class ImageAsset(Base):
         String(20), nullable=False, default=TrainingStatus.PENDING.value
     )
 
+    # EXIF metadata (extracted from image files)
+    # CRITICAL: taken_at is ONLY populated from EXIF DateTimeOriginal/DateTimeDigitized
+    # NEVER from file modification dates or inferred from filenames/directories
+    taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    camera_make: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    camera_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    gps_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Full EXIF blob for extensibility (stores all readable EXIF tags)
+    exif_metadata: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+
     # Relationships
     training_jobs: Mapped[list["TrainingJob"]] = relationship(
         "TrainingJob", back_populates="asset", cascade="all, delete-orphan"
@@ -178,6 +189,7 @@ class ImageAsset(Base):
     __table_args__ = (
         Index("idx_image_assets_training_status", "training_status"),
         Index("idx_image_assets_file_modified_at", "file_modified_at"),
+        Index("idx_image_assets_taken_at", "taken_at"),
     )
 
     def __repr__(self) -> str:
