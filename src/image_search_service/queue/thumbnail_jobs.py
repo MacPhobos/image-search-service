@@ -6,6 +6,7 @@ from image_search_service.core.config import get_settings
 from image_search_service.core.logging import get_logger
 from image_search_service.db.models import ImageAsset, TrainingJob
 from image_search_service.db.sync_operations import get_sync_session
+from image_search_service.services.exif_service import get_exif_service
 from image_search_service.services.thumbnail_service import ThumbnailService
 
 logger = get_logger(__name__)
@@ -65,6 +66,35 @@ def generate_thumbnails_batch(session_id: int) -> dict[str, int]:
                 asset.thumbnail_path = thumb_path
                 asset.width = width
                 asset.height = height
+
+                # Extract EXIF metadata (graceful degradation)
+                try:
+                    exif_service = get_exif_service()
+                    exif_data = exif_service.extract_exif(asset.path)
+
+                    if exif_data:
+                        # Update asset with EXIF data (only if values are present)
+                        if exif_data.get("taken_at"):
+                            asset.taken_at = exif_data["taken_at"]
+                        if exif_data.get("camera_make"):
+                            asset.camera_make = exif_data["camera_make"]
+                        if exif_data.get("camera_model"):
+                            asset.camera_model = exif_data["camera_model"]
+                        if exif_data.get("gps_latitude") is not None:
+                            asset.gps_latitude = exif_data["gps_latitude"]
+                        if exif_data.get("gps_longitude") is not None:
+                            asset.gps_longitude = exif_data["gps_longitude"]
+                        if exif_data.get("exif_metadata"):
+                            asset.exif_metadata = exif_data["exif_metadata"]
+
+                        logger.debug(
+                            f"Extracted EXIF for asset {asset.id}: "
+                            f"taken_at={asset.taken_at}, camera={asset.camera_make}"
+                        )
+                except Exception as e:
+                    # Log debug message - don't spam logs in batch mode
+                    logger.debug(f"Could not extract EXIF for asset {asset.id}: {e}")
+
                 db_session.commit()
 
                 stats["generated"] += 1
@@ -146,13 +176,51 @@ def generate_single_thumbnail(asset_id: int) -> dict[str, object]:
                 asset.path, asset.id
             )
 
-            # Update asset
+            # Update asset with thumbnail info
             asset.thumbnail_path = thumb_path
             asset.width = width
             asset.height = height
+
+            # Extract EXIF metadata (graceful degradation - don't fail job on EXIF errors)
+            try:
+                exif_service = get_exif_service()
+                exif_data = exif_service.extract_exif(asset.path)
+
+                if exif_data:
+                    # Update asset with EXIF data (only if values are present)
+                    if exif_data.get("taken_at"):
+                        asset.taken_at = exif_data["taken_at"]
+                    if exif_data.get("camera_make"):
+                        asset.camera_make = exif_data["camera_make"]
+                    if exif_data.get("camera_model"):
+                        asset.camera_model = exif_data["camera_model"]
+                    if exif_data.get("gps_latitude") is not None:
+                        asset.gps_latitude = exif_data["gps_latitude"]
+                    if exif_data.get("gps_longitude") is not None:
+                        asset.gps_longitude = exif_data["gps_longitude"]
+                    if exif_data.get("exif_metadata"):
+                        asset.exif_metadata = exif_data["exif_metadata"]
+
+                    logger.info(
+                        f"Extracted EXIF data for asset {asset_id}: "
+                        f"taken_at={asset.taken_at}, "
+                        f"camera={asset.camera_make} {asset.camera_model}, "
+                        f"gps=({asset.gps_latitude}, {asset.gps_longitude})"
+                    )
+                else:
+                    logger.debug(f"No EXIF data found for asset {asset_id}")
+
+            except Exception as e:
+                # Log warning but don't fail the job - EXIF extraction is optional
+                logger.warning(
+                    f"Failed to extract EXIF data for asset {asset_id}: {e}",
+                    exc_info=True,
+                )
+
+            # Commit all changes (thumbnail + EXIF)
             db_session.commit()
 
-            logger.info(f"Successfully generated thumbnail for asset {asset_id}")
+            logger.info(f"Successfully processed asset {asset_id} (thumbnail + EXIF)")
 
             return {
                 "status": "success",
