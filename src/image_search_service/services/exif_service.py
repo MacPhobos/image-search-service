@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from PIL.ExifTags import TAGS
+from PIL.ExifTags import IFD, TAGS
 
 from image_search_service.core.logging import get_logger
 
@@ -37,6 +37,9 @@ EXIF_TAG_MODEL = 272  # Camera model
 
 # GPS tag ID
 EXIF_TAG_GPS_INFO = 34853  # GPS metadata
+
+# EXIF sub-IFD tag ID (where DateTimeOriginal/DateTimeDigitized are stored)
+EXIF_IFD_TAG = 34665  # EXIF sub-IFD pointer
 
 
 class ExifService:
@@ -136,14 +139,24 @@ class ExifService:
                     result["exif_metadata"] = _sanitize_for_json(exif_dict)
 
                     # Extract taken_at (CRITICAL: only from DateTimeOriginal/DateTimeDigitized)
-                    taken_at_str = exif_data.get(EXIF_TAG_DATETIME_ORIGINAL)
-                    if not taken_at_str:
-                        taken_at_str = exif_data.get(EXIF_TAG_DATETIME_DIGITIZED)
+                    # These tags are in the EXIF sub-IFD, NOT the main IFD
+                    taken_at_str = None
+                    try:
+                        # Access EXIF sub-IFD where DateTimeOriginal/DateTimeDigitized are stored
+                        exif_ifd = exif_data.get_ifd(IFD.Exif)
+                        taken_at_str = exif_ifd.get(EXIF_TAG_DATETIME_ORIGINAL)
+                        if not taken_at_str:
+                            taken_at_str = exif_ifd.get(EXIF_TAG_DATETIME_DIGITIZED)
+                    except KeyError:
+                        # No EXIF sub-IFD present
+                        logger.debug(f"No EXIF sub-IFD found in image: {image_path}")
+                    except Exception as e:
+                        logger.debug(f"Could not access EXIF sub-IFD: {e}")
 
                     if taken_at_str:
                         result["taken_at"] = self._parse_exif_datetime(taken_at_str)
 
-                    # Extract camera info
+                    # Extract camera info (these ARE in the main IFD)
                     camera_make = exif_data.get(EXIF_TAG_MAKE)
                     if camera_make:
                         result["camera_make"] = str(camera_make).strip()[:100]  # Limit to 100 chars

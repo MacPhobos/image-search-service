@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from PIL.ExifTags import IFD
 from PIL.TiffImagePlugin import IFDRational
 
 from image_search_service.services.exif_service import (
@@ -34,7 +35,10 @@ def create_image_with_exif(
     gps_latitude_ref: str | None = None,
     gps_longitude_ref: str | None = None,
 ) -> Path:
-    """Create test image with EXIF data.
+    """Create test image with EXIF data matching real camera behavior.
+
+    CRITICAL: DateTimeOriginal and DateTimeDigitized are placed in the EXIF sub-IFD,
+    NOT the main IFD. This matches how real cameras structure EXIF data.
 
     Args:
         path: Path to save image
@@ -56,29 +60,32 @@ def create_image_with_exif(
     # Build EXIF data
     exif = Image.Exif()
 
-    if datetime_original:
-        exif[EXIF_TAG_DATETIME_ORIGINAL] = datetime_original
-    if datetime_digitized:
-        exif[EXIF_TAG_DATETIME_DIGITIZED] = datetime_digitized
+    # Camera info goes in main IFD
     if camera_make:
         exif[EXIF_TAG_MAKE] = camera_make
     if camera_model:
         exif[EXIF_TAG_MODEL] = camera_model
 
-    # Add GPS data if provided
+    # DateTime tags MUST go in EXIF sub-IFD (matches real camera behavior)
+    if datetime_original or datetime_digitized:
+        exif_ifd = exif.get_ifd(IFD.Exif)
+        if datetime_original:
+            exif_ifd[EXIF_TAG_DATETIME_ORIGINAL] = datetime_original
+        if datetime_digitized:
+            exif_ifd[EXIF_TAG_DATETIME_DIGITIZED] = datetime_digitized
+
+    # Add GPS data if provided (goes in GPS sub-IFD)
     if all([gps_latitude, gps_longitude, gps_latitude_ref, gps_longitude_ref]):
         # GPS IFD (Image File Directory) structure
         # Convert tuples to IFDRational for proper EXIF encoding
         gps_lat_rationals = tuple(IFDRational(num, den) for num, den in gps_latitude)
         gps_lon_rationals = tuple(IFDRational(num, den) for num, den in gps_longitude)
 
-        gps_ifd = {
-            1: gps_latitude_ref,  # GPSLatitudeRef
-            2: gps_lat_rationals,  # GPSLatitude
-            3: gps_longitude_ref,  # GPSLongitudeRef
-            4: gps_lon_rationals,  # GPSLongitude
-        }
-        exif[34853] = gps_ifd  # GPSInfo tag
+        gps_ifd = exif.get_ifd(IFD.GPSInfo)
+        gps_ifd[1] = gps_latitude_ref  # GPSLatitudeRef
+        gps_ifd[2] = gps_lat_rationals  # GPSLatitude
+        gps_ifd[3] = gps_longitude_ref  # GPSLongitudeRef
+        gps_ifd[4] = gps_lon_rationals  # GPSLongitude
 
     # Save image with EXIF
     img.save(path, exif=exif)
