@@ -17,6 +17,7 @@ from typing import Any, cast
 
 from PIL import Image
 from PIL.ExifTags import IFD, TAGS
+from PIL.TiffImagePlugin import IFDRational
 
 from image_search_service.core.logging import get_logger
 
@@ -317,6 +318,7 @@ def _sanitize_for_json(value: Any) -> Any:
 
     PostgreSQL JSONB columns cannot store null bytes (\x00 or \u0000).
     Some EXIF data (especially MakerNote fields) contains these characters.
+    PIL also uses special types like IFDRational for EXIF rational numbers.
 
     Args:
         value: EXIF value to sanitize
@@ -324,6 +326,21 @@ def _sanitize_for_json(value: Any) -> Any:
     Returns:
         Sanitized value safe for JSON/JSONB storage
     """
+    # Handle PIL IFDRational FIRST (before checking primitives)
+    # IFDRational is used for exposure time (1/200), f-number (1.8), focal length, etc.
+    if isinstance(value, IFDRational):
+        try:
+            # Try to convert to float (e.g., 1/200 -> 0.005)
+            return float(value)
+        except (ValueError, ZeroDivisionError):
+            # If division fails, return as string (e.g., "1/200")
+            return f"{value.numerator}/{value.denominator}"
+
+    # Check basic types BEFORE attribute checks (bool has numerator/denominator!)
+    if isinstance(value, (datetime, int, float, bool, type(None))):
+        # Return datetime and primitive types as-is (no sanitization needed)
+        return value
+
     if isinstance(value, str):
         # Remove null bytes (both representations)
         # Also handle raw byte representation in string literals
@@ -344,12 +361,13 @@ def _sanitize_for_json(value: Any) -> Any:
         sanitized = [_sanitize_for_json(v) for v in value]
         # Preserve tuple type
         return tuple(sanitized) if isinstance(value, tuple) else sanitized
-    elif isinstance(value, (datetime, int, float, bool, type(None))):
-        # Return datetime and primitive types as-is (no sanitization needed)
-        return value
     else:
-        # For any other type, return as-is (might be custom objects)
-        return value
+        # For any other type, convert to string as fallback
+        # This handles unknown PIL types, custom objects, etc.
+        try:
+            return str(value)
+        except Exception:
+            return None
 
 
 # Global service instance (lazy initialization)

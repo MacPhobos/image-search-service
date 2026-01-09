@@ -608,6 +608,57 @@ def test_sanitize_for_json_preserves_datetime() -> None:
     assert isinstance(_sanitize_for_json(dt), datetime)
 
 
+def test_sanitize_for_json_handles_ifd_rational() -> None:
+    """Test _sanitize_for_json converts PIL IFDRational to float.
+
+    Regression test for: TypeError: Object of type IFDRational is not JSON serializable
+    PIL uses IFDRational for EXIF rational numbers (exposure time, f-number, focal length).
+    """
+    from PIL.TiffImagePlugin import IFDRational
+
+    from image_search_service.services.exif_service import _sanitize_for_json
+
+    # Test conversion to float (e.g., exposure time 1/200 = 0.005)
+    exposure_time = IFDRational(1, 200)
+    result = _sanitize_for_json(exposure_time)
+    assert isinstance(result, float)
+    assert result == 0.005
+
+    # Test f-number (e.g., f/1.8)
+    f_number = IFDRational(18, 10)  # 1.8
+    result = _sanitize_for_json(f_number)
+    assert isinstance(result, float)
+    assert result == 1.8
+
+    # Test focal length (e.g., 50mm)
+    focal_length = IFDRational(50, 1)
+    result = _sanitize_for_json(focal_length)
+    assert isinstance(result, float)
+    assert result == 50.0
+
+    # Test zero denominator fallback (should return string)
+    invalid_rational = IFDRational(1, 0)
+    result = _sanitize_for_json(invalid_rational)
+    assert isinstance(result, str)
+    assert result == "1/0"
+
+    # Test nested structures with IFDRational
+    exif_dict = {
+        "ExposureTime": IFDRational(1, 200),
+        "FNumber": IFDRational(18, 10),
+        "FocalLength": IFDRational(50, 1),
+        "ISOSpeedRatings": 100,  # Regular int
+        "Model": "Test Camera"  # Regular string
+    }
+
+    sanitized = _sanitize_for_json(exif_dict)
+    assert sanitized["ExposureTime"] == 0.005
+    assert sanitized["FNumber"] == 1.8
+    assert sanitized["FocalLength"] == 50.0
+    assert sanitized["ISOSpeedRatings"] == 100
+    assert sanitized["Model"] == "Test Camera"
+
+
 def test_extract_exif_sanitizes_camera_make_with_null_bytes(
     exif_service: ExifService, tmp_path: Path
 ) -> None:
