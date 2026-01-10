@@ -523,7 +523,7 @@ async def list_unified_people(
 @router.get("/persons", response_model=PersonListResponse)
 async def list_persons(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=1000),
     status: str | None = Query(None, description="Filter by status: active, merged, hidden"),
     db: AsyncSession = Depends(get_db),
 ) -> PersonListResponse:
