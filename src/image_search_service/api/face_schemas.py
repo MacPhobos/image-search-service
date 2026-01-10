@@ -478,6 +478,10 @@ class RecomputePrototypesRequest(CamelCaseModel):
         default=None,
         description="Trigger suggestion rescan after recompute. If None, uses config default."
     )
+    preserve_existing_suggestions: bool = Field(
+        default=True,
+        description="Whether to preserve existing suggestions during rescan"
+    )
 
 
 class RecomputePrototypesResponse(CamelCaseModel):

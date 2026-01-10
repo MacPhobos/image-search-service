@@ -1076,6 +1076,7 @@ def propagate_person_label_multiproto_job(
     person_id: str,
     min_confidence: float = 0.7,
     max_suggestions: int = 50,
+    preserve_existing: bool = True,
 ) -> dict[str, Any]:
     """Generate face suggestions using ALL prototypes for a person.
 
@@ -1092,9 +1093,12 @@ def propagate_person_label_multiproto_job(
         person_id: UUID string of the person
         min_confidence: Minimum cosine similarity (default: 0.7)
         max_suggestions: Maximum suggestions to create (default: 50)
+        preserve_existing: If True, keep existing pending suggestions and only add new ones
+            (default: True)
 
     Returns:
-        dict with counts: suggestions_created, prototypes_used, candidates_evaluated
+        dict with counts: suggestions_created, prototypes_used, candidates_evaluated,
+        expired_count, preserved_count
     """
     import uuid as uuid_lib
 
@@ -1220,28 +1224,55 @@ def propagate_person_label_multiproto_job(
             reverse=True,
         )[:max_suggestions]
 
-        # 6. Expire old pending suggestions for this person
+        # 6. Conditionally expire old pending suggestions for this person
         now = datetime.now(UTC)
-        expire_result = db_session.execute(
-            select(FaceSuggestion).where(
-                FaceSuggestion.suggested_person_id == person_uuid,
-                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+        expired_count = 0
+
+        if not preserve_existing:
+            # Only expire when explicitly requested (preserve_existing=False)
+            expire_result = db_session.execute(
+                select(FaceSuggestion).where(
+                    FaceSuggestion.suggested_person_id == person_uuid,
+                    FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+                )
             )
-        )
-        old_suggestions = expire_result.scalars().all()
+            old_suggestions = expire_result.scalars().all()
 
-        for old_suggestion in old_suggestions:
-            old_suggestion.status = FaceSuggestionStatus.EXPIRED.value
-            old_suggestion.reviewed_at = now
+            for old_suggestion in old_suggestions:
+                old_suggestion.status = FaceSuggestionStatus.EXPIRED.value
+                old_suggestion.reviewed_at = now
 
-        expired_count = len(old_suggestions)
-        if expired_count > 0:
-            logger.info(f"[{job_id}] Expired {expired_count} old pending suggestions")
+            expired_count = len(old_suggestions)
+            if expired_count > 0:
+                logger.info(f"[{job_id}] Expired {expired_count} old pending suggestions")
+
+        # 6.5. Get existing pending suggestions to avoid duplicates (when preserving)
+        existing_face_ids: set[str] = set()
+        if preserve_existing:
+            existing_pending_result = db_session.execute(
+                select(FaceSuggestion.face_instance_id).where(
+                    FaceSuggestion.suggested_person_id == person_uuid,
+                    FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+                )
+            )
+            existing_face_ids = set(str(fid) for fid in existing_pending_result.scalars().all())
+            if existing_face_ids:
+                logger.debug(
+                    f"[{job_id}] Found {len(existing_face_ids)} existing pending suggestions "
+                    "to preserve"
+                )
 
         # 7. Create new suggestions with multi-prototype data
         suggestions_created = 0
+        skipped_duplicates = 0
 
         for face_id, data in sorted_candidates:
+            # Skip if already has pending suggestion (preserve mode)
+            if face_id in existing_face_ids:
+                logger.debug(f"[{job_id}] Skipping face {face_id} - already has pending suggestion")
+                skipped_duplicates += 1
+                continue
+
             # Find best prototype for source_face_id (highest quality among matches)
             best_proto_id = max(
                 data["scores"].keys(),
@@ -1264,9 +1295,13 @@ def propagate_person_label_multiproto_job(
 
         db_session.commit()
 
+        preserved_count = len(existing_face_ids) if preserve_existing else 0
+
         logger.info(
             f"[{job_id}] Multi-prototype propagation complete for {person.name}: "
-            f"{suggestions_created} suggestions created, {len(prototype_embeddings)} prototypes used"
+            f"{suggestions_created} suggestions created, "
+            f"{len(prototype_embeddings)} prototypes used, "
+            f"{preserved_count} preserved, {skipped_duplicates} duplicates skipped"
         )
 
         return {
@@ -1275,6 +1310,8 @@ def propagate_person_label_multiproto_job(
             "prototypes_used": len(prototype_embeddings),
             "candidates_evaluated": len(candidate_faces),
             "expired_count": expired_count,
+            "preserved_count": preserved_count,
+            "skipped_duplicates": skipped_duplicates,
         }
 
     except Exception as e:

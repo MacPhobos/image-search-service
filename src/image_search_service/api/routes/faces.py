@@ -906,11 +906,12 @@ async def regenerate_suggestions_for_person(
             person_id=str(person_id),
             min_confidence=0.7,
             max_suggestions=50,
+            preserve_existing=True,  # Preserve existing suggestions by default
             job_timeout="10m",
         )
         logger.info(
             f"Queued multi-prototype suggestion regeneration job for person {person.name} "
-            f"using {len(prototypes)} prototypes"
+            f"using {len(prototypes)} prototypes (preserve_existing=True)"
         )
     except Exception as e:
         logger.error(f"Failed to queue suggestion regeneration job: {e}")
@@ -2282,8 +2283,6 @@ async def recompute_prototypes_endpoint(
     - Prunes excess prototypes while maintaining quality
     - Optionally triggers suggestion rescan after recomputation
     """
-    from datetime import UTC, datetime
-
     from redis import Redis
     from rq import Queue
 
@@ -2352,25 +2351,9 @@ async def recompute_prototypes_endpoint(
                     faces = list(face_result.scalars().all())
 
                     if faces:
-                        # Find face with highest quality score
-                        best_face = max(faces, key=lambda f: f.quality_score or 0.0)
-
-                        # Expire existing pending suggestions for this person
-                        expire_result = await db.execute(
-                            update(FaceSuggestion)
-                            .where(
-                                FaceSuggestion.suggested_person_id == person_id,
-                                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
-                            )
-                            .values(
-                                status=FaceSuggestionStatus.EXPIRED.value,
-                                reviewed_at=datetime.now(UTC),
-                            )
-                        )
-                        expired_count = expire_result.rowcount  # type: ignore[attr-defined]
-                        await db.commit()
-
                         # Queue multi-prototype propagation job
+                        # Note: Expiration of old suggestions is handled inside the job
+                        # based on preserve_existing_suggestions parameter
                         try:
                             redis_conn = Redis.from_url(settings.redis_url)
                             queue = Queue("default", connection=redis_conn)
@@ -2380,18 +2363,24 @@ async def recompute_prototypes_endpoint(
                                 person_id=str(person_id),
                                 min_confidence=0.7,
                                 max_suggestions=50,
+                                preserve_existing=request.preserve_existing_suggestions,
                                 job_timeout="10m",
                             )
 
                             rescan_triggered = True
+                            preserve_msg = (
+                                "preserving existing suggestions"
+                                if request.preserve_existing_suggestions
+                                else "expiring old suggestions"
+                            )
                             rescan_message = (
                                 f"Multi-prototype suggestion rescan queued for {person.name}. "
-                                f"{expired_count} old suggestions expired. "
-                                f"Using {len(prototypes)} prototypes."
+                                f"Using {len(prototypes)} prototypes ({preserve_msg})."
                             )
                             logger.info(
                                 f"Auto-triggered multi-prototype suggestion rescan "
-                                f"for {person.name} using {len(prototypes)} prototypes"
+                                f"for {person.name} using {len(prototypes)} prototypes "
+                                f"(preserve_existing={request.preserve_existing_suggestions})"
                             )
                         except Exception as e:
                             logger.error(f"Failed to queue auto-rescan job: {e}")

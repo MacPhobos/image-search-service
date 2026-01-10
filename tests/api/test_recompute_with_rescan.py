@@ -281,7 +281,7 @@ class TestRecomputeWithRescan:
         assert data["rescanMessage"] is None
 
     @pytest.mark.asyncio
-    async def test_rescan_expires_pending_suggestions(
+    async def test_rescan_preserves_pending_suggestions_by_default(
         self,
         test_client,
         db_session,
@@ -290,7 +290,7 @@ class TestRecomputeWithRescan:
         create_prototype,
         create_suggestion,
     ):
-        """When rescan triggers, pending suggestions should be expired."""
+        """When rescan triggers with default settings, pending suggestions should be preserved."""
         person = await create_person(name="Dave")
         face = await create_face_instance(person_id=person.id, quality_score=0.9)
         await create_prototype(person_id=person.id, face_instance_id=face.id)
@@ -321,16 +321,69 @@ class TestRecomputeWithRescan:
         assert response.status_code == 200
         data = response.json()
         assert data["rescanTriggered"] is True
-        assert "3" in data["rescanMessage"] or "expired" in data["rescanMessage"].lower()
+        # Should mention preserving existing suggestions (default behavior)
+        assert "preserving" in data["rescanMessage"].lower()
 
-        # Verify all suggestions were expired
+        # Verify all suggestions were preserved (status unchanged)
         await db_session.refresh(suggestion1)
         await db_session.refresh(suggestion2)
         await db_session.refresh(suggestion3)
 
-        assert suggestion1.status == FaceSuggestionStatus.EXPIRED.value
-        assert suggestion2.status == FaceSuggestionStatus.EXPIRED.value
-        assert suggestion3.status == FaceSuggestionStatus.EXPIRED.value
+        assert suggestion1.status == FaceSuggestionStatus.PENDING.value
+        assert suggestion2.status == FaceSuggestionStatus.PENDING.value
+        assert suggestion3.status == FaceSuggestionStatus.PENDING.value
+
+    @pytest.mark.asyncio
+    async def test_rescan_expires_suggestions_when_preserve_false(
+        self,
+        test_client,
+        db_session,
+        create_person,
+        create_face_instance,
+        create_prototype,
+        create_suggestion,
+    ):
+        """When preserve_existing_suggestions=False, job is queued to expire suggestions."""
+        person = await create_person(name="Eve")
+        face = await create_face_instance(person_id=person.id, quality_score=0.9)
+        await create_prototype(person_id=person.id, face_instance_id=face.id)
+
+        # Create 3 pending suggestions
+        suggestion1 = await create_suggestion(suggested_person_id=person.id, status="pending")
+        suggestion2 = await create_suggestion(suggested_person_id=person.id, status="pending")
+        suggestion3 = await create_suggestion(suggested_person_id=person.id, status="pending")
+
+        # Mock Redis Queue and Qdrant
+        with patch("redis.Redis") as mock_redis_cls, patch("rq.Queue") as mock_queue_cls, patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ) as mock_qdrant_factory:
+            mock_redis = MagicMock()
+            mock_redis_cls.from_url.return_value = mock_redis
+
+            mock_queue = MagicMock()
+            mock_queue_cls.return_value = mock_queue
+
+            mock_qdrant = MagicMock()
+            mock_qdrant_factory.return_value = mock_qdrant
+
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{person.id}/prototypes/recompute",
+                json={"triggerRescan": True, "preserveExistingSuggestions": False},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["rescanTriggered"] is True
+        # Should mention expiring old suggestions
+        assert "expiring" in data["rescanMessage"].lower()
+
+        # Verify job was queued with preserve_existing=False
+        mock_queue.enqueue.assert_called_once()
+        call_kwargs = mock_queue.enqueue.call_args.kwargs
+        assert call_kwargs["preserve_existing"] is False
+
+        # Note: Suggestions are NOT expired here because the job is mocked
+        # The actual expiration happens in the background job
 
     @pytest.mark.asyncio
     async def test_rescan_uses_best_prototype(
@@ -342,7 +395,7 @@ class TestRecomputeWithRescan:
         create_prototype,
     ):
         """Rescan should use the highest quality prototype."""
-        person = await create_person(name="Eve")
+        person = await create_person(name="Frank")
 
         # Create prototypes with different quality scores
         low_face = await create_face_instance(person_id=person.id, quality_score=0.5)
@@ -384,7 +437,7 @@ class TestRecomputeWithRescan:
         self, test_client, db_session, create_person
     ):
         """If no prototypes exist after recompute, rescan should not trigger."""
-        person = await create_person(name="Frank")
+        person = await create_person(name="Grace")
         # No faces, no prototypes
 
         # Mock Qdrant
@@ -415,7 +468,7 @@ class TestRecomputeWithRescan:
         monkeypatch,
     ):
         """When config default is True and no parameter, rescan should trigger."""
-        person = await create_person(name="Grace")
+        person = await create_person(name="Helen")
         face = await create_face_instance(person_id=person.id, quality_score=0.9)
         await create_prototype(person_id=person.id, face_instance_id=face.id)
 
@@ -457,7 +510,7 @@ class TestRecomputeWithRescan:
         get_settings.cache_clear()
 
     @pytest.mark.asyncio
-    async def test_rescan_with_multiple_suggestions_only_expires_person_specific(
+    async def test_rescan_with_multiple_suggestions_preserves_by_default(
         self,
         test_client,
         db_session,
@@ -466,7 +519,7 @@ class TestRecomputeWithRescan:
         create_prototype,
         create_suggestion,
     ):
-        """Only expires suggestions for the specific person, not other persons."""
+        """With default preserve behavior, only preserves suggestions for the specific person."""
         person_alice = await create_person(name="Alice")
         person_bob = await create_person(name="Bob")
 
@@ -502,14 +555,73 @@ class TestRecomputeWithRescan:
         assert response.status_code == 200
         data = response.json()
         assert data["rescanTriggered"] is True
-        assert "1" in data["rescanMessage"]  # Only 1 suggestion expired
+        # Should mention preserving suggestions
+        assert "preserving" in data["rescanMessage"].lower()
 
-        # Verify Alice's suggestion was expired, Bob's was not
+        # Verify Alice's and Bob's suggestions were both preserved
         await db_session.refresh(suggestion_alice)
         await db_session.refresh(suggestion_bob)
 
-        assert suggestion_alice.status == FaceSuggestionStatus.EXPIRED.value
-        assert suggestion_bob.status == FaceSuggestionStatus.PENDING.value  # Unchanged
+        assert suggestion_alice.status == FaceSuggestionStatus.PENDING.value
+        assert suggestion_bob.status == FaceSuggestionStatus.PENDING.value
+
+    @pytest.mark.asyncio
+    async def test_rescan_with_preserve_false_only_expires_person_specific(
+        self,
+        test_client,
+        db_session,
+        create_person,
+        create_face_instance,
+        create_prototype,
+        create_suggestion,
+    ):
+        """With preserve=False, job is queued to expire only that person's suggestions."""
+        person_alice = await create_person(name="Isabel")
+        person_bob = await create_person(name="Jack")
+
+        # Create prototypes for Alice
+        face_alice = await create_face_instance(person_id=person_alice.id, quality_score=0.9)
+        await create_prototype(person_id=person_alice.id, face_instance_id=face_alice.id)
+
+        # Create pending suggestions for both persons
+        suggestion_alice = await create_suggestion(
+            suggested_person_id=person_alice.id, status="pending"
+        )
+        suggestion_bob = await create_suggestion(suggested_person_id=person_bob.id, status="pending")
+
+        # Mock Redis Queue and Qdrant
+        with patch("redis.Redis") as mock_redis_cls, patch("rq.Queue") as mock_queue_cls, patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ) as mock_qdrant_factory:
+            mock_redis = MagicMock()
+            mock_redis_cls.from_url.return_value = mock_redis
+
+            mock_queue = MagicMock()
+            mock_queue_cls.return_value = mock_queue
+
+            mock_qdrant = MagicMock()
+            mock_qdrant_factory.return_value = mock_qdrant
+
+            # Regenerate for Alice with preserve=False
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{person_alice.id}/prototypes/recompute",
+                json={"triggerRescan": True, "preserveExistingSuggestions": False},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["rescanTriggered"] is True
+        # Should mention expiring suggestions
+        assert "expiring" in data["rescanMessage"].lower()
+
+        # Verify job was queued with correct person_id and preserve_existing=False
+        mock_queue.enqueue.assert_called_once()
+        call_kwargs = mock_queue.enqueue.call_args.kwargs
+        assert call_kwargs["person_id"] == str(person_alice.id)
+        assert call_kwargs["preserve_existing"] is False
+
+        # Note: The background job will expire only Alice's suggestions
+        # Since we're mocking the queue, suggestions remain unchanged in this test
 
     @pytest.mark.asyncio
     async def test_rescan_handles_null_quality_score(
@@ -521,7 +633,7 @@ class TestRecomputeWithRescan:
         create_prototype,
     ):
         """Handles faces with null quality_score gracefully by treating as 0.0."""
-        person = await create_person(name="Helen")
+        person = await create_person(name="Karen")
 
         # Create faces with null and valid quality scores
         face_null_quality = await create_face_instance(person_id=person.id, quality_score=None)
@@ -559,7 +671,7 @@ class TestRecomputeWithRescan:
         assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
 
     @pytest.mark.asyncio
-    async def test_rescan_no_pending_suggestions_to_expire(
+    async def test_rescan_no_pending_suggestions_to_preserve(
         self,
         test_client,
         db_session,
@@ -568,12 +680,12 @@ class TestRecomputeWithRescan:
         create_prototype,
         create_suggestion,
     ):
-        """Successfully queues job even when there are no pending suggestions to expire."""
-        person = await create_person(name="Isaac")
+        """Successfully queues job even when there are no pending suggestions to preserve."""
+        person = await create_person(name="Larry")
         face = await create_face_instance(person_id=person.id, quality_score=0.8)
         await create_prototype(person_id=person.id, face_instance_id=face.id)
 
-        # Create already-expired and accepted suggestions (should not be re-expired)
+        # Create already-expired and accepted suggestions (no pending)
         await create_suggestion(suggested_person_id=person.id, status="expired")
         await create_suggestion(suggested_person_id=person.id, status="accepted")
 
@@ -598,8 +710,8 @@ class TestRecomputeWithRescan:
         assert response.status_code == 200
         data = response.json()
         assert data["rescanTriggered"] is True
-        # Should mention 0 suggestions expired
-        assert "0" in data["rescanMessage"]
+        # Should mention preserving (even with 0 suggestions)
+        assert "preserving" in data["rescanMessage"].lower()
 
         # Verify job was still queued
         mock_queue.enqueue.assert_called_once()
@@ -614,7 +726,7 @@ class TestRecomputeWithRescan:
         create_prototype,
     ):
         """When Redis queue fails, should set rescanTriggered=False and include error message."""
-        person = await create_person(name="Jack")
+        person = await create_person(name="Oscar")
         face = await create_face_instance(person_id=person.id, quality_score=0.85)
         await create_prototype(person_id=person.id, face_instance_id=face.id)
 
@@ -641,7 +753,7 @@ class TestRecomputeWithRescan:
         assert "failed" in data["rescanMessage"].lower()
 
     @pytest.mark.asyncio
-    async def test_rescan_preserves_other_suggestion_statuses(
+    async def test_rescan_preserves_all_statuses_by_default(
         self,
         test_client,
         db_session,
@@ -650,8 +762,8 @@ class TestRecomputeWithRescan:
         create_prototype,
         create_suggestion,
     ):
-        """Rescan only expires pending suggestions, not accepted/rejected/expired ones."""
-        person = await create_person(name="Karen")
+        """With default preserve behavior, all suggestion statuses remain unchanged."""
+        person = await create_person(name="Mike")
         face = await create_face_instance(person_id=person.id, quality_score=0.9)
         await create_prototype(person_id=person.id, face_instance_id=face.id)
 
@@ -682,21 +794,73 @@ class TestRecomputeWithRescan:
 
         assert response.status_code == 200
         data = response.json()
-        # Should only expire the 2 pending suggestions
-        assert "2" in data["rescanMessage"]
+        # Should mention preserving
+        assert "preserving" in data["rescanMessage"].lower()
 
-        # Verify status changes
+        # Verify all statuses remain unchanged
         await db_session.refresh(pending1)
         await db_session.refresh(pending2)
         await db_session.refresh(accepted)
         await db_session.refresh(rejected)
         await db_session.refresh(already_expired)
 
-        # Pending ones should be expired
-        assert pending1.status == FaceSuggestionStatus.EXPIRED.value
-        assert pending2.status == FaceSuggestionStatus.EXPIRED.value
-
-        # Others should be unchanged
+        # All should remain unchanged
+        assert pending1.status == FaceSuggestionStatus.PENDING.value
+        assert pending2.status == FaceSuggestionStatus.PENDING.value
         assert accepted.status == FaceSuggestionStatus.ACCEPTED.value
         assert rejected.status == FaceSuggestionStatus.REJECTED.value
         assert already_expired.status == FaceSuggestionStatus.EXPIRED.value
+
+    @pytest.mark.asyncio
+    async def test_rescan_with_preserve_false_only_expires_pending(
+        self,
+        test_client,
+        db_session,
+        create_person,
+        create_face_instance,
+        create_prototype,
+        create_suggestion,
+    ):
+        """With preserve=False, job queued will expire only pending, not accepted/rejected."""
+        person = await create_person(name="Nancy")
+        face = await create_face_instance(person_id=person.id, quality_score=0.9)
+        await create_prototype(person_id=person.id, face_instance_id=face.id)
+
+        # Create suggestions with different statuses
+        pending1 = await create_suggestion(suggested_person_id=person.id, status="pending")
+        pending2 = await create_suggestion(suggested_person_id=person.id, status="pending")
+        accepted = await create_suggestion(suggested_person_id=person.id, status="accepted")
+        rejected = await create_suggestion(suggested_person_id=person.id, status="rejected")
+        already_expired = await create_suggestion(suggested_person_id=person.id, status="expired")
+
+        # Mock Redis Queue and Qdrant
+        with patch("redis.Redis") as mock_redis_cls, patch("rq.Queue") as mock_queue_cls, patch(
+            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        ) as mock_qdrant_factory:
+            mock_redis = MagicMock()
+            mock_redis_cls.from_url.return_value = mock_redis
+
+            mock_queue = MagicMock()
+            mock_queue_cls.return_value = mock_queue
+
+            mock_qdrant = MagicMock()
+            mock_qdrant_factory.return_value = mock_qdrant
+
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{person.id}/prototypes/recompute",
+                json={"triggerRescan": True, "preserveExistingSuggestions": False},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        # Should mention expiring
+        assert "expiring" in data["rescanMessage"].lower()
+
+        # Verify job was queued with preserve_existing=False
+        mock_queue.enqueue.assert_called_once()
+        call_kwargs = mock_queue.enqueue.call_args.kwargs
+        assert call_kwargs["preserve_existing"] is False
+
+        # Note: The background job implementation only expires PENDING suggestions
+        # (see face_jobs.py lines 1233-1237: filters by status == PENDING)
+        # Since we're mocking the queue, no actual expiration happens in this test
