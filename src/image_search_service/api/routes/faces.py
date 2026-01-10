@@ -5,12 +5,14 @@ from datetime import date, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Integer, func, select, update
+from sqlalchemy import Integer, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.api.face_schemas import (
     AssignFaceRequest,
     AssignFaceResponse,
+    AssignmentEventResponse,
+    AssignmentHistoryResponse,
     BoundingBox,
     BulkMoveRequest,
     BulkMoveResponse,
@@ -921,6 +923,126 @@ async def regenerate_suggestions_for_person(
         status="queued",
         message=f"Multi-prototype suggestion regeneration queued for person {person.name}",
         expired_count=0,  # Will be reported in job result
+    )
+
+
+@router.get(
+    "/persons/{person_id}/assignment-history",
+    response_model=AssignmentHistoryResponse,
+)
+async def get_person_assignment_history(
+    person_id: UUID,
+    limit: int = Query(20, ge=1, le=100, description="Maximum events to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    operation: str | None = Query(None, description="Filter by operation type"),
+    since: datetime | None = Query(None, description="Only events after this time"),
+    db: AsyncSession = Depends(get_db),
+) -> AssignmentHistoryResponse:
+    """Get assignment history for a specific person.
+
+    Returns events where this person is either:
+    - The source (from_person_id) - faces were removed from this person
+    - The destination (to_person_id) - faces were assigned to this person
+
+    Args:
+        person_id: UUID of the person to get history for
+        limit: Maximum number of events to return (1-100)
+        offset: Offset for pagination
+        operation: Optional filter by operation type (REMOVE_FROM_PERSON, MOVE_TO_PERSON)
+        since: Optional filter to only show events after this timestamp
+        db: Database session dependency
+
+    Returns:
+        AssignmentHistoryResponse with paginated events
+
+    Raises:
+        HTTPException: 404 if person not found
+    """
+    # Verify person exists
+    person = await db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+
+    # Build query for events involving this person
+    query = select(FaceAssignmentEvent).where(
+        or_(
+            FaceAssignmentEvent.from_person_id == person_id,
+            FaceAssignmentEvent.to_person_id == person_id,
+        )
+    )
+
+    # Apply filters
+    if operation:
+        query = query.where(FaceAssignmentEvent.operation == operation)
+    if since:
+        query = query.where(FaceAssignmentEvent.created_at >= since)
+
+    # Get total count
+    count_query = select(func.count()).select_from(query.subquery())
+    total = await db.scalar(count_query) or 0
+
+    # Apply pagination and ordering
+    query = (
+        query.order_by(FaceAssignmentEvent.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+    result = await db.execute(query)
+    events = result.scalars().all()
+
+    # Collect unique person IDs for enrichment
+    person_ids: set[UUID] = set()
+    for event in events:
+        if event.from_person_id:
+            person_ids.add(event.from_person_id)
+        if event.to_person_id:
+            person_ids.add(event.to_person_id)
+
+    # Fetch person names for enrichment
+    persons_map: dict[UUID, str] = {}
+    if person_ids:
+        persons_query = select(Person).where(Person.id.in_(person_ids))
+        persons_result = await db.execute(persons_query)
+        persons_map = {p.id: p.name for p in persons_result.scalars().all()}
+
+    # Build response
+    event_responses = []
+    for event in events:
+        # Convert affected_face_instance_ids from list[str] to list[UUID]
+        face_instance_ids = []
+        if event.affected_face_instance_ids:
+            face_instance_ids = [UUID(fid) for fid in event.affected_face_instance_ids]
+
+        # Get asset_ids (already integers)
+        asset_ids = event.affected_photo_ids or []
+
+        event_responses.append(
+            AssignmentEventResponse(
+                id=event.id,
+                operation=event.operation,
+                created_at=event.created_at,
+                face_count=event.face_count,
+                photo_count=event.photo_count,
+                face_instance_ids=face_instance_ids,
+                asset_ids=asset_ids,
+                from_person_id=event.from_person_id,
+                to_person_id=event.to_person_id,
+                from_person_name=persons_map.get(event.from_person_id)
+                if event.from_person_id
+                else None,
+                to_person_name=persons_map.get(event.to_person_id)
+                if event.to_person_id
+                else None,
+                note=event.note,
+            )
+        )
+
+    return AssignmentHistoryResponse(
+        events=event_responses,
+        total=total,
+        offset=offset,
+        limit=limit,
     )
 
 

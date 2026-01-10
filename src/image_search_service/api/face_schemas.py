@@ -528,3 +528,32 @@ class SuggestionRegenerationResponse(CamelCaseModel):
     status: str
     message: str
     expired_count: int | None = None
+
+
+# ============ Assignment History Schemas ============
+
+
+class AssignmentEventResponse(CamelCaseModel):
+    """Single assignment event in history."""
+
+    id: UUID
+    operation: str  # REMOVE_FROM_PERSON, MOVE_TO_PERSON
+    created_at: datetime
+    face_count: int
+    photo_count: int
+    face_instance_ids: list[UUID]
+    asset_ids: list[int]
+    from_person_id: UUID | None = None
+    to_person_id: UUID | None = None
+    from_person_name: str | None = None  # Enriched
+    to_person_name: str | None = None    # Enriched
+    note: str | None = None
+
+
+class AssignmentHistoryResponse(CamelCaseModel):
+    """Paginated assignment history for a person."""
+
+    events: list[AssignmentEventResponse]
+    total: int
+    offset: int
+    limit: int
