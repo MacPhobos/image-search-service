@@ -23,7 +23,6 @@ from image_search_service.db.models import (
 )
 from image_search_service.queue.face_jobs import propagate_person_label_multiproto_job
 
-
 # ============ Fixtures ============
 
 
@@ -229,7 +228,7 @@ class TestMultiPrototypePropagation:
         assert result["status"] == "error"
         assert "no prototypes" in result["message"].lower()
 
-    
+
     def test_creates_suggestions_with_single_prototype(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -265,7 +264,7 @@ class TestMultiPrototypePropagation:
         assert result["prototypes_used"] == 1
         assert result["candidates_evaluated"] == 1
 
-    
+
     def test_aggregates_scores_from_multiple_prototypes(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -324,7 +323,7 @@ class TestMultiPrototypePropagation:
         assert suggestion.prototype_match_count == 3
         assert len(suggestion.matching_prototype_ids) == 3
 
-    
+
     def test_uses_max_score_as_aggregate_confidence(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -373,7 +372,7 @@ class TestMultiPrototypePropagation:
         assert suggestion is not None
         assert suggestion.aggregate_confidence == 0.88  # MAX of 0.88 and 0.72
 
-    
+
     def test_selects_best_quality_prototype_as_source(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -426,7 +425,7 @@ class TestMultiPrototypePropagation:
         assert suggestion is not None
         assert suggestion.source_face_id == proto_high_id  # Highest quality (0.95)
 
-    
+
     def test_expires_old_pending_suggestions(
         self,
         sync_db_session,
@@ -473,7 +472,6 @@ class TestMultiPrototypePropagation:
         assert result["expired_count"] == 2
 
         # Query fresh from DB
-        from sqlalchemy import select
 
         refreshed1 = sync_db_session.get(FaceSuggestion, old_suggestion1_id)
         refreshed2 = sync_db_session.get(FaceSuggestion, old_suggestion2_id)
@@ -485,7 +483,7 @@ class TestMultiPrototypePropagation:
         assert refreshed1.reviewed_at is not None
         assert refreshed2.reviewed_at is not None
 
-    
+
     def test_skips_faces_already_assigned_to_person(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -535,7 +533,7 @@ class TestMultiPrototypePropagation:
         assert len(suggestions) == 1
         assert suggestions[0].face_instance_id == unassigned_face_id
 
-    
+
     def test_respects_max_suggestions_limit(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -574,7 +572,7 @@ class TestMultiPrototypePropagation:
         assert result["suggestions_created"] == 5
         assert result["candidates_evaluated"] == 10  # All were evaluated
 
-    
+
     def test_respects_min_confidence_threshold(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -615,7 +613,7 @@ class TestMultiPrototypePropagation:
         call_kwargs = mock_qdrant.search_similar_faces.call_args[1]
         assert call_kwargs["score_threshold"] == 0.7
 
-    
+
     def test_handles_invalid_face_id_in_payload(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):
@@ -651,7 +649,7 @@ class TestMultiPrototypePropagation:
         assert result["suggestions_created"] == 0
         assert result["candidates_evaluated"] == 0
 
-    
+
     def test_returns_detailed_metadata(
         self, sync_db_session, create_person, create_face_instance, create_prototype, mock_qdrant
     ):

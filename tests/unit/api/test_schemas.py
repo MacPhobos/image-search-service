@@ -1,7 +1,6 @@
 """Unit tests for API schemas."""
 
-from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from datetime import UTC, datetime
 
 import pytest
 
@@ -25,7 +24,7 @@ class MockImageAsset:
     ):
         self.id = id
         self.path = path
-        self.created_at = created_at or datetime.now(timezone.utc)
+        self.created_at = created_at or datetime.now(UTC)
         self.indexed_at = indexed_at
         self.taken_at = taken_at
         self.camera_make = camera_make
@@ -112,16 +111,16 @@ class TestAsset:
         mock_asset = MockImageAsset(
             id=123,
             path="/photos/vacation/IMG_001.jpg",
-            created_at=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
-            indexed_at=datetime(2024, 1, 15, 12, 5, 0, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC),
+            indexed_at=datetime(2024, 1, 15, 12, 5, 0, tzinfo=UTC),
         )
 
         asset = Asset.model_validate(mock_asset)
 
         assert asset.id == 123
         assert asset.path == "/photos/vacation/IMG_001.jpg"
-        assert asset.created_at == datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-        assert asset.indexed_at == datetime(2024, 1, 15, 12, 5, 0, tzinfo=timezone.utc)
+        assert asset.created_at == datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
+        assert asset.indexed_at == datetime(2024, 1, 15, 12, 5, 0, tzinfo=UTC)
 
     def test_asset_computed_fields(self):
         """Should generate computed fields correctly."""
@@ -149,7 +148,7 @@ class TestAsset:
 
     def test_asset_with_exif_taken_at(self):
         """Should include taken_at from EXIF metadata."""
-        taken_at = datetime(2023, 6, 15, 14, 30, 0, tzinfo=timezone.utc)
+        taken_at = datetime(2023, 6, 15, 14, 30, 0, tzinfo=UTC)
         mock_asset = MockImageAsset(taken_at=taken_at)
 
         asset = Asset.model_validate(mock_asset)
@@ -219,7 +218,7 @@ class TestAsset:
         mock_asset = MockImageAsset(
             id=789,
             path="/photos/IMG_003.jpg",
-            taken_at=datetime(2023, 7, 20, 10, 15, 0, tzinfo=timezone.utc),
+            taken_at=datetime(2023, 7, 20, 10, 15, 0, tzinfo=UTC),
             camera_make="Sony",
             camera_model="Alpha 7 IV",
             gps_latitude=40.7128,
@@ -229,7 +228,7 @@ class TestAsset:
         asset = Asset.model_validate(mock_asset)
 
         assert asset.id == 789
-        assert asset.taken_at == datetime(2023, 7, 20, 10, 15, 0, tzinfo=timezone.utc)
+        assert asset.taken_at == datetime(2023, 7, 20, 10, 15, 0, tzinfo=UTC)
         assert asset.camera is not None
         assert asset.camera.make == "Sony"
         assert asset.camera.model == "Alpha 7 IV"
@@ -242,8 +241,8 @@ class TestAsset:
         mock_asset = MockImageAsset(
             id=999,
             path="/test.jpg",
-            created_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
-            taken_at=datetime(2023, 12, 25, 10, 0, 0, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
+            taken_at=datetime(2023, 12, 25, 10, 0, 0, tzinfo=UTC),
             camera_make="Nikon",
             camera_model="D850",
             gps_latitude=51.5074,
@@ -257,7 +256,7 @@ class TestAsset:
         assert "createdAt" in data
         assert "indexedAt" in data
         assert "takenAt" in data
-        assert data["takenAt"] == datetime(2023, 12, 25, 10, 0, 0, tzinfo=timezone.utc)
+        assert data["takenAt"] == datetime(2023, 12, 25, 10, 0, 0, tzinfo=UTC)
 
         # Check camera nested object
         assert "camera" in data
@@ -277,9 +276,9 @@ class TestAsset:
         data = {
             "id": 1,
             "path": "/test.jpg",
-            "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "created_at": datetime(2024, 1, 1, tzinfo=UTC),
             "indexed_at": None,
-            "taken_at": datetime(2023, 12, 25, tzinfo=timezone.utc),
+            "taken_at": datetime(2023, 12, 25, tzinfo=UTC),
             "camera": {"make": "Canon", "model": "EOS R5"},
             "location": {"lat": 37.7749, "lng": -122.4194},
         }
@@ -287,7 +286,7 @@ class TestAsset:
         asset = Asset.model_validate(data)
 
         assert asset.id == 1
-        assert asset.taken_at == datetime(2023, 12, 25, tzinfo=timezone.utc)
+        assert asset.taken_at == datetime(2023, 12, 25, tzinfo=UTC)
         assert asset.camera is not None
         assert asset.camera.make == "Canon"
         assert asset.location is not None

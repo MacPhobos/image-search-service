@@ -220,6 +220,7 @@ class EmbeddingService:
             List of normalized embedding vectors
         """
         import gc
+
         import torch
 
         if not images:

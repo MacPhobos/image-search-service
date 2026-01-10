@@ -157,7 +157,7 @@ async def backfill_exif_metadata(
                             log_prefix = "[DRY RUN] Would update" if dry_run else "Updated"
                             logger.info(
                                 f"{log_prefix} asset {asset.id}: taken={taken_str}, "
-                                f"camera={camera_str}, gps={gps_str}"
+                                f"camera={camera_str}, gps={gps_str}, {asset_path}"
                             )
 
                     except Exception as e:

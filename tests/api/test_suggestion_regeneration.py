@@ -12,7 +12,6 @@ import pytest
 from image_search_service.db.models import (
     FaceInstance,
     FaceSuggestion,
-    FaceSuggestionStatus,
     ImageAsset,
     Person,
     PersonPrototype,

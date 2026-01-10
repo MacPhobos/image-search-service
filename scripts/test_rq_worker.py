@@ -26,8 +26,6 @@ Environment:
 """
 
 import argparse
-import hashlib
-import json
 import logging
 import os
 import platform
@@ -41,24 +39,25 @@ import torch
 from redis import Redis
 from rq import Queue
 from rq.job import Job, JobStatus
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 # Add src to path so we can import the app
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from image_search_service.core.config import Settings, get_settings
+from image_search_service.core.config import get_settings
 from image_search_service.core.logging import configure_logging, get_logger
 from image_search_service.db.models import (
     Base,
     ImageAsset,
-    JobStatus as JobStatusEnum,
+    SessionStatus,
     TrainingJob,
     TrainingSession,
-    SessionStatus,
+)
+from image_search_service.db.models import (
+    JobStatus as JobStatusEnum,
 )
 from image_search_service.queue.training_jobs import train_single_asset
-from image_search_service.services.embedding import get_embedding_service
 
 # Configure logging at module level
 configure_logging()
@@ -221,7 +220,7 @@ class TestEnvironment:
             self.job_id = job.id
             logger.info(f"✓ Enqueued job: {job.id}")
             logger.info(f"  Status: {job.get_status()}")
-            logger.info(f"  Queue: training-high")
+            logger.info("  Queue: training-high")
 
             return job.id
 

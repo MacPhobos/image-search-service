@@ -145,7 +145,6 @@ def sync_db_engine():
     Used for testing synchronous background jobs.
     """
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
 
     engine = create_engine(TEST_SYNC_DATABASE_URL, echo=False)
 
