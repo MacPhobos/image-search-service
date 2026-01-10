@@ -1,6 +1,7 @@
 """Face detection and recognition API routes."""
 
 import logging
+from datetime import date, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -54,6 +55,8 @@ from image_search_service.api.face_schemas import (
     TriggerClusteringRequest,
     UnassignFaceResponse,
     UnifiedPeopleListResponse,
+    UpdatePersonRequest,
+    UpdatePersonResponse,
 )
 from image_search_service.db.models import (
     FaceAssignmentEvent,
@@ -657,6 +660,70 @@ async def create_person(
     )
 
 
+@router.patch("/persons/{person_id}", response_model=UpdatePersonResponse)
+async def update_person(
+    person_id: UUID,
+    request: UpdatePersonRequest,
+    db: AsyncSession = Depends(get_db),
+) -> UpdatePersonResponse:
+    """Update person's name and/or birth_date.
+
+    Args:
+        person_id: UUID of the person to update
+        request: UpdatePersonRequest with optional name and/or birth_date
+        db: Database session dependency
+
+    Returns:
+        UpdatePersonResponse with updated person details
+
+    Raises:
+        HTTPException: 404 if person not found, 409 if name already exists
+    """
+    # Get person from database
+    person = await db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+
+    # Update name if provided
+    if request.name is not None:
+        # Check for existing person with same name (case-insensitive), excluding current person
+        person_query = select(Person).where(
+            func.lower(Person.name) == request.name.lower(),
+            Person.id != person_id,
+        )
+        person_result = await db.execute(person_query)
+        existing_person = person_result.scalar_one_or_none()
+
+        if existing_person:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Person with name '{request.name}' already exists",
+            )
+
+        person.name = request.name
+
+    # Update birth_date if provided (can be set to None to clear)
+    if request.birth_date is not None:
+        person.birth_date = request.birth_date
+
+    # Commit changes
+    await db.commit()
+    await db.refresh(person)
+
+    logger.info(
+        f"Updated person {person_id}: name={person.name}, birth_date={person.birth_date}"
+    )
+
+    return UpdatePersonResponse(
+        id=person.id,
+        name=person.name,
+        birth_date=person.birth_date,
+        status=person.status.value,
+        created_at=person.created_at,
+        updated_at=person.updated_at,
+    )
+
+
 @router.get("/persons/{person_id}/photos", response_model=PersonPhotosResponse)
 async def get_person_photos(
     person_id: UUID,
@@ -688,23 +755,25 @@ async def get_person_photos(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Step 4: Get paginated asset IDs ordered by asset_id DESC
-    # (ideally we'd order by taken_at but that's not in ImageAsset model yet)
+    # Step 4: Get paginated assets with taken_at for age calculation
     paginated_assets_query = (
-        select(ImageAsset.id)
+        select(ImageAsset.id, ImageAsset.taken_at)
         .where(ImageAsset.id.in_(select(asset_subquery.c.asset_id)))
         .order_by(ImageAsset.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
     assets_result = await db.execute(paginated_assets_query)
-    asset_ids = [row[0] for row in assets_result.all()]
+    assets_data = assets_result.all()
+    asset_ids = [row[0] for row in assets_data]
 
-    # Step 5: For each photo, get ALL faces (not just this person's)
-    # Build a dict mapping asset_id -> list of faces
+    # Build map of asset_id -> taken_at for age calculation
+    taken_at_by_asset = {row[0]: row[1] for row in assets_data}
+
+    # Step 5: For each photo, get ALL faces with Person info (for birth_date)
     if asset_ids:
         faces_query = (
-            select(FaceInstance, Person.name)
+            select(FaceInstance, Person.name, Person.birth_date)
             .outerjoin(Person, FaceInstance.person_id == Person.id)
             .where(FaceInstance.asset_id.in_(asset_ids))
             .order_by(FaceInstance.asset_id, FaceInstance.bbox_x)
@@ -713,11 +782,11 @@ async def get_person_photos(
         faces_data = faces_result.all()
 
         # Group faces by asset_id
-        faces_by_asset: dict[int, list[tuple[FaceInstance, str | None]]] = {}
-        for face, person_name in faces_data:
+        faces_by_asset: dict[int, list[tuple[FaceInstance, str | None, date | None]]] = {}
+        for face, person_name, birth_date in faces_data:
             if face.asset_id not in faces_by_asset:
                 faces_by_asset[face.asset_id] = []
-            faces_by_asset[face.asset_id].append((face, person_name))
+            faces_by_asset[face.asset_id].append((face, person_name, birth_date))
     else:
         faces_by_asset = {}
 
@@ -725,12 +794,16 @@ async def get_person_photos(
     items = []
     for asset_id in asset_ids:
         faces_in_photo = faces_by_asset.get(asset_id, [])
+        photo_taken_at = taken_at_by_asset.get(asset_id)
 
         # Convert to FaceInPhoto schema
         face_schemas = []
         has_non_person_faces = False
 
-        for face, face_person_name in faces_in_photo:
+        for face, face_person_name, face_birth_date in faces_in_photo:
+            # Calculate age at time of photo
+            person_age_at_photo = calculate_age_at_date(face_birth_date, photo_taken_at)
+
             face_schemas.append(
                 FaceInPhoto(
                     face_instance_id=face.id,
@@ -743,6 +816,7 @@ async def get_person_photos(
                     person_id=face.person_id,
                     person_name=face_person_name,
                     cluster_id=face.cluster_id,
+                    person_age_at_photo=person_age_at_photo,
                 )
             )
 
@@ -753,7 +827,7 @@ async def get_person_photos(
         items.append(
             PersonPhotoGroup(
                 photo_id=asset_id,
-                taken_at=None,  # TODO: Add EXIF taken_at to ImageAsset model
+                taken_at=photo_taken_at,
                 thumbnail_url=f"/api/v1/images/{asset_id}/thumbnail",
                 full_url=f"/api/v1/images/{asset_id}/full",
                 faces=face_schemas,
@@ -2192,8 +2266,8 @@ async def recompute_prototypes_endpoint(
                                 f"Using {len(prototypes)} prototypes."
                             )
                             logger.info(
-                                f"Auto-triggered multi-prototype suggestion rescan for {person.name} "
-                                f"using {len(prototypes)} prototypes"
+                                f"Auto-triggered multi-prototype suggestion rescan "
+                                f"for {person.name} using {len(prototypes)} prototypes"
                             )
                         except Exception as e:
                             logger.error(f"Failed to queue auto-rescan job: {e}")
@@ -2214,6 +2288,38 @@ async def recompute_prototypes_endpoint(
 
 
 # ============ Helper Functions ============
+
+
+def calculate_age_at_date(birth_date: date | None, photo_date: datetime | None) -> int | None:
+    """Calculate age at the time a photo was taken.
+
+    Args:
+        birth_date: Person's birth date
+        photo_date: Date the photo was taken (from EXIF)
+
+    Returns:
+        Age in years at the time of the photo, or None if either date is missing
+
+    Examples:
+        >>> from datetime import date, datetime
+        >>> calculate_age_at_date(date(1990, 6, 15), datetime(2020, 8, 1))
+        30
+        >>> calculate_age_at_date(date(1990, 6, 15), datetime(2020, 3, 1))
+        29
+        >>> calculate_age_at_date(None, datetime(2020, 1, 1))
+        None
+    """
+    if not birth_date or not photo_date:
+        return None
+
+    photo_d = photo_date.date()
+    age = photo_d.year - birth_date.year
+
+    # Adjust if birthday hasn't occurred yet in the photo year
+    if (photo_d.month, photo_d.day) < (birth_date.month, birth_date.day):
+        age -= 1
+
+    return max(0, age)  # Never return negative age
 
 
 def _face_to_response(face: FaceInstance, person_name: str | None = None) -> FaceInstanceResponse:

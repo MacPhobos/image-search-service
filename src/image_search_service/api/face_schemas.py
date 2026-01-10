@@ -1,6 +1,6 @@
 """Pydantic schemas for face detection and recognition APIs."""
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from uuid import UUID
 
@@ -165,6 +165,24 @@ class MergePersonsResponse(CamelCaseModel):
     faces_moved: int
 
 
+class UpdatePersonRequest(CamelCaseModel):
+    """Request to update person name and/or birth_date."""
+
+    name: str | None = Field(None, min_length=1, max_length=255)
+    birth_date: date | None = None
+
+
+class UpdatePersonResponse(CamelCaseModel):
+    """Response from updating a person."""
+
+    id: UUID
+    name: str
+    birth_date: date | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class SplitClusterRequest(CamelCaseModel):
     """Request to split a cluster."""
 
@@ -224,6 +242,10 @@ class FaceInPhoto(CamelCaseModel):
     person_id: UUID | None = None
     person_name: str | None = None
     cluster_id: str | None = None
+    person_age_at_photo: int | None = Field(
+        None,
+        description="Person's age in years when photo was taken (requires birth_date and taken_at)",
+    )
 
 
 class PersonPhotoGroup(CamelCaseModel):
