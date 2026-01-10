@@ -30,7 +30,7 @@ def upgrade() -> None:
                existing_type=sa.BOOLEAN(),
                nullable=False,
                existing_server_default=sa.text('false'))
-    op.drop_index(op.f('idx_training_subdirectories_path'), table_name='training_subdirectories')
+    op.drop_index(op.f('idx_training_subdirectories_path'), table_name='training_subdirectories', if_exists=True)
     # ### end Alembic commands ###
 
 
