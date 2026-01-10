@@ -23,6 +23,7 @@ from image_search_service.db.models import (
     FaceInstance,
     FaceSuggestion,
     FaceSuggestionStatus,
+    ImageAsset,
     Person,
 )
 from image_search_service.db.session import get_db
@@ -47,6 +48,11 @@ async def _build_suggestion_response(
     if face_instance is None:
         face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
 
+    # Get ImageAsset for path
+    image_asset = None
+    if face_instance:
+        image_asset = await db.get(ImageAsset, face_instance.asset_id)
+
     thumbnail_url = (
         f"/api/v1/images/{face_instance.asset_id}/thumbnail"
         if face_instance
@@ -57,6 +63,7 @@ async def _build_suggestion_response(
         if face_instance
         else None
     )
+    path = image_asset.path if image_asset else ""
 
     return FaceSuggestionResponse(
         id=suggestion.id,
@@ -70,6 +77,7 @@ async def _build_suggestion_response(
         face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
         full_image_url=full_image_url,
+        path=path,
         bbox_x=face_instance.bbox_x if face_instance else None,
         bbox_y=face_instance.bbox_y if face_instance else None,
         bbox_w=face_instance.bbox_w if face_instance else None,
@@ -416,6 +424,12 @@ async def get_suggestion(
 
     # Get face instance for thumbnail URL and bounding box data
     face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
+
+    # Get ImageAsset for path
+    image_asset = None
+    if face_instance:
+        image_asset = await db.get(ImageAsset, face_instance.asset_id)
+
     thumbnail_url = (
         f"/api/v1/images/{face_instance.asset_id}/thumbnail"
         if face_instance
@@ -426,6 +440,7 @@ async def get_suggestion(
         if face_instance
         else None
     )
+    path = image_asset.path if image_asset else ""
 
     return FaceSuggestionResponse(
         id=suggestion.id,
@@ -439,6 +454,7 @@ async def get_suggestion(
         face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
         full_image_url=full_image_url,
+        path=path,
         bbox_x=face_instance.bbox_x if face_instance else None,
         bbox_y=face_instance.bbox_y if face_instance else None,
         bbox_w=face_instance.bbox_w if face_instance else None,
@@ -490,9 +506,13 @@ async def accept_suggestion(
     # Get person for response
     person = await db.get(Person, suggestion.suggested_person_id)
 
+    # Get ImageAsset for path
+    image_asset = await db.get(ImageAsset, face.asset_id)
+
     # Get thumbnail URL and full image URL from face instance (already loaded)
     thumbnail_url = f"/api/v1/images/{face.asset_id}/thumbnail"
     full_image_url = f"/api/v1/images/{face.asset_id}/full"
+    path = image_asset.path if image_asset else ""
 
     logger.info(
         f"Accepted suggestion {suggestion_id}: "
@@ -511,6 +531,7 @@ async def accept_suggestion(
         face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
         full_image_url=full_image_url,
+        path=path,
         bbox_x=face.bbox_x,
         bbox_y=face.bbox_y,
         bbox_w=face.bbox_w,
@@ -550,6 +571,12 @@ async def reject_suggestion(
 
     # Get face instance for thumbnail URL and bounding box data
     face_instance = await db.get(FaceInstance, suggestion.face_instance_id)
+
+    # Get ImageAsset for path
+    image_asset = None
+    if face_instance:
+        image_asset = await db.get(ImageAsset, face_instance.asset_id)
+
     thumbnail_url = (
         f"/api/v1/images/{face_instance.asset_id}/thumbnail"
         if face_instance
@@ -560,6 +587,7 @@ async def reject_suggestion(
         if face_instance
         else None
     )
+    path = image_asset.path if image_asset else ""
 
     logger.info(f"Rejected suggestion {suggestion_id}")
 
@@ -575,6 +603,7 @@ async def reject_suggestion(
         face_thumbnail_url=thumbnail_url,
         person_name=person.name if person else None,
         full_image_url=full_image_url,
+        path=path,
         bbox_x=face_instance.bbox_x if face_instance else None,
         bbox_y=face_instance.bbox_y if face_instance else None,
         bbox_w=face_instance.bbox_w if face_instance else None,

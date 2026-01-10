@@ -103,6 +103,7 @@ class FaceSuggestionResponse(CamelCaseModel):
     person_name: str | None = None
     # Full image and bounding box information for overlay display
     full_image_url: str | None = None
+    path: str = ""  # filesystem path to the image
     bbox_x: int | None = None
     bbox_y: int | None = None
     bbox_w: int | None = None
