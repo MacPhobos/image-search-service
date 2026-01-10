@@ -255,6 +255,7 @@ class PersonPhotoGroup(CamelCaseModel):
     taken_at: datetime | None = None  # from EXIF if available
     thumbnail_url: str
     full_url: str
+    path: str  # filesystem path to the image
     faces: list[FaceInPhoto]
     face_count: int
     has_non_person_faces: bool  # True if any face in photo has different/no person_id

@@ -755,9 +755,9 @@ async def get_person_photos(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Step 4: Get paginated assets with taken_at for age calculation
+    # Step 4: Get paginated assets with taken_at and path
     paginated_assets_query = (
-        select(ImageAsset.id, ImageAsset.taken_at)
+        select(ImageAsset.id, ImageAsset.taken_at, ImageAsset.path)
         .where(ImageAsset.id.in_(select(asset_subquery.c.asset_id)))
         .order_by(ImageAsset.id.desc())
         .offset((page - 1) * page_size)
@@ -767,8 +767,9 @@ async def get_person_photos(
     assets_data = assets_result.all()
     asset_ids = [row[0] for row in assets_data]
 
-    # Build map of asset_id -> taken_at for age calculation
+    # Build maps for asset metadata
     taken_at_by_asset = {row[0]: row[1] for row in assets_data}
+    path_by_asset = {row[0]: row[2] for row in assets_data}
 
     # Step 5: For each photo, get ALL faces with Person info (for birth_date)
     if asset_ids:
@@ -830,6 +831,7 @@ async def get_person_photos(
                 taken_at=photo_taken_at,
                 thumbnail_url=f"/api/v1/images/{asset_id}/thumbnail",
                 full_url=f"/api/v1/images/{asset_id}/full",
+                path=path_by_asset.get(asset_id, ""),
                 faces=face_schemas,
                 face_count=len(face_schemas),
                 has_non_person_faces=has_non_person_faces,

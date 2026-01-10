@@ -551,6 +551,7 @@ class TestPersonEndpoints:
         assert len(photo["faces"]) == 2
         assert photo["thumbnailUrl"] == f"/api/v1/images/{mock_image_asset.id}/thumbnail"
         assert photo["fullUrl"] == f"/api/v1/images/{mock_image_asset.id}/full"
+        assert photo["path"] == mock_image_asset.path  # Verify path field is included
 
     @pytest.mark.asyncio
     async def test_get_person_photos_pagination(self, test_client, db_session, mock_person):
