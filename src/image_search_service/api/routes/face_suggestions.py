@@ -1,11 +1,14 @@
 """Face suggestion API routes."""
 
 import logging
+import uuid as uuid_lib
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from redis import Redis
+from rq import Queue
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +19,13 @@ from image_search_service.api.face_session_schemas import (
     FaceSuggestionListResponse,
     FaceSuggestionResponse,
     FaceSuggestionsGroupedResponse,
+    FindMoreJobInfo,
+    FindMoreJobResponse,
+    FindMoreSuggestionsRequest,
     RejectSuggestionRequest,
     SuggestionGroup,
 )
+from image_search_service.core.config import get_settings
 from image_search_service.db.models import (
     FaceInstance,
     FaceSuggestion,
@@ -27,6 +34,7 @@ from image_search_service.db.models import (
     Person,
 )
 from image_search_service.db.session import get_db
+from image_search_service.queue.face_jobs import find_more_suggestions_job
 from image_search_service.services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)
@@ -188,7 +196,6 @@ async def _list_suggestions_grouped(
     # Query 2: Get suggestions for these persons with row number limiting
     # Use SQLAlchemy ORM with window function for cross-database compatibility
     from sqlalchemy import func as sql_func
-    from sqlalchemy.orm import aliased
 
     # Create subquery with row numbers
     row_num = (
@@ -213,7 +220,6 @@ async def _list_suggestions_grouped(
     ranked_subquery = suggestions_query.subquery()
 
     # Select from subquery where row number <= suggestions_per_group
-    ranked_alias = aliased(FaceSuggestion, ranked_subquery)
     suggestions_query = (
         select(ranked_subquery)
         .where(ranked_subquery.c.rn <= suggestions_per_group)
@@ -251,8 +257,14 @@ async def _list_suggestions_grouped(
     persons_map = {p.id: p for p in persons_result.scalars().all()}
 
     # Load all face instances in one query
-    all_face_instance_ids = [s.face_instance_id for suggestions in suggestions_by_person.values() for s in suggestions]
-    face_instances_query = select(FaceInstance).where(FaceInstance.id.in_(all_face_instance_ids))
+    all_face_instance_ids = [
+        s.face_instance_id
+        for suggestions in suggestions_by_person.values()
+        for s in suggestions
+    ]
+    face_instances_query = select(FaceInstance).where(
+        FaceInstance.id.in_(all_face_instance_ids)
+    )
     face_instances_result = await db.execute(face_instances_query)
     face_instances_map = {f.id: f for f in face_instances_result.scalars().all()}
 
@@ -260,9 +272,13 @@ async def _list_suggestions_grouped(
     groups = []
     total_suggestions = 0
     for row in person_groups:
-        person_id = row.suggested_person_id
-        person = persons_map.get(person_id)
-        group_suggestions = suggestions_by_person.get(person_id, [])
+        # Extract row attributes using column indexing to avoid type confusion
+        suggested_person_id: UUID = row[0]
+        row_count: int = row[1]
+        row_max_conf: float = row[2]
+
+        person = persons_map.get(suggested_person_id)
+        group_suggestions = suggestions_by_person.get(suggested_person_id, [])
 
         # Build suggestion responses
         suggestion_responses = []
@@ -274,14 +290,14 @@ async def _list_suggestions_grouped(
 
         groups.append(
             SuggestionGroup(
-                person_id=str(person_id),
+                person_id=str(suggested_person_id),
                 person_name=person.name if person else None,
-                suggestion_count=row.count,
-                max_confidence=row.max_conf,
+                suggestion_count=row_count,
+                max_confidence=row_max_conf,
                 suggestions=suggestion_responses,
             )
         )
-        total_suggestions += row.count
+        total_suggestions += row_count
 
     return FaceSuggestionsGroupedResponse(
         groups=groups,
@@ -300,10 +316,22 @@ async def list_suggestions(
     status: str | None = Query(
         None, description="Filter by status: pending, accepted, rejected"
     ),
-    person_id: str | None = Query(None, description="Filter by suggested person ID", alias="personId"),
-    grouped: bool = Query(True, description="Use group-based pagination (default: true)"),
-    groups_per_page: int | None = Query(None, description="Groups per page (uses config if not provided)", alias="groupsPerPage"),
-    suggestions_per_group: int | None = Query(None, description="Suggestions per group (uses config if not provided)", alias="suggestionsPerGroup"),
+    person_id: str | None = Query(
+        None, description="Filter by suggested person ID", alias="personId"
+    ),
+    grouped: bool = Query(
+        True, description="Use group-based pagination (default: true)"
+    ),
+    groups_per_page: int | None = Query(
+        None,
+        description="Groups per page (uses config if not provided)",
+        alias="groupsPerPage",
+    ),
+    suggestions_per_group: int | None = Query(
+        None,
+        description="Suggestions per group (uses config if not provided)",
+        alias="suggestionsPerGroup",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> FaceSuggestionListResponse | FaceSuggestionsGroupedResponse:
     """List face suggestions with pagination and filtering.
@@ -627,6 +655,7 @@ async def bulk_suggestion_action(
     processed = 0
     failed = 0
     errors: list[str] = []
+    affected_person_ids: set[UUID] = set()
 
     for suggestion_id in request.suggestion_ids:
         suggestion = await db.get(FaceSuggestion, suggestion_id)
@@ -649,6 +678,8 @@ async def bulk_suggestion_action(
                 if face:
                     face.person_id = suggestion.suggested_person_id
                 suggestion.status = FaceSuggestionStatus.ACCEPTED.value
+                # Track affected person IDs for auto-find-more
+                affected_person_ids.add(suggestion.suggested_person_id)
             else:  # reject
                 suggestion.status = FaceSuggestionStatus.REJECTED.value
 
@@ -663,8 +694,121 @@ async def bulk_suggestion_action(
 
     logger.info(f"Bulk {request.action}: processed {processed}, failed {failed}")
 
+    # Auto-trigger find-more jobs if requested
+    find_more_jobs: list[FindMoreJobInfo] | None = None
+
+    if request.auto_find_more and request.action == "accept" and affected_person_ids:
+        find_more_jobs = []
+        settings = get_settings()
+        redis_conn = Redis.from_url(settings.redis_url)
+        queue = Queue(connection=redis_conn)
+
+        for person_id in affected_person_ids:
+            job_uuid = str(uuid_lib.uuid4())
+            progress_key = f"find_more:progress:{person_id}:{job_uuid}"
+
+            job = queue.enqueue(
+                find_more_suggestions_job,
+                str(person_id),
+                request.find_more_prototype_count,
+                None,  # min_confidence
+                100,  # max_suggestions
+                progress_key,
+                job_id=job_uuid,
+            )
+
+            find_more_jobs.append(
+                FindMoreJobInfo(
+                    person_id=str(person_id),
+                    job_id=job.id,
+                    progress_key=progress_key,
+                )
+            )
+
+        logger.info(
+            f"Auto-triggered {len(find_more_jobs)} find-more jobs for "
+            f"{len(affected_person_ids)} persons"
+        )
+
     return BulkSuggestionActionResponse(
         processed=processed,
         failed=failed,
         errors=errors[:10],  # Limit errors to first 10
+        find_more_jobs=find_more_jobs,
+    )
+
+
+@router.post(
+    "/persons/{person_id}/find-more",
+    response_model=FindMoreJobResponse,
+    status_code=201,
+    summary="Start job to find more suggestions using dynamic prototypes",
+    description="""
+    Samples random labeled faces (weighted by quality and diversity)
+    as temporary prototypes to search for additional similar faces.
+
+    Does NOT modify the person's configured prototypes.
+    Uses the same similarity threshold as normal suggestion generation.
+    """,
+)
+async def start_find_more_suggestions(
+    person_id: UUID,
+    request: FindMoreSuggestionsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> FindMoreJobResponse:
+    """Start a background job to find more suggestions for a person."""
+
+    # Validate person exists
+    person = await db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    # Count available labeled faces
+    labeled_count_result = await db.execute(
+        select(func.count()).where(FaceInstance.person_id == person_id)
+    )
+    labeled_count = labeled_count_result.scalar() or 0
+
+    if labeled_count < 10:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Person has only {labeled_count} labeled faces. Minimum 10 required.",
+        )
+
+    # Adjust prototype count if exceeds available
+    actual_count = min(request.prototype_count, labeled_count)
+
+    # Generate full UUID for job_id
+    job_uuid = str(uuid_lib.uuid4())
+    progress_key = f"find_more:progress:{person_id}:{job_uuid}"
+
+    # Get Redis connection
+    settings = get_settings()
+    redis_conn = Redis.from_url(settings.redis_url)
+
+    # Enqueue job
+    queue = Queue(connection=redis_conn)
+    job = queue.enqueue(
+        find_more_suggestions_job,
+        str(person_id),
+        actual_count,
+        None,  # min_confidence (use system default)
+        request.max_suggestions,
+        progress_key,
+        job_id=job_uuid,
+    )
+
+    logger.info(
+        f"Started find-more job {job.id} for person {person.name} "
+        f"with {actual_count} prototypes"
+    )
+
+    return FindMoreJobResponse(
+        job_id=job.id,
+        person_id=str(person_id),
+        person_name=person.name,
+        prototype_count=actual_count,
+        labeled_face_count=labeled_count,
+        status="queued",
+        progress_key=progress_key,
     )

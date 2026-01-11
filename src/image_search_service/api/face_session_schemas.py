@@ -171,6 +171,24 @@ class BulkSuggestionActionRequest(CamelCaseModel):
 
     suggestion_ids: list[int]
     action: str = Field(..., pattern="^(accept|reject)$")
+    auto_find_more: bool = Field(
+        default=False,
+        description="Auto-trigger find-more job after accepting",
+    )
+    find_more_prototype_count: int = Field(
+        default=50,
+        ge=10,
+        le=1000,
+        description="Prototype count for auto-triggered find-more jobs",
+    )
+
+
+class FindMoreJobInfo(CamelCaseModel):
+    """Info about an auto-triggered find-more job."""
+
+    person_id: str
+    job_id: str
+    progress_key: str
 
 
 class BulkSuggestionActionResponse(CamelCaseModel):
@@ -179,3 +197,60 @@ class BulkSuggestionActionResponse(CamelCaseModel):
     processed: int
     failed: int
     errors: list[str] = []
+    find_more_jobs: list[FindMoreJobInfo] | None = Field(
+        default=None,
+        description="List of auto-triggered find-more jobs with progress keys",
+    )
+
+
+# Find More Suggestions Schemas
+
+
+class FindMoreSuggestionsRequest(CamelCaseModel):
+    """Request to find more suggestions using random face sampling."""
+
+    prototype_count: int = Field(
+        default=50,
+        ge=10,
+        le=1000,
+        description="Number of labeled faces to sample as temporary prototypes",
+    )
+    max_suggestions: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        description="Maximum number of new suggestions to create",
+    )
+
+
+class FindMoreJobResponse(CamelCaseModel):
+    """Response when starting a find-more job."""
+
+    job_id: str
+    person_id: str
+    person_name: str
+    prototype_count: int
+    labeled_face_count: int  # Total available for sampling
+    status: str  # "queued"
+    progress_key: str  # Redis key for progress
+
+
+class JobProgress(CamelCaseModel):
+    """Progress update for any background job (SSE payload)."""
+
+    phase: str
+    current: int
+    total: int
+    message: str
+    timestamp: str  # ISO format
+
+
+class JobResult(CamelCaseModel):
+    """Final result when job completes."""
+
+    status: str  # "completed" or "failed"
+    suggestions_created: int | None = None
+    prototypes_used: int | None = None
+    candidates_found: int | None = None
+    duplicates_skipped: int | None = None
+    error: str | None = None

@@ -13,6 +13,9 @@ from image_search_service.api.routes.face_suggestions import (
 )
 from image_search_service.api.routes.faces import router as faces_router
 from image_search_service.api.routes.images import router as images_router
+from image_search_service.api.routes.jobs import (
+    job_progress_router,
+)
 from image_search_service.api.routes.queues import (
     jobs_router,
     workers_router,
@@ -56,3 +59,4 @@ api_v1_router.include_router(face_suggestions_router)
 api_v1_router.include_router(queues_router)
 api_v1_router.include_router(jobs_router)
 api_v1_router.include_router(workers_router)
+api_v1_router.include_router(job_progress_router)

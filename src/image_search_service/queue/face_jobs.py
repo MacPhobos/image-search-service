@@ -1072,6 +1072,313 @@ def cleanup_orphaned_suggestions_job() -> dict[str, Any]:
         db_session.close()
 
 
+def find_more_suggestions_job(
+    person_id: str,
+    prototype_count: int = 50,
+    min_confidence: float | None = None,
+    max_suggestions: int = 100,
+    progress_key: str | None = None,
+) -> dict[str, Any]:
+    """Find more face suggestions using random sampling of labeled faces.
+
+    Uses Quality + Diversity weighted selection to pick labeled faces as temp prototypes.
+    This enables discovery of faces that don't match the fixed prototype set but may
+    still belong to the same person.
+
+    Selection Strategy (Quality + Diversity):
+    1. Get all labeled faces for the person (excluding existing prototypes)
+    2. Score each face: quality_score * 0.7 + diversity_bonus * 0.3
+       - diversity_bonus based on unique asset_id distribution
+    3. Weighted random selection of top N faces
+    4. For each selected face, query Qdrant for similar unknown faces
+    5. Aggregate results using MAX score across all matches
+    6. Create FaceSuggestion records (skip duplicates with existing pending)
+    7. Update progress in Redis after each prototype
+
+    Args:
+        person_id: UUID string of the person
+        prototype_count: Number of faces to sample as prototypes (default: 50)
+        min_confidence: Similarity threshold (default: from SystemConfig)
+        max_suggestions: Maximum new suggestions to create
+        progress_key: Redis key for progress updates (optional)
+
+    Returns:
+        dict with: status, suggestions_created, prototypes_used,
+        candidates_found, duplicates_skipped
+    """
+    import random
+    import uuid as uuid_lib
+
+    from image_search_service.db.models import Person, PersonPrototype
+    from image_search_service.services.config_service import SyncConfigService
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    person_uuid = uuid_lib.UUID(person_id)
+
+    logger.info(
+        f"[{job_id}] Starting find-more for person {person_id} "
+        f"with {prototype_count} prototypes"
+    )
+
+    db_session = get_sync_session()
+
+    # Get config values if not provided
+    config_service = SyncConfigService(db_session)
+    if min_confidence is None:
+        min_confidence = config_service.get_float("face_suggestion_threshold")
+
+    # Helper to update progress
+    def update_progress(phase: str, current: int, total: int, message: str) -> None:
+        if not progress_key:
+            return
+        try:
+            from redis import Redis
+
+            from image_search_service.core.config import get_settings
+
+            settings = get_settings()
+            redis_client = Redis.from_url(settings.redis_url)
+
+            progress_data = {
+                "phase": phase,
+                "current": current,
+                "total": total,
+                "message": message,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            redis_client.set(progress_key, json.dumps(progress_data), ex=3600)
+        except Exception as e:
+            logger.warning(f"[{job_id}] Failed to update progress: {e}")
+
+    try:
+        update_progress("selecting", 0, prototype_count, "Selecting prototypes...")
+
+        # 1. Get person
+        person = db_session.get(Person, person_uuid)
+        if not person:
+            logger.warning(f"[{job_id}] Person {person_id} not found")
+            return {"status": "error", "message": "Person not found"}
+
+        # 2. Get existing prototypes to exclude
+        existing_proto_query = select(PersonPrototype.face_instance_id).where(
+            PersonPrototype.person_id == person_uuid
+        )
+        existing_proto_ids = set(db_session.execute(existing_proto_query).scalars().all())
+
+        # 3. Get all labeled faces for this person (excluding prototypes)
+        labeled_faces_query = select(FaceInstance).where(
+            FaceInstance.person_id == person_uuid
+        )
+        if existing_proto_ids:
+            labeled_faces_query = labeled_faces_query.where(
+                ~FaceInstance.id.in_(existing_proto_ids)
+            )
+        labeled_faces = list(db_session.execute(labeled_faces_query).scalars().all())
+
+        if len(labeled_faces) < 10:
+            logger.warning(
+                f"[{job_id}] Only {len(labeled_faces)} labeled faces available "
+                f"(minimum 10 required)"
+            )
+            return {
+                "status": "error",
+                "message": f"Only {len(labeled_faces)} labeled faces (need 10+)",
+            }
+
+        # 4. Score faces using Quality + Diversity
+        asset_usage_count: dict[int, int] = {}
+        face_scores: list[tuple[FaceInstance, float]] = []
+
+        for face in labeled_faces:
+            quality = face.quality_score or 0.5
+
+            # Diversity bonus (penalize repeated use of same asset)
+            asset_id = face.asset_id
+            usage = asset_usage_count.get(asset_id, 0)
+            diversity_penalty = min(0.3, usage * 0.1)
+            diversity_bonus = 0.3 - diversity_penalty
+
+            score = quality * 0.7 + diversity_bonus
+            face_scores.append((face, score))
+
+            # Track usage for next iteration
+            asset_usage_count[asset_id] = usage + 1
+
+        # 5. Weighted random selection
+        face_scores.sort(key=lambda x: x[1], reverse=True)
+        actual_count = min(prototype_count, len(face_scores))
+
+        # Use top faces with weighted randomness
+        selected_faces: list[FaceInstance] = []
+        weights = [score for _, score in face_scores[:actual_count * 2]]
+        candidates = [face for face, _ in face_scores[:actual_count * 2]]
+
+        if len(candidates) > 0:
+            selected_faces = random.choices(
+                candidates,
+                weights=weights,
+                k=min(actual_count, len(candidates)),
+            )
+
+        logger.info(
+            f"[{job_id}] Selected {len(selected_faces)} prototypes "
+            f"from {len(labeled_faces)} labeled faces"
+        )
+
+        update_progress("searching", 0, len(selected_faces), "Searching for similar faces...")
+
+        # 6. Search using each selected face
+        qdrant = get_face_qdrant_client()
+        candidate_faces: dict[str, dict[str, Any]] = {}  # face_id -> {scores, max_score}
+
+        for idx, face in enumerate(selected_faces):
+            if not face.qdrant_point_id:
+                continue
+
+            # Get embedding
+            embedding = qdrant.get_embedding_by_point_id(face.qdrant_point_id)
+            if not embedding:
+                continue
+
+            # Search for similar faces
+            results = qdrant.search_similar_faces(
+                query_embedding=embedding,
+                limit=max_suggestions * 3,
+                score_threshold=min_confidence,
+            )
+
+            for result in results:
+                if result.payload is None:
+                    continue
+
+                face_id_str = result.payload.get("face_id")
+                if not face_id_str:
+                    continue
+
+                try:
+                    face_id_uuid = uuid_lib.UUID(face_id_str)
+                except ValueError:
+                    continue
+
+                # Check if face is already assigned
+                candidate_face = db_session.get(FaceInstance, face_id_uuid)
+                if not candidate_face or candidate_face.person_id is not None:
+                    continue
+
+                # Aggregate scores
+                face_id = str(face_id_uuid)
+                if face_id not in candidate_faces:
+                    candidate_faces[face_id] = {
+                        "scores": {},
+                        "max_score": 0.0,
+                        "face_instance": candidate_face,
+                    }
+
+                proto_id = str(face.id)
+                candidate_faces[face_id]["scores"][proto_id] = result.score
+                candidate_faces[face_id]["max_score"] = max(
+                    candidate_faces[face_id]["max_score"],
+                    result.score,
+                )
+
+            update_progress(
+                "searching",
+                idx + 1,
+                len(selected_faces),
+                f"Processed {idx + 1}/{len(selected_faces)} prototypes",
+            )
+
+        logger.info(
+            f"[{job_id}] Found {len(candidate_faces)} candidate faces "
+            f"from {len(selected_faces)} prototypes"
+        )
+
+        update_progress("creating", 0, len(candidate_faces), "Creating suggestions...")
+
+        # 7. Get existing pending suggestions to avoid duplicates
+        existing_pending_query = select(FaceSuggestion.face_instance_id).where(
+            FaceSuggestion.suggested_person_id == person_uuid,
+            FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+        )
+        existing_pending_ids = set(
+            str(fid) for fid in db_session.execute(existing_pending_query).scalars().all()
+        )
+
+        # 8. Sort by confidence and create suggestions
+        sorted_candidates = sorted(
+            candidate_faces.items(),
+            key=lambda x: x[1]["max_score"],
+            reverse=True,
+        )[:max_suggestions]
+
+        suggestions_created = 0
+        duplicates_skipped = 0
+
+        for face_id, data in sorted_candidates:
+            # Skip if already has pending suggestion
+            if face_id in existing_pending_ids:
+                duplicates_skipped += 1
+                continue
+
+            # Find best prototype (highest quality among matches)
+            def get_quality(pid: str) -> float:
+                proto_face = db_session.get(FaceInstance, uuid_lib.UUID(pid))
+                if proto_face and proto_face.quality_score is not None:
+                    return proto_face.quality_score
+                return 0.0
+
+            best_proto_id = max(data["scores"].keys(), key=get_quality)
+
+            suggestion = FaceSuggestion(
+                face_instance_id=uuid_lib.UUID(face_id),
+                suggested_person_id=person_uuid,
+                source_face_id=uuid_lib.UUID(best_proto_id),
+                confidence=data["scores"][best_proto_id],
+                aggregate_confidence=data["max_score"],
+                matching_prototype_ids=list(data["scores"].keys()),
+                prototype_scores=data["scores"],
+                prototype_match_count=len(data["scores"]),
+                status=FaceSuggestionStatus.PENDING.value,
+            )
+            db_session.add(suggestion)
+            suggestions_created += 1
+
+        db_session.commit()
+
+        logger.info(
+            f"[{job_id}] Find-more complete for {person.name}: "
+            f"{suggestions_created} suggestions created, "
+            f"{duplicates_skipped} duplicates skipped"
+        )
+
+        # Update final progress
+        update_progress(
+            "completed",
+            len(selected_faces),
+            len(selected_faces),
+            f"Created {suggestions_created} new suggestions",
+        )
+
+        return {
+            "status": "completed",
+            "suggestions_created": suggestions_created,
+            "prototypes_used": len(selected_faces),
+            "candidates_found": len(candidate_faces),
+            "duplicates_skipped": duplicates_skipped,
+        }
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Error in find-more job: {e}")
+        if progress_key:
+            update_progress("failed", 0, 0, str(e))
+        return {"status": "error", "message": str(e)}
+    finally:
+        db_session.close()
+
+
 def propagate_person_label_multiproto_job(
     person_id: str,
     min_confidence: float = 0.7,
