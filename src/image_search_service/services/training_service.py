@@ -88,9 +88,7 @@ class TrainingService:
         logger.info(f"Created training session {session.id}: {session.name}")
         return refreshed_session
 
-    async def get_session(
-        self, db: AsyncSession, session_id: int
-    ) -> TrainingSession | None:
+    async def get_session(self, db: AsyncSession, session_id: int) -> TrainingSession | None:
         """Get a training session by ID.
 
         Args:
@@ -364,8 +362,7 @@ class TrainingService:
         rq_job = queue.enqueue(train_session, session_id, job_timeout="1h")
 
         logger.info(
-            f"Enqueued training session {session_id} as RQ job {rq_job.id} "
-            f"with {job_count} assets"
+            f"Enqueued training session {session_id} as RQ job {rq_job.id} with {job_count} assets"
         )
 
         return str(rq_job.id)
@@ -563,18 +560,12 @@ class TrainingService:
         query = (
             select(TrainingJob.asset_id)
             .where(TrainingJob.session_id == session_id)
-            .where(
-                TrainingJob.status.in_(
-                    [JobStatus.PENDING.value, JobStatus.FAILED.value]
-                )
-            )
+            .where(TrainingJob.status.in_([JobStatus.PENDING.value, JobStatus.FAILED.value]))
         )
         result = await db.execute(query)
         return list(result.scalars().all())
 
-    async def start_training(
-        self, db: AsyncSession, session_id: int
-    ) -> TrainingSession:
+    async def start_training(self, db: AsyncSession, session_id: int) -> TrainingSession:
         """Start or resume training for a session.
 
         Valid state transitions:
@@ -604,8 +595,7 @@ class TrainingService:
         ]
         if session.status not in valid_states:
             raise ValueError(
-                f"Cannot start training from state '{session.status}'. "
-                f"Valid states: {valid_states}"
+                f"Cannot start training from state '{session.status}'. Valid states: {valid_states}"
             )
 
         # Check if session already running
@@ -616,9 +606,7 @@ class TrainingService:
         # PENDING state: discover assets and create jobs
         if session.status == SessionStatus.PENDING.value:
             rq_job_id = await self.enqueue_training(db, session_id)
-            logger.info(
-                f"Started new training for session {session_id}, RQ job: {rq_job_id}"
-            )
+            logger.info(f"Started new training for session {session_id}, RQ job: {rq_job_id}")
             # Session is already refreshed by enqueue_training
             return await self.get_session(db, session_id) or session
 
@@ -643,14 +631,10 @@ class TrainingService:
         queue = get_queue(QUEUE_HIGH)
         rq_job = queue.enqueue(train_session, session_id, job_timeout="1h")
 
-        logger.info(
-            f"Resumed training for session {session_id}, RQ job: {rq_job.id}"
-        )
+        logger.info(f"Resumed training for session {session_id}, RQ job: {rq_job.id}")
         return session
 
-    async def pause_training(
-        self, db: AsyncSession, session_id: int
-    ) -> TrainingSession:
+    async def pause_training(self, db: AsyncSession, session_id: int) -> TrainingSession:
         """Pause a running training session.
 
         Args:
@@ -684,9 +668,7 @@ class TrainingService:
         logger.info(f"Paused training session {session_id}")
         return session
 
-    async def cancel_training(
-        self, db: AsyncSession, session_id: int
-    ) -> TrainingSession:
+    async def cancel_training(self, db: AsyncSession, session_id: int) -> TrainingSession:
         """Cancel a training session.
 
         Cancels all pending jobs and updates session status.
@@ -709,8 +691,7 @@ class TrainingService:
         valid_states = [SessionStatus.RUNNING.value, SessionStatus.PAUSED.value]
         if session.status not in valid_states:
             raise ValueError(
-                f"Cannot cancel session in state '{session.status}'. "
-                f"Valid states: {valid_states}"
+                f"Cannot cancel session in state '{session.status}'. Valid states: {valid_states}"
             )
 
         # Cancel all pending jobs
@@ -788,9 +769,7 @@ class TrainingService:
             Tuple of (jobs list, total count)
         """
         query = select(TrainingJob).where(TrainingJob.session_id == session_id)
-        count_query = select(func.count(TrainingJob.id)).where(
-            TrainingJob.session_id == session_id
-        )
+        count_query = select(func.count(TrainingJob.id)).where(TrainingJob.session_id == session_id)
 
         # Apply status filter
         if status:
@@ -803,11 +782,7 @@ class TrainingService:
 
         # Apply pagination and ordering
         offset = (page - 1) * page_size
-        query = (
-            query.offset(offset)
-            .limit(page_size)
-            .order_by(TrainingJob.created_at.desc())
-        )
+        query = query.offset(offset).limit(page_size).order_by(TrainingJob.created_at.desc())
 
         result = await db.execute(query)
         jobs = list(result.scalars().all())
@@ -1006,9 +981,7 @@ class TrainingService:
 
         return subdirs
 
-    async def get_session_progress_unified(
-        self, db: AsyncSession, session_id: int
-    ) -> object:
+    async def get_session_progress_unified(self, db: AsyncSession, session_id: int) -> object:
         """Get unified progress across all training phases.
 
         Progress weights:
@@ -1051,9 +1024,7 @@ class TrainingService:
 
         # Calculate phase progress
         # Phase 1: Include both processed and skipped images in completion count
-        effective_completed = (
-            training_session.processed_images + training_session.skipped_images
-        )
+        effective_completed = training_session.processed_images + training_session.skipped_images
         phase1_pct = (
             (effective_completed / training_session.total_images * 100)
             if training_session.total_images > 0
@@ -1066,31 +1037,64 @@ class TrainingService:
         phase3_complete = False
 
         if face_session:
+            # Try Redis cache first for real-time progress
             processed = getattr(face_session, "processed_images", 0)
             total = getattr(face_session, "total_images", 0)
+
+            try:
+                import json
+
+                from redis import Redis
+
+                from image_search_service.core.config import get_settings
+
+                settings = get_settings()
+                redis_client = Redis.from_url(settings.redis_url)
+                cache_key = f"face_detection:{face_session.id}:progress"
+
+                cached_bytes = redis_client.get(cache_key)
+                if cached_bytes is not None:
+                    # Redis get() returns bytes, need to decode
+                    cached_str = (
+                        cached_bytes.decode("utf-8")
+                        if isinstance(cached_bytes, bytes)
+                        else str(cached_bytes)
+                    )
+                    progress_data = json.loads(cached_str)
+                    processed = progress_data.get("processed_images", processed)
+                    total = progress_data.get("total_images", total)
+
+                    logger.debug(
+                        f"Using Redis cache for session {face_session.id}: "
+                        f"{processed}/{total} images"
+                    )
+            except Exception as e:
+                # Graceful degradation - use database values
+                logger.debug(
+                    f"Redis cache miss for session {face_session.id}: {e} (using database values)"
+                )
+
             phase2_pct = (processed / total * 100) if total > 0 else 0.0
             phase2_complete = (
-                getattr(face_session, "status", None)
-                == FaceDetectionSessionStatus.COMPLETED.value
+                getattr(face_session, "status", None) == FaceDetectionSessionStatus.COMPLETED.value
             )
             # Phase 3 completes with Phase 2 (inline operation)
-            phase3_complete = phase2_complete and getattr(
-                face_session, "clusters_created", None
-            ) is not None
+            phase3_complete = (
+                phase2_complete and getattr(face_session, "clusters_created", None) is not None
+            )
 
         # Calculate overall progress (weighted)
         overall_pct = (
-            (0.30 * phase1_pct)
-            + (0.65 * phase2_pct)
-            + (0.05 * (100 if phase3_complete else 0))
+            (0.30 * phase1_pct) + (0.65 * phase2_pct) + (0.05 * (100 if phase3_complete else 0))
         )
 
         # Determine current phase
         if phase3_complete:
             current_phase = "completed"
-        elif face_session and getattr(
-            face_session, "status", None
-        ) == FaceDetectionSessionStatus.PROCESSING.value:
+        elif (
+            face_session
+            and getattr(face_session, "status", None) == FaceDetectionSessionStatus.PROCESSING.value
+        ):
             current_phase = "face_detection"
         elif phase1_complete:
             current_phase = "face_detection"  # Pending or starting
@@ -1102,14 +1106,12 @@ class TrainingService:
             overall_status = "completed"
         elif training_session.status == SessionStatus.FAILED.value or (
             face_session
-            and getattr(face_session, "status", None)
-            == FaceDetectionSessionStatus.FAILED.value
+            and getattr(face_session, "status", None) == FaceDetectionSessionStatus.FAILED.value
         ):
             overall_status = "failed"
         elif training_session.status == SessionStatus.RUNNING.value or (
             face_session
-            and getattr(face_session, "status", None)
-            == FaceDetectionSessionStatus.PROCESSING.value
+            and getattr(face_session, "status", None) == FaceDetectionSessionStatus.PROCESSING.value
         ):
             overall_status = "running"
         else:
@@ -1151,17 +1153,11 @@ class TrainingService:
                 "faceDetection": PhaseProgress(
                     name="face_detection",
                     status=(
-                        getattr(face_session, "status", "pending")
-                        if face_session
-                        else "pending"
+                        getattr(face_session, "status", "pending") if face_session else "pending"
                     ),
                     progress=ProgressStats(
-                        current=getattr(face_session, "processed_images", 0) if face_session else 0,
-                        total=(
-                            getattr(face_session, "total_images", training_session.total_images)
-                            if face_session
-                            else training_session.total_images
-                        ),
+                        current=processed if face_session else 0,
+                        total=(total if face_session else training_session.total_images),
                         percentage=round(phase2_pct, 2),
                         etaSeconds=None,
                         imagesPerMinute=None,
@@ -1226,10 +1222,7 @@ class TrainingService:
         from image_search_service.db.models import FaceDetectionSessionStatus
 
         # If training is running, calculate based on training rate
-        if (
-            training_session.status == SessionStatus.RUNNING.value
-            and training_session.started_at
-        ):
+        if training_session.status == SessionStatus.RUNNING.value and training_session.started_at:
             elapsed = (datetime.now(UTC) - training_session.started_at).total_seconds()
             current = training_session.processed_images
             total = training_session.total_images
@@ -1239,9 +1232,7 @@ class TrainingService:
                 remaining_training = total - current
 
                 # Estimate Phase 1 remaining
-                phase1_remaining = (
-                    remaining_training / images_per_sec if images_per_sec > 0 else 0
-                )
+                phase1_remaining = remaining_training / images_per_sec if images_per_sec > 0 else 0
 
                 # Estimate Phase 2 (face detection is ~4x slower than training)
                 phase2_estimate = total * 4  # Conservative estimate
@@ -1255,10 +1246,7 @@ class TrainingService:
         if face_session:
             status = getattr(face_session, "status", None)
             started_at = getattr(face_session, "started_at", None)
-            if (
-                status == FaceDetectionSessionStatus.PROCESSING.value
-                and started_at
-            ):
+            if status == FaceDetectionSessionStatus.PROCESSING.value and started_at:
                 elapsed = (datetime.now(UTC) - started_at).total_seconds()
                 current = getattr(face_session, "processed_images", 0)
                 total = getattr(face_session, "total_images", 0)
@@ -1267,9 +1255,7 @@ class TrainingService:
                     images_per_sec = current / elapsed
                     remaining_faces = total - current
 
-                    phase2_remaining = (
-                        remaining_faces / images_per_sec if images_per_sec > 0 else 0
-                    )
+                    phase2_remaining = remaining_faces / images_per_sec if images_per_sec > 0 else 0
                     phase3_estimate = 15
 
                     return int(phase2_remaining + phase3_estimate)

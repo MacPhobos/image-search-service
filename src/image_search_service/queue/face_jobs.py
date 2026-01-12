@@ -644,6 +644,36 @@ def detect_faces_for_session_job(
 
                 db_session.commit()
 
+                # Update Redis cache for real-time progress (fast, non-blocking)
+                try:
+                    from image_search_service.queue.worker import get_redis
+
+                    redis_client = get_redis()
+                    cache_key = f"face_detection:{session.id}:progress"
+
+                    # Store progress as JSON with metadata
+                    progress_data = {
+                        "processed_images": session.processed_images,
+                        "total_images": session.total_images,
+                        "faces_detected": session.faces_detected,
+                        "failed_images": session.failed_images,
+                        "current_batch": session.current_batch,
+                        "total_batches": session.total_batches,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                    }
+                    redis_client.set(cache_key, json.dumps(progress_data), ex=3600)
+
+                    logger.debug(
+                        f"[{job_id}] Updated Redis cache: "
+                        f"{session.processed_images}/{session.total_images} images"
+                    )
+                except Exception as e:
+                    # Graceful degradation - log but don't fail the job
+                    logger.warning(
+                        f"[{job_id}] Failed to update Redis progress cache: {e} "
+                        "(continuing with database-only progress)"
+                    )
+
                 logger.info(
                     f"[{job_id}] Batch complete: "
                     f"{result['processed']} processed, {result['total_faces']} faces, "
@@ -659,6 +689,28 @@ def detect_faces_for_session_job(
                 # Still update position even on error to skip problematic batch
                 session.current_asset_index += len(batch)
                 db_session.commit()
+
+                # Update Redis cache even on error (for consistent progress reporting)
+                try:
+                    from image_search_service.queue.worker import get_redis
+
+                    redis_client = get_redis()
+                    cache_key = f"face_detection:{session.id}:progress"
+
+                    progress_data = {
+                        "processed_images": session.processed_images,
+                        "total_images": session.total_images,
+                        "faces_detected": session.faces_detected,
+                        "failed_images": session.failed_images,
+                        "current_batch": session.current_batch,
+                        "total_batches": session.total_batches,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                    }
+                    redis_client.set(cache_key, json.dumps(progress_data), ex=3600)
+                except Exception as redis_error:
+                    logger.warning(
+                        f"[{job_id}] Failed to update Redis cache on error: {redis_error}"
+                    )
 
         # Auto-assign faces to known persons (uses config-based thresholds)
         logger.info(f"[{job_id}] Auto-assigning faces to known persons")
@@ -1119,8 +1171,7 @@ def find_more_suggestions_job(
     person_uuid = uuid_lib.UUID(person_id)
 
     logger.info(
-        f"[{job_id}] Starting find-more for person {person_id} "
-        f"with {prototype_count} prototypes"
+        f"[{job_id}] Starting find-more for person {person_id} with {prototype_count} prototypes"
     )
 
     db_session = get_sync_session()
@@ -1169,9 +1220,7 @@ def find_more_suggestions_job(
         existing_proto_ids = set(db_session.execute(existing_proto_query).scalars().all())
 
         # 3. Get all labeled faces for this person (excluding prototypes)
-        labeled_faces_query = select(FaceInstance).where(
-            FaceInstance.person_id == person_uuid
-        )
+        labeled_faces_query = select(FaceInstance).where(FaceInstance.person_id == person_uuid)
         if existing_proto_ids:
             labeled_faces_query = labeled_faces_query.where(
                 ~FaceInstance.id.in_(existing_proto_ids)
@@ -1213,8 +1262,8 @@ def find_more_suggestions_job(
 
         # Use top faces with weighted randomness
         selected_faces: list[FaceInstance] = []
-        weights = [score for _, score in face_scores[:actual_count * 2]]
-        candidates = [face for face, _ in face_scores[:actual_count * 2]]
+        weights = [score for _, score in face_scores[: actual_count * 2]]
+        candidates = [face for face, _ in face_scores[: actual_count * 2]]
 
         if len(candidates) > 0:
             selected_faces = random.choices(
@@ -1429,9 +1478,7 @@ def propagate_person_label_multiproto_job(
             return {"status": "error", "message": "Person not found"}
 
         # 2. Get all prototypes for this person
-        prototypes_query = select(PersonPrototype).where(
-            PersonPrototype.person_id == person_uuid
-        )
+        prototypes_query = select(PersonPrototype).where(PersonPrototype.person_id == person_uuid)
         prototypes = list(db_session.execute(prototypes_query).scalars().all())
 
         if not prototypes:
