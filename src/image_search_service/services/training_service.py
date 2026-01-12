@@ -1050,8 +1050,12 @@ class TrainingService:
         face_session = face_session_result.scalar_one_or_none()
 
         # Calculate phase progress
+        # Phase 1: Include both processed and skipped images in completion count
+        effective_completed = (
+            training_session.processed_images + training_session.skipped_images
+        )
         phase1_pct = (
-            (training_session.processed_images / training_session.total_images * 100)
+            (effective_completed / training_session.total_images * 100)
             if training_session.total_images > 0
             else 0.0
         )
@@ -1093,15 +1097,15 @@ class TrainingService:
         else:
             current_phase = "training"
 
-        # Determine overall status
-        if training_session.status == SessionStatus.FAILED.value or (
+        # Determine overall status - check completion FIRST to stop polling correctly
+        if phase1_complete and phase2_complete and phase3_complete:
+            overall_status = "completed"
+        elif training_session.status == SessionStatus.FAILED.value or (
             face_session
             and getattr(face_session, "status", None)
             == FaceDetectionSessionStatus.FAILED.value
         ):
             overall_status = "failed"
-        elif phase1_complete and phase2_complete and phase3_complete:
-            overall_status = "completed"
         elif training_session.status == SessionStatus.RUNNING.value or (
             face_session
             and getattr(face_session, "status", None)
