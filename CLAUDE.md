@@ -77,6 +77,26 @@ src/image_search_service/
 3. **Test migrations** - run `make migrate` locally before committing
 4. **No raw SQL in routes** - use SQLAlchemy ORM in service layer
 
+## Database Migration Safety
+
+**Full Guide**: `docs/database-migration-guide.md`
+
+🔴 **ALWAYS check before creating migrations**:
+```bash
+uv run alembic heads     # Must show SINGLE head
+make makemigrations      # Only then create migration
+```
+
+🔴 **Multiple heads error?** → Create merge migration first:
+```bash
+uv run alembic merge -m "merge" <head1> <head2>
+```
+
+🔴 **Migration requirements**:
+- Docstring explaining business context
+- Idempotent ops (`if_exists=True`)
+- Test: `make db-down && db-up && migrate`
+
 ## Logging Rules
 
 1. **Structured format** - use `core/logging.py` utilities
