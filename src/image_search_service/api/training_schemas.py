@@ -297,3 +297,43 @@ class TrainingEvidenceDetailResponse(BaseModel):
     error_message: str | None = Field(None, alias="errorMessage")
     metadata_json: dict[str, object] | None = Field(None, alias="metadataJson")
     created_at: datetime = Field(alias="createdAt")
+
+
+# ============================================================================
+# Unified Multi-Phase Progress Schemas
+# ============================================================================
+
+
+class PhaseProgress(BaseModel):
+    """Progress information for a single training phase."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str  # "training" | "face_detection" | "clustering"
+    status: str  # "pending" | "running" | "completed" | "failed" | "paused"
+    progress: ProgressStats
+    started_at: str | None = Field(None, alias="startedAt")
+    completed_at: str | None = Field(None, alias="completedAt")
+
+
+class OverallProgress(BaseModel):
+    """Overall progress across all phases."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    percentage: float = Field(..., ge=0, le=100)
+    eta_seconds: int | None = Field(None, alias="etaSeconds")
+    # "training" | "face_detection" | "clustering" | "completed"
+    current_phase: str = Field(alias="currentPhase")
+
+
+class UnifiedProgressResponse(BaseModel):
+    """Unified progress response combining all training phases."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: int = Field(alias="sessionId")
+    # "pending" | "running" | "completed" | "failed" | "paused"
+    overall_status: str = Field(alias="overallStatus")
+    overall_progress: OverallProgress = Field(alias="overallProgress")
+    phases: dict[str, PhaseProgress]  # Keys: "training", "faceDetection", "clustering"

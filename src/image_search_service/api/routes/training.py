@@ -17,6 +17,7 @@ from image_search_service.api.training_schemas import (
     TrainingSessionResponse,
     TrainingSessionUpdate,
     TrainingSubdirectoryResponse,
+    UnifiedProgressResponse,
 )
 from image_search_service.core.logging import get_logger
 from image_search_service.db.models import JobStatus, SessionStatus, TrainingSubdirectory
@@ -382,6 +383,52 @@ async def get_progress(
     service = TrainingService()
     try:
         return await service.get_session_progress(db, session_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/sessions/{session_id}/progress-unified",
+    response_model=UnifiedProgressResponse,
+    summary="Get unified progress across all training phases",
+    description=(
+        "Returns combined progress information for training (CLIP embeddings), "
+        "face detection (InsightFace), and clustering (HDBSCAN) phases. "
+        "Progress is weighted: 30% training, 65% face detection, 5% clustering."
+    ),
+)
+async def get_unified_progress(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> UnifiedProgressResponse:
+    """Get unified progress across all training phases.
+
+    This endpoint provides a single progress value (0-100%) that accounts for:
+    - Phase 1: CLIP embedding generation (30% weight)
+    - Phase 2: Face detection with InsightFace (65% weight)
+    - Phase 3: HDBSCAN clustering (5% weight)
+
+    Returns detailed progress for each phase along with overall status.
+
+    Args:
+        session_id: Training session ID
+        db: Database session
+
+    Returns:
+        Unified progress response
+
+    Raises:
+        HTTPException: If session not found
+    """
+    from typing import cast
+
+    service = TrainingService()
+    try:
+        result = await service.get_session_progress_unified(db, session_id)
+        return cast(UnifiedProgressResponse, result)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

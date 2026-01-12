@@ -2048,6 +2048,87 @@ When job fails:
 
 ---
 
+### Training Sessions
+
+Training session management for CLIP embedding generation and face detection workflows.
+
+#### Get Unified Training Progress
+
+Get combined progress across all training phases (training, face detection, clustering).
+
+**Endpoint**: `GET /api/v1/training/sessions/{sessionId}/progress-unified`
+
+**Path Parameters**:
+- `sessionId` (integer): Training session ID
+
+**Response** (200 OK):
+```json
+{
+	"sessionId": 123,
+	"overallStatus": "running",
+	"overallProgress": {
+		"percentage": 62.5,
+		"etaSeconds": 180,
+		"currentPhase": "face_detection"
+	},
+	"phases": {
+		"training": {
+			"name": "training",
+			"status": "completed",
+			"progress": {
+				"current": 1000,
+				"total": 1000,
+				"percentage": 100.0
+			},
+			"startedAt": "2026-01-12T10:00:00Z",
+			"completedAt": "2026-01-12T10:00:30Z"
+		},
+		"faceDetection": {
+			"name": "face_detection",
+			"status": "processing",
+			"progress": {
+				"current": 500,
+				"total": 1000,
+				"percentage": 50.0
+			},
+			"startedAt": "2026-01-12T10:00:35Z",
+			"completedAt": null
+		},
+		"clustering": {
+			"name": "clustering",
+			"status": "pending",
+			"progress": {
+				"current": 0,
+				"total": 1,
+				"percentage": 0.0
+			}
+		}
+	}
+}
+```
+
+**Progress Weights**:
+- Training (CLIP embeddings): 30%
+- Face Detection (InsightFace): 65%
+- Clustering (HDBSCAN): 5%
+
+**Overall Status Values**:
+- `pending`: No phases started
+- `running`: At least one phase is running
+- `completed`: All phases completed successfully
+- `failed`: At least one phase failed
+- `paused`: Training was paused
+
+**Current Phase Values**:
+- `training`: Phase 1 (CLIP embedding generation) in progress
+- `face_detection`: Phase 2 (face detection) in progress or pending
+- `clustering`: Phase 3 (clustering) in progress
+- `completed`: All phases finished
+
+**Response** (404 Not Found): Session not found
+
+---
+
 ### Corrections
 
 User feedback for improving search quality. **This is a future feature placeholder.**

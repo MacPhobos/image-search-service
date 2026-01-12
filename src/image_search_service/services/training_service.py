@@ -1005,3 +1005,269 @@ class TrainingService:
         )
 
         return subdirs
+
+    async def get_session_progress_unified(
+        self, db: AsyncSession, session_id: int
+    ) -> object:
+        """Get unified progress across all training phases.
+
+        Progress weights:
+        - Phase 1 (Training): 30% (fast GPU operation)
+        - Phase 2 (Face Detection): 65% (slowest operation)
+        - Phase 3 (Clustering): 5% (quick CPU operation)
+
+        Args:
+            db: Database session
+            session_id: Training session ID
+
+        Returns:
+            Unified progress response combining all phases
+
+        Raises:
+            ValueError: If session not found
+        """
+        from image_search_service.api.training_schemas import (
+            OverallProgress,
+            PhaseProgress,
+            ProgressStats,
+            UnifiedProgressResponse,
+        )
+        from image_search_service.db.models import (
+            FaceDetectionSession,
+            FaceDetectionSessionStatus,
+        )
+
+        # Get training session (Phase 1)
+        training_session = await self.get_session(db, session_id)
+        if not training_session:
+            raise ValueError(f"Training session {session_id} not found")
+
+        # Get face detection session (Phase 2/3)
+        face_session_query = select(FaceDetectionSession).where(
+            FaceDetectionSession.training_session_id == session_id
+        )
+        face_session_result = await db.execute(face_session_query)
+        face_session = face_session_result.scalar_one_or_none()
+
+        # Calculate phase progress
+        phase1_pct = (
+            (training_session.processed_images / training_session.total_images * 100)
+            if training_session.total_images > 0
+            else 0.0
+        )
+        phase1_complete = training_session.status == SessionStatus.COMPLETED.value
+
+        phase2_pct = 0.0
+        phase2_complete = False
+        phase3_complete = False
+
+        if face_session:
+            processed = getattr(face_session, "processed_images", 0)
+            total = getattr(face_session, "total_images", 0)
+            phase2_pct = (processed / total * 100) if total > 0 else 0.0
+            phase2_complete = (
+                getattr(face_session, "status", None)
+                == FaceDetectionSessionStatus.COMPLETED.value
+            )
+            # Phase 3 completes with Phase 2 (inline operation)
+            phase3_complete = phase2_complete and getattr(
+                face_session, "clusters_created", None
+            ) is not None
+
+        # Calculate overall progress (weighted)
+        overall_pct = (
+            (0.30 * phase1_pct)
+            + (0.65 * phase2_pct)
+            + (0.05 * (100 if phase3_complete else 0))
+        )
+
+        # Determine current phase
+        if phase3_complete:
+            current_phase = "completed"
+        elif face_session and getattr(
+            face_session, "status", None
+        ) == FaceDetectionSessionStatus.PROCESSING.value:
+            current_phase = "face_detection"
+        elif phase1_complete:
+            current_phase = "face_detection"  # Pending or starting
+        else:
+            current_phase = "training"
+
+        # Determine overall status
+        if training_session.status == SessionStatus.FAILED.value or (
+            face_session
+            and getattr(face_session, "status", None)
+            == FaceDetectionSessionStatus.FAILED.value
+        ):
+            overall_status = "failed"
+        elif phase1_complete and phase2_complete and phase3_complete:
+            overall_status = "completed"
+        elif training_session.status == SessionStatus.RUNNING.value or (
+            face_session
+            and getattr(face_session, "status", None)
+            == FaceDetectionSessionStatus.PROCESSING.value
+        ):
+            overall_status = "running"
+        else:
+            overall_status = "pending"
+
+        # Calculate combined ETA
+        eta_seconds = self._calculate_combined_eta(training_session, face_session)
+
+        return UnifiedProgressResponse(
+            sessionId=session_id,
+            overallStatus=overall_status,
+            overallProgress=OverallProgress(
+                percentage=round(overall_pct, 2),
+                etaSeconds=eta_seconds,
+                currentPhase=current_phase,
+            ),
+            phases={
+                "training": PhaseProgress(
+                    name="training",
+                    status=training_session.status,
+                    progress=ProgressStats(
+                        current=training_session.processed_images,
+                        total=training_session.total_images,
+                        percentage=round(phase1_pct, 2),
+                        etaSeconds=None,
+                        imagesPerMinute=None,
+                    ),
+                    startedAt=(
+                        training_session.started_at.isoformat()
+                        if training_session.started_at
+                        else None
+                    ),
+                    completedAt=(
+                        training_session.completed_at.isoformat()
+                        if training_session.completed_at
+                        else None
+                    ),
+                ),
+                "faceDetection": PhaseProgress(
+                    name="face_detection",
+                    status=(
+                        getattr(face_session, "status", "pending")
+                        if face_session
+                        else "pending"
+                    ),
+                    progress=ProgressStats(
+                        current=getattr(face_session, "processed_images", 0) if face_session else 0,
+                        total=(
+                            getattr(face_session, "total_images", training_session.total_images)
+                            if face_session
+                            else training_session.total_images
+                        ),
+                        percentage=round(phase2_pct, 2),
+                        etaSeconds=None,
+                        imagesPerMinute=None,
+                    ),
+                    startedAt=(
+                        (
+                            started_at_val.isoformat()
+                            if (started_at_val := getattr(face_session, "started_at", None))
+                            else None
+                        )
+                        if face_session
+                        else None
+                    ),
+                    completedAt=(
+                        (
+                            completed_at_val.isoformat()
+                            if (completed_at_val := getattr(face_session, "completed_at", None))
+                            else None
+                        )
+                        if face_session
+                        else None
+                    ),
+                ),
+                "clustering": PhaseProgress(
+                    name="clustering",
+                    status=(
+                        "completed"
+                        if phase3_complete
+                        else (
+                            "running"
+                            if face_session
+                            and getattr(face_session, "status", None)
+                            == FaceDetectionSessionStatus.PROCESSING.value
+                            else "pending"
+                        )
+                    ),
+                    progress=ProgressStats(
+                        current=1 if phase3_complete else 0,
+                        total=1,
+                        percentage=100.0 if phase3_complete else 0.0,
+                        etaSeconds=None,
+                        imagesPerMinute=None,
+                    ),
+                    startedAt=None,
+                    completedAt=None,
+                ),
+            },
+        )
+
+    def _calculate_combined_eta(
+        self, training_session: TrainingSession, face_session: object | None
+    ) -> int | None:
+        """Calculate ETA for all remaining phases.
+
+        Args:
+            training_session: Training session model
+            face_session: Face detection session model (may be None)
+
+        Returns:
+            Estimated time remaining in seconds, or None if cannot calculate
+        """
+        from image_search_service.db.models import FaceDetectionSessionStatus
+
+        # If training is running, calculate based on training rate
+        if (
+            training_session.status == SessionStatus.RUNNING.value
+            and training_session.started_at
+        ):
+            elapsed = (datetime.now(UTC) - training_session.started_at).total_seconds()
+            current = training_session.processed_images
+            total = training_session.total_images
+
+            if elapsed > 0 and current > 0:
+                images_per_sec = current / elapsed
+                remaining_training = total - current
+
+                # Estimate Phase 1 remaining
+                phase1_remaining = (
+                    remaining_training / images_per_sec if images_per_sec > 0 else 0
+                )
+
+                # Estimate Phase 2 (face detection is ~4x slower than training)
+                phase2_estimate = total * 4  # Conservative estimate
+
+                # Estimate Phase 3 (clustering is fixed ~15 seconds)
+                phase3_estimate = 15
+
+                return int(phase1_remaining + phase2_estimate + phase3_estimate)
+
+        # If face detection is running, calculate based on face detection rate
+        if face_session:
+            status = getattr(face_session, "status", None)
+            started_at = getattr(face_session, "started_at", None)
+            if (
+                status == FaceDetectionSessionStatus.PROCESSING.value
+                and started_at
+            ):
+                elapsed = (datetime.now(UTC) - started_at).total_seconds()
+                current = getattr(face_session, "processed_images", 0)
+                total = getattr(face_session, "total_images", 0)
+
+                if elapsed > 0 and current > 0:
+                    images_per_sec = current / elapsed
+                    remaining_faces = total - current
+
+                    phase2_remaining = (
+                        remaining_faces / images_per_sec if images_per_sec > 0 else 0
+                    )
+                    phase3_estimate = 15
+
+                    return int(phase2_remaining + phase3_estimate)
+
+        return None
