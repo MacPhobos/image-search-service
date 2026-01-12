@@ -64,6 +64,7 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SKIPPED = "skipped"
 
 
 class SubdirectoryStatus(str, Enum):
@@ -176,6 +177,9 @@ class ImageAsset(Base):
     # Full EXIF blob for extensibility (stores all readable EXIF tags)
     exif_metadata: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
 
+    # Perceptual hash for duplicate detection (dHash algorithm, 16-char hex)
+    perceptual_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Relationships
     training_jobs: Mapped[list["TrainingJob"]] = relationship(
         "TrainingJob", back_populates="asset", cascade="all, delete-orphan"
@@ -191,6 +195,7 @@ class ImageAsset(Base):
         Index("idx_image_assets_training_status", "training_status"),
         Index("idx_image_assets_file_modified_at", "file_modified_at"),
         Index("idx_image_assets_taken_at", "taken_at"),
+        Index("idx_image_assets_perceptual_hash", "perceptual_hash"),
     )
 
     def __repr__(self) -> str:
@@ -217,6 +222,7 @@ class TrainingSession(Base):
     total_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     processed_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -303,6 +309,8 @@ class TrainingJob(Base):
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     processing_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

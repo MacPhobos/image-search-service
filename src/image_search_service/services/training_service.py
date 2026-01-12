@@ -1,6 +1,8 @@
 """Training session management service."""
 
+from collections import defaultdict
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +18,7 @@ from image_search_service.api.training_schemas import (
 )
 from image_search_service.core.logging import get_logger
 from image_search_service.db.models import (
+    ImageAsset,
     JobStatus,
     SessionStatus,
     TrainingJob,
@@ -24,6 +27,7 @@ from image_search_service.db.models import (
 )
 from image_search_service.queue.worker import QUEUE_HIGH, get_queue
 from image_search_service.services.asset_discovery import AssetDiscoveryService
+from image_search_service.services.perceptual_hash import compute_perceptual_hash
 
 logger = get_logger(__name__)
 
@@ -242,6 +246,7 @@ class TrainingService:
             completed=job_counts.get(JobStatus.COMPLETED.value, 0),
             failed=job_counts.get(JobStatus.FAILED.value, 0),
             cancelled=job_counts.get(JobStatus.CANCELLED.value, 0),
+            skipped=job_counts.get(JobStatus.SKIPPED.value, 0),
         )
 
         # Calculate progress percentage
@@ -367,8 +372,17 @@ class TrainingService:
 
     async def create_training_jobs(
         self, db: AsyncSession, session_id: int, asset_ids: list[int]
-    ) -> int:
-        """Create TrainingJob records for a list of assets.
+    ) -> dict[str, int]:
+        """Create TrainingJob records for a list of assets with hash deduplication.
+
+        This method implements perceptual hash-based deduplication:
+        1. Query assets and compute missing perceptual hashes
+        2. Group assets by perceptual_hash
+        3. For each hash group:
+           - Create PENDING job for representative (oldest by created_at)
+           - Create SKIPPED jobs for duplicates with skip_reason
+        4. Store full image_path on ALL jobs for audit trail
+        5. Update session.skipped_images counter
 
         Args:
             db: Database session
@@ -376,7 +390,10 @@ class TrainingService:
             asset_ids: List of asset IDs to create jobs for
 
         Returns:
-            Number of jobs created
+            Dict with keys:
+            - jobs_created: Total jobs created (PENDING + SKIPPED)
+            - unique: Number of unique images (PENDING jobs)
+            - skipped: Number of duplicate images (SKIPPED jobs)
         """
         # Check which assets already have jobs for this session
         existing_query = (
@@ -387,28 +404,114 @@ class TrainingService:
         result = await db.execute(existing_query)
         existing_asset_ids = set(result.scalars().all())
 
-        # Create jobs only for assets without existing jobs
+        # Get assets that need jobs
         new_asset_ids = [aid for aid in asset_ids if aid not in existing_asset_ids]
 
-        jobs_created = 0
-        for asset_id in new_asset_ids:
-            job = TrainingJob(
-                session_id=session_id,
-                asset_id=asset_id,
-                status=JobStatus.PENDING.value,
-                progress=0,
-            )
-            db.add(job)
-            jobs_created += 1
+        if not new_asset_ids:
+            logger.debug(f"All {len(asset_ids)} assets already have jobs for session {session_id}")
+            return {"jobs_created": 0, "unique": 0, "skipped": 0}
+
+        # Query assets with their hashes
+        assets_query = select(ImageAsset).where(ImageAsset.id.in_(new_asset_ids))
+        result = await db.execute(assets_query)
+        assets = cast(list[ImageAsset], list(result.scalars().all()))
+
+        # Compute missing hashes and update database
+        for asset in assets:
+            if asset.perceptual_hash is None:
+                try:
+                    asset.perceptual_hash = compute_perceptual_hash(asset.path)
+                    logger.debug(f"Computed hash for asset {asset.id}: {asset.perceptual_hash}")
+                except Exception as e:
+                    logger.warning(f"Failed to compute hash for asset {asset.id}: {e}")
+                    # Continue without hash (will be treated as unique)
 
         await db.commit()
 
-        logger.debug(
-            f"Created {jobs_created} new training jobs for session {session_id} "
+        # Refresh each asset individually to get updated hashes
+        for asset in assets:
+            await db.refresh(asset)
+
+        # Group assets by perceptual_hash
+        hash_groups: dict[str | None, list[ImageAsset]] = defaultdict(list)
+        for asset in assets:
+            hash_groups[asset.perceptual_hash].append(asset)
+
+        # Sort each group by created_at (oldest first)
+        for hash_value in hash_groups:
+            hash_groups[hash_value].sort(key=lambda a: a.created_at)
+
+        # Create jobs with deduplication logic
+        jobs_created = 0
+        unique_count = 0
+        skipped_count = 0
+
+        for hash_value, group_assets in hash_groups.items():
+            if hash_value is None or len(group_assets) == 1:
+                # No hash or single asset: create PENDING job
+                for asset in group_assets:
+                    job = TrainingJob(
+                        session_id=session_id,
+                        asset_id=asset.id,
+                        status=JobStatus.PENDING.value,
+                        progress=0,
+                        image_path=asset.path,
+                    )
+                    db.add(job)
+                    jobs_created += 1
+                    unique_count += 1
+            else:
+                # Multiple assets with same hash: representative + duplicates
+                representative = group_assets[0]  # Oldest asset
+                duplicates = group_assets[1:]
+
+                # Create PENDING job for representative
+                representative_job = TrainingJob(
+                    session_id=session_id,
+                    asset_id=representative.id,
+                    status=JobStatus.PENDING.value,
+                    progress=0,
+                    image_path=representative.path,
+                )
+                db.add(representative_job)
+                jobs_created += 1
+                unique_count += 1
+
+                # Create SKIPPED jobs for duplicates
+                for duplicate in duplicates:
+                    duplicate_job = TrainingJob(
+                        session_id=session_id,
+                        asset_id=duplicate.id,
+                        status=JobStatus.SKIPPED.value,
+                        progress=100,  # Mark as complete
+                        image_path=duplicate.path,
+                        skip_reason=f"Duplicate of asset {representative.id}",
+                    )
+                    db.add(duplicate_job)
+                    jobs_created += 1
+                    skipped_count += 1
+
+        # Update session skipped_images counter
+        session_query = select(TrainingSession).where(TrainingSession.id == session_id)
+        session_result = await db.execute(session_query)
+        session = session_result.scalar_one_or_none()
+
+        if session:
+            session.skipped_images += skipped_count
+
+        await db.commit()
+
+        logger.info(
+            f"Created {jobs_created} training jobs for session {session_id}: "
+            f"{unique_count} unique, {skipped_count} skipped duplicates "
             f"({len(existing_asset_ids)} already existed)"
         )
 
-        return jobs_created
+        return {
+            "jobs_created": jobs_created,
+            "unique": unique_count,
+            "skipped": skipped_count,
+        }
 
     async def update_job_status(
         self,

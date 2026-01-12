@@ -1,5 +1,5 @@
 .PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
-	bootstrap-qdrant verify-qdrant exif-backfill \
+	bootstrap-qdrant verify-qdrant exif-backfill backfill-hashes \
 	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection \
 	faces-cluster-dual faces-train-matching faces-pipeline faces-pipeline-dual faces-pipeline-full
 
@@ -66,6 +66,10 @@ exif-backfill: ## Backfill EXIF metadata for existing images
 		$(if $(LIMIT),--limit $(LIMIT)) \
 		--batch-size $(or $(BATCH_SIZE),100) \
 		$(if $(DRY_RUN),--dry-run)
+
+backfill-hashes: ## Backfill perceptual hashes for existing assets
+	@echo "Backfilling perceptual hashes (batch_size=$(or $(BATCH_SIZE),500))..."
+	uv run python -m image_search_service.queue.hash_backfill_jobs $(or $(BATCH_SIZE),500)
 
 # Face detection and recognition targets
 faces-backfill: ## Backfill face detection for assets without faces

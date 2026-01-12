@@ -55,6 +55,7 @@ class TrainingSessionResponse(BaseModel):
     total_images: int = Field(alias="totalImages")
     processed_images: int = Field(alias="processedImages")
     failed_images: int = Field(alias="failedImages")
+    skipped_images: int = Field(0, alias="skippedImages")
     created_at: datetime = Field(alias="createdAt")
     started_at: datetime | None = Field(None, alias="startedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
@@ -109,6 +110,8 @@ class TrainingJobResponse(BaseModel):
     progress: int
     error_message: str | None = Field(None, alias="errorMessage")
     processing_time_ms: int | None = Field(None, alias="processingTimeMs")
+    image_path: str | None = Field(None, alias="imagePath")
+    skip_reason: str | None = Field(None, alias="skipReason")
     created_at: datetime = Field(alias="createdAt")
     started_at: datetime | None = Field(None, alias="startedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
@@ -152,6 +155,8 @@ class ProgressStats(BaseModel):
     percentage: float
     eta_seconds: int | None = Field(None, alias="etaSeconds")
     images_per_minute: float | None = Field(None, alias="imagesPerMinute")
+    unique: int | None = None
+    skipped: int | None = None
 
 
 class JobsSummary(BaseModel):
@@ -164,6 +169,7 @@ class JobsSummary(BaseModel):
     completed: int
     failed: int
     cancelled: int
+    skipped: int = 0
 
 
 class TrainingProgressResponse(BaseModel):
