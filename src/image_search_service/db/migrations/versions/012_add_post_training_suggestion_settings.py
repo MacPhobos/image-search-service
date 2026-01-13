@@ -1,7 +1,8 @@
 """add_post_training_suggestion_settings
 
 Add post-training suggestion generation settings:
-- post_training_suggestions_mode: Mode for generating suggestions (all persons or top N by face count)
+- post_training_suggestions_mode: Mode for generating suggestions
+  (all persons or top N by face count)
 - post_training_suggestions_top_n_count: Number of top persons when mode is top_n
 
 These settings control automatic suggestion generation after training sessions complete.
@@ -41,7 +42,9 @@ def upgrade() -> None:
 
     # Insert top N count setting (int: 1-100)
     op.execute("""
-        INSERT INTO system_configs (key, value, data_type, min_value, max_value, category, description)
+        INSERT INTO system_configs (
+            key, value, data_type, min_value, max_value, category, description
+        )
         VALUES (
             'post_training_suggestions_top_n_count',
             '10',
