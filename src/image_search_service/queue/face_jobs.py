@@ -446,6 +446,7 @@ def detect_faces_for_session_job(
     from image_search_service.db.models import (
         FaceDetectionSession,
         FaceDetectionSessionStatus,
+        FaceInstance,
         TrainingEvidence,
     )
     from image_search_service.faces.assigner import get_face_assigner
