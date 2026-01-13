@@ -791,7 +791,7 @@ def detect_faces_for_session_job(
         try:
             from sqlalchemy import func
 
-            from image_search_service.db.models import Face, Person
+            from image_search_service.db.models import FaceInstance, Person
             from image_search_service.queue.worker import get_redis
             from image_search_service.services.config_service import SyncConfigService
 
@@ -813,20 +813,20 @@ def detect_faces_for_session_job(
             if suggestions_mode == "all":
                 # Get ALL persons with at least 1 labeled face
                 persons_query = (
-                    db_session.query(Person.id, func.count(Face.id).label("face_count"))
-                    .join(Face, Face.person_id == Person.id)
+                    db_session.query(Person.id, func.count(FaceInstance.id).label("face_count"))
+                    .join(FaceInstance, FaceInstance.person_id == Person.id)
                     .group_by(Person.id)
-                    .having(func.count(Face.id) > 0)
-                    .order_by(func.count(Face.id).desc())
+                    .having(func.count(FaceInstance.id) > 0)
+                    .order_by(func.count(FaceInstance.id).desc())
                 )
             else:  # top_n
                 # Get TOP N persons by labeled face count
                 persons_query = (
-                    db_session.query(Person.id, func.count(Face.id).label("face_count"))
-                    .join(Face, Face.person_id == Person.id)
+                    db_session.query(Person.id, func.count(FaceInstance.id).label("face_count"))
+                    .join(FaceInstance, FaceInstance.person_id == Person.id)
                     .group_by(Person.id)
-                    .having(func.count(Face.id) > 0)
-                    .order_by(func.count(Face.id).desc())
+                    .having(func.count(FaceInstance.id) > 0)
+                    .order_by(func.count(FaceInstance.id).desc())
                     .limit(top_n_count)
                 )
 
