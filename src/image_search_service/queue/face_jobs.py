@@ -782,6 +782,99 @@ def detect_faces_for_session_job(
                 logger.error(f"[{job_id}] Clustering error (non-fatal): {e}")
                 # Don't fail the whole job if clustering fails
 
+        # ============================================================
+        # Post-Training Suggestion Generation
+        # ============================================================
+        suggestions_jobs_queued = 0
+        suggestions_mode = "all"
+
+        try:
+            from sqlalchemy import func
+
+            from image_search_service.db.models import Face, Person
+            from image_search_service.queue.worker import get_redis
+            from image_search_service.services.config_service import SyncConfigService
+
+            # Get configuration
+            sync_config = SyncConfigService(db_session)
+            suggestions_mode = sync_config.get_string("post_training_suggestions_mode")
+            top_n_count = sync_config.get_int("post_training_suggestions_top_n_count")
+
+            logger.info(
+                f"[{job_id}] Queuing post-training suggestions",
+                extra={
+                    "session_id": session_id,
+                    "mode": suggestions_mode,
+                    "top_n_count": top_n_count if suggestions_mode == "top_n" else None,
+                }
+            )
+
+            # Get persons to generate suggestions for
+            if suggestions_mode == "all":
+                # Get ALL persons with at least 1 labeled face
+                persons_query = (
+                    db_session.query(Person.id, func.count(Face.id).label("face_count"))
+                    .join(Face, Face.person_id == Person.id)
+                    .group_by(Person.id)
+                    .having(func.count(Face.id) > 0)
+                    .order_by(func.count(Face.id).desc())
+                )
+            else:  # top_n
+                # Get TOP N persons by labeled face count
+                persons_query = (
+                    db_session.query(Person.id, func.count(Face.id).label("face_count"))
+                    .join(Face, Face.person_id == Person.id)
+                    .group_by(Person.id)
+                    .having(func.count(Face.id) > 0)
+                    .order_by(func.count(Face.id).desc())
+                    .limit(top_n_count)
+                )
+
+            persons = persons_query.all()
+
+            if persons:
+                # Queue multi-prototype suggestion jobs
+                from rq import Queue
+
+                redis_client = get_redis()
+                queue = Queue("default", connection=redis_client)
+
+                for person in persons:
+                    job = queue.enqueue(
+                        "image_search_service.queue.face_jobs.propagate_person_label_multiproto_job",
+                        person_id=str(person.id),
+                        max_suggestions=50,  # Standard limit
+                        min_confidence=0.7,  # Standard threshold
+                        job_timeout="10m",
+                    )
+                    suggestions_jobs_queued += 1
+                    logger.debug(
+                        f"[{job_id}] Queued multi-proto suggestion job",
+                        extra={
+                            "person_id": str(person.id),
+                            "face_count": person.face_count,
+                            "job_id": job.id,
+                        }
+                    )
+
+                logger.info(
+                    f"[{job_id}] Post-training suggestion jobs queued",
+                    extra={
+                        "session_id": session_id,
+                        "jobs_queued": suggestions_jobs_queued,
+                        "mode": suggestions_mode,
+                    }
+                )
+            else:
+                logger.info(
+                    f"[{job_id}] No persons with labeled faces found, skipping post-training suggestions",
+                    extra={"session_id": session_id}
+                )
+
+        except Exception as e:
+            logger.error(f"[{job_id}] Post-training suggestion queuing error (non-fatal): {e}")
+            # Don't fail the whole job if suggestion queuing fails
+
         # Mark session as complete
         session.status = FaceDetectionSessionStatus.COMPLETED.value
         session.completed_at = datetime.now()
@@ -803,6 +896,8 @@ def detect_faces_for_session_job(
             "faces_detected": session.faces_detected,
             "faces_assigned": session.faces_assigned,
             "last_error": session.last_error,
+            "suggestions_jobs_queued": suggestions_jobs_queued,
+            "suggestions_mode": suggestions_mode,
         }
 
     except Exception as e:

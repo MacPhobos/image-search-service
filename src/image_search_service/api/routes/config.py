@@ -5,7 +5,7 @@ with a specialized endpoint for face matching settings.
 """
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,6 +55,9 @@ class FaceMatchingConfigResponse(BaseModel):
     suggestion_expiry_days: int
     prototype_min_quality: float
     prototype_max_exemplars: int
+    # Post-training suggestions
+    post_training_suggestions_mode: str
+    post_training_suggestions_top_n_count: int
 
 
 class FaceSuggestionSettingsResponse(BaseModel):
@@ -93,6 +96,9 @@ class FaceMatchingConfigUpdateRequest(BaseModel):
     suggestion_expiry_days: int = Field(default=30, ge=1, le=365)
     prototype_min_quality: float = Field(default=0.5, ge=0.0, le=1.0)
     prototype_max_exemplars: int = Field(default=5, ge=1, le=20)
+    # Post-training suggestions (optional)
+    post_training_suggestions_mode: Literal["all", "top_n"] | None = None
+    post_training_suggestions_top_n_count: int | None = Field(None, ge=1, le=100)
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> "FaceMatchingConfigUpdateRequest":
@@ -166,6 +172,9 @@ async def get_face_matching_config(
         suggestion_expiry_days=await service.get_int("face_suggestion_expiry_days"),
         prototype_min_quality=await service.get_float("face_prototype_min_quality"),
         prototype_max_exemplars=await service.get_int("face_prototype_max_exemplars"),
+        # Post-training suggestions
+        post_training_suggestions_mode=await service.get_string("post_training_suggestions_mode"),
+        post_training_suggestions_top_n_count=await service.get_int("post_training_suggestions_top_n_count"),
     )
 
 
@@ -198,6 +207,19 @@ async def update_face_matching_config(
         await service.set_value(
             "face_prototype_max_exemplars", request.prototype_max_exemplars
         )
+
+        # Post-training suggestions (optional updates)
+        if request.post_training_suggestions_mode is not None:
+            await service.set_value(
+                "post_training_suggestions_mode",
+                request.post_training_suggestions_mode
+            )
+
+        if request.post_training_suggestions_top_n_count is not None:
+            await service.set_value(
+                "post_training_suggestions_top_n_count",
+                str(request.post_training_suggestions_top_n_count)
+            )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -208,14 +230,8 @@ async def update_face_matching_config(
         f"prototype_max_exemplars={request.prototype_max_exemplars}"
     )
 
-    return FaceMatchingConfigResponse(
-        auto_assign_threshold=request.auto_assign_threshold,
-        suggestion_threshold=request.suggestion_threshold,
-        max_suggestions=request.max_suggestions,
-        suggestion_expiry_days=request.suggestion_expiry_days,
-        prototype_min_quality=request.prototype_min_quality,
-        prototype_max_exemplars=request.prototype_max_exemplars,
-    )
+    # Return updated config (fetch from DB to get all current values)
+    return await get_face_matching_config(db)
 
 
 @router.get("/face-suggestions", response_model=FaceSuggestionSettingsResponse)

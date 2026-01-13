@@ -29,6 +29,9 @@ class ConfigService:
         "face_prototype_max_exemplars": 5,
         "face_suggestion_groups_per_page": 10,
         "face_suggestion_items_per_group": 20,
+        # Post-training suggestions
+        "post_training_suggestions_mode": "all",
+        "post_training_suggestions_top_n_count": 10,
     }
 
     def __init__(self, db_session: AsyncSession):
