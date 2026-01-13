@@ -218,7 +218,7 @@ async def update_face_matching_config(
         if request.post_training_suggestions_top_n_count is not None:
             await service.set_value(
                 "post_training_suggestions_top_n_count",
-                str(request.post_training_suggestions_top_n_count)
+                request.post_training_suggestions_top_n_count
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
