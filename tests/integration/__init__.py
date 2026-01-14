@@ -1,1 +1,1 @@
-"""Integration tests for image search service."""
+"""Integration tests for restart workflows."""

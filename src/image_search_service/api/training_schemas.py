@@ -337,3 +337,37 @@ class UnifiedProgressResponse(BaseModel):
     overall_status: str = Field(alias="overallStatus")
     overall_progress: OverallProgress = Field(alias="overallProgress")
     phases: dict[str, PhaseProgress]  # Keys: "training", "faceDetection", "clustering"
+
+
+# ============================================================================
+# Restart Operation Schemas
+# ============================================================================
+
+
+class RestartResponseBase(BaseModel):
+    """Base response for all restart operations."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: int = Field(alias="sessionId")
+    status: str
+    message: str
+    cleanup_stats: dict[str, object] = Field(alias="cleanupStats")
+
+
+class TrainingRestartResponse(RestartResponseBase):
+    """Response for training restart (Phase 1: CLIP embeddings)."""
+
+    pass
+
+
+class FaceDetectionRestartResponse(RestartResponseBase):
+    """Response for face detection restart (Phase 2: InsightFace)."""
+
+    pass
+
+
+class ClusteringRestartResponse(RestartResponseBase):
+    """Response for clustering restart (Phase 3: HDBSCAN)."""
+
+    pass

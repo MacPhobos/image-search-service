@@ -6,13 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.api.schemas import PaginatedResponse
 from image_search_service.api.training_schemas import (
+    ClusteringRestartResponse,
     ControlResponse,
     DirectoryInfo,
     DirectoryScanRequest,
     DirectoryScanResponse,
+    FaceDetectionRestartResponse,
     SubdirectorySelectionUpdate,
     TrainingJobResponse,
     TrainingProgressResponse,
+    TrainingRestartResponse,
     TrainingSessionCreate,
     TrainingSessionResponse,
     TrainingSessionUpdate,
@@ -596,6 +599,213 @@ async def restart_training(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
+
+
+# ============================================================================
+# Restart Service Endpoints (Phase 1, 2, 3)
+# ============================================================================
+
+
+@router.post(
+    "/sessions/{session_id}/restart-training",
+    response_model=TrainingRestartResponse,
+    summary="Restart training (Phase 1: CLIP embeddings)",
+)
+async def restart_training_phase1(
+    session_id: int,
+    failed_only: bool = Query(
+        default=True, description="Reset only failed jobs (true) or all jobs (false)"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> TrainingRestartResponse:
+    """Restart Phase 1 training (CLIP embedding generation).
+
+    Options:
+    - failed_only=true: Retry only failed images (default)
+    - failed_only=false: Full restart (all images)
+
+    What this does:
+    - Resets training jobs to PENDING state
+    - Clears error messages and processing times
+    - Enqueues training job for background processing
+    - Existing Qdrant vectors will be overwritten (upsert)
+
+    Safety notes:
+    - Only restarts Phase 1 (CLIP embeddings)
+    - Face detection and clustering are unaffected
+    - Idempotent: safe to call multiple times
+    - Rollback on failure
+
+    State requirements:
+    - Training status: COMPLETED, FAILED, or CANCELLED
+    - No active training jobs running
+
+    Args:
+        session_id: Training session ID
+        failed_only: Reset only failed jobs (true) or all jobs (false)
+        db: Database session
+
+    Returns:
+        Restart response with cleanup statistics
+
+    Raises:
+        HTTPException:
+            - 400: Invalid state (RUNNING or PENDING)
+            - 404: Session not found
+            - 409: Active jobs still running
+    """
+    from image_search_service.services import TrainingRestartService
+
+    service = TrainingRestartService(failed_only=failed_only)
+
+    try:
+        stats = await service.restart(db, session_id)
+
+        restart_type = "failed jobs only" if failed_only else "full restart"
+        return TrainingRestartResponse(
+            sessionId=session_id,
+            status="pending",
+            message=f"Training restart initiated ({restart_type})",
+            cleanupStats=dict(stats),
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@router.post(
+    "/sessions/{session_id}/restart-faces",
+    response_model=FaceDetectionRestartResponse,
+    summary="Restart face detection (Phase 2: InsightFace)",
+)
+async def restart_face_detection_phase2(
+    session_id: int,
+    delete_persons: bool = Query(
+        default=False, description="Delete orphaned Person records after face cleanup"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> FaceDetectionRestartResponse:
+    """Restart Phase 2 face detection (InsightFace face detection and embedding).
+
+    Options:
+    - delete_persons=false: Preserve Person records (orphan them) - DEFAULT, SAFE
+    - delete_persons=true: Delete Person records with no remaining faces - DESTRUCTIVE
+
+    What this does:
+    - Deletes all Face records for this session
+    - Resets face detection counters to zero
+    - Optionally deletes orphaned Person records (use with caution)
+    - Enqueues face detection job for background processing
+
+    Safety notes:
+    - Only affects Phase 2 (face detection)
+    - CLIP embeddings (Phase 1) are preserved
+    - Clustering (Phase 3) will need to be rerun after face detection completes
+    - Idempotent: safe to call multiple times
+    - Rollback on failure
+
+    State requirements:
+    - Face detection status: COMPLETED, FAILED, or CANCELLED
+    - No active face detection jobs running
+
+    Args:
+        session_id: Training session ID
+        delete_persons: Delete orphaned Person records (destructive)
+        db: Database session
+
+    Returns:
+        Restart response with cleanup statistics
+
+    Raises:
+        HTTPException:
+            - 400: Invalid state (PROCESSING or PENDING)
+            - 404: Session not found
+            - 409: Active jobs still running
+    """
+    from image_search_service.services import FaceDetectionRestartService
+
+    service = FaceDetectionRestartService(delete_orphaned_persons=delete_persons)
+
+    try:
+        stats = await service.restart(db, session_id)
+
+        return FaceDetectionRestartResponse(
+            sessionId=session_id,
+            status="pending",
+            message=(
+                f"Face detection restart initiated "
+                f"({'with Person deletion' if delete_persons else 'preserving Persons'})"
+            ),
+            cleanupStats=dict(stats),
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@router.post(
+    "/sessions/{session_id}/restart-clustering",
+    response_model=ClusteringRestartResponse,
+    summary="Restart clustering (Phase 3: HDBSCAN)",
+)
+async def restart_clustering_phase3(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ClusteringRestartResponse:
+    """Restart Phase 3 clustering (HDBSCAN face clustering and person assignment).
+
+    What this does:
+    - Unassigns all faces (sets person_id to NULL)
+    - Resets face cluster assignments
+    - Runs clustering synchronously (fast operation, ~1-2 seconds)
+    - Returns completed status immediately
+
+    Safety notes:
+    - Only affects Phase 3 (clustering)
+    - CLIP embeddings (Phase 1) are preserved
+    - Face embeddings (Phase 2) are preserved
+    - Idempotent: safe to call multiple times
+    - No rollback needed (synchronous operation)
+
+    State requirements:
+    - Clustering can run at any time after face detection completes
+    - No state validation needed (clustering is always safe to rerun)
+
+    Args:
+        session_id: Training session ID
+        db: Database session
+
+    Returns:
+        Restart response with cleanup statistics (status="completed")
+
+    Raises:
+        HTTPException:
+            - 400: Invalid state or validation error
+            - 404: Session not found
+            - 409: Operation conflict
+    """
+    from image_search_service.services import FaceClusteringRestartService
+
+    service = FaceClusteringRestartService()
+
+    try:
+        stats = await service.restart(db, session_id)
+
+        return ClusteringRestartResponse(
+            sessionId=session_id,
+            status="completed",
+            message="Clustering restart completed",
+            cleanupStats=dict(stats),
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
 # ============================================================================
