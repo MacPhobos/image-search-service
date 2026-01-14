@@ -792,7 +792,7 @@ async def start_find_more_suggestions(
         find_more_suggestions_job,
         str(person_id),
         actual_count,
-        None,  # min_confidence (use system default)
+        request.min_confidence,  # Pass from request
         request.max_suggestions,
         progress_key,
         job_id=job_uuid,

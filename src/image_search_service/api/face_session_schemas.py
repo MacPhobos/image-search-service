@@ -221,6 +221,12 @@ class FindMoreSuggestionsRequest(CamelCaseModel):
         le=500,
         description="Maximum number of new suggestions to create",
     )
+    min_confidence: float | None = Field(
+        default=None,
+        ge=0.3,
+        le=1.0,
+        description="Minimum similarity threshold (0.3-1.0). Uses system default if not provided.",
+    )
 
 
 class FindMoreJobResponse(CamelCaseModel):
