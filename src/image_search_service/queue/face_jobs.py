@@ -1777,6 +1777,7 @@ def find_more_centroid_suggestions_job(
     min_similarity: float = 0.65,
     max_results: int = 200,
     unassigned_only: bool = True,
+    progress_key: str | None = None,
 ) -> dict[str, Any]:
     """Find more suggestions using person centroid (faster than dynamic prototypes).
 
@@ -1815,7 +1816,33 @@ def find_more_centroid_suggestions_job(
 
     db_session = get_sync_session()
 
+    # Helper to update progress
+    def update_progress(phase: str, current: int, total: int, message: str) -> None:
+        if not progress_key:
+            return
+        try:
+            from redis import Redis
+
+            from image_search_service.core.config import get_settings
+
+            settings = get_settings()
+            redis_client = Redis.from_url(settings.redis_url)
+
+            progress_data = {
+                "phase": phase,
+                "current": current,
+                "total": total,
+                "message": message,
+                "person_id": person_id,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            redis_client.set(progress_key, json.dumps(progress_data), ex=3600)
+        except Exception as e:
+            logger.warning(f"[{job_id}] Failed to update progress: {e}")
+
     try:
+        # Initial progress update
+        update_progress("starting", 0, 4, "Initializing centroid search")
         # 1. Get person
         person = db_session.get(Person, person_uuid)
         if not person:
@@ -1946,6 +1973,7 @@ def find_more_centroid_suggestions_job(
             )
 
         # 3. Get centroid vector from Qdrant
+        update_progress("retrieving", 1, 4, "Retrieved centroid embedding")
         centroid_qdrant = get_centroid_qdrant_client()
         centroid_vector = centroid_qdrant.get_centroid_vector(centroid.centroid_id)
 
@@ -1953,9 +1981,13 @@ def find_more_centroid_suggestions_job(
             logger.error(
                 f"[{job_id}] Centroid vector not found in Qdrant for {centroid.centroid_id}"
             )
+            update_progress("failed", 0, 0, "Centroid vector not found")
             return {"status": "error", "message": "Centroid vector not found"}
 
         # 4. Search faces collection using centroid
+        update_progress(
+            "searching", 2, 4, f"Searching for similar faces (threshold={min_similarity})"
+        )
         search_results = centroid_qdrant.search_faces_with_centroid(
             centroid_vector=centroid_vector,
             limit=max_results * 2,  # Get extra to account for filtering
@@ -1968,6 +2000,9 @@ def find_more_centroid_suggestions_job(
         )
 
         # 5. Get existing pending suggestions to avoid duplicates
+        update_progress(
+            "creating", 3, 4, f"Creating suggestions from {len(search_results)} matches"
+        )
         existing_pending_query = select(FaceSuggestion.face_instance_id).where(
             FaceSuggestion.suggested_person_id == person_uuid,
             FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
@@ -2032,6 +2067,14 @@ def find_more_centroid_suggestions_job(
             f"{duplicates_skipped} duplicates skipped"
         )
 
+        # Update final progress
+        update_progress(
+            "completed",
+            4,
+            4,
+            f"Created {suggestions_created} new suggestions",
+        )
+
         return {
             "status": "completed",
             "suggestions_created": suggestions_created,
@@ -2042,6 +2085,7 @@ def find_more_centroid_suggestions_job(
 
     except Exception as e:
         logger.exception(f"[{job_id}] Error in centroid-based find-more job: {e}")
+        update_progress("failed", 0, 0, str(e))
         return {"status": "error", "message": str(e)}
     finally:
         db_session.close()

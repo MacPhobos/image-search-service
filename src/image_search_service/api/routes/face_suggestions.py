@@ -859,6 +859,7 @@ async def start_find_more_centroid_suggestions(
 
     # Generate job UUID
     job_uuid = str(uuid_lib.uuid4())
+    progress_key = f"find_more_centroid:progress:{person_id}:{job_uuid}"
 
     # Get Redis connection
     settings = get_settings()
@@ -872,6 +873,7 @@ async def start_find_more_centroid_suggestions(
         request.min_similarity,
         request.max_results,
         request.unassigned_only,
+        progress_key,
         job_id=job_uuid,
     )
 
@@ -887,5 +889,5 @@ async def start_find_more_centroid_suggestions(
         prototype_count=1,  # Using single centroid
         labeled_face_count=labeled_count,
         status="queued",
-        progress_key=f"find_more_centroid:progress:{person_id}:{job_uuid}",
+        progress_key=progress_key,
     )
