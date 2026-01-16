@@ -630,6 +630,22 @@ class FaceAssignmentEvent(Base):
         )
 
 
+class CentroidType(str, Enum):
+    """Type enum for person centroids."""
+
+    GLOBAL = "global"  # Computed from all faces of a person
+    CLUSTER = "cluster"  # Computed from a specific sub-cluster
+
+
+class CentroidStatus(str, Enum):
+    """Status enum for person centroids."""
+
+    ACTIVE = "active"  # Currently valid and in use
+    DEPRECATED = "deprecated"  # Outdated by newer version
+    BUILDING = "building"  # Currently being computed
+    FAILED = "failed"  # Computation failed
+
+
 class FaceDetectionSessionStatus(str, Enum):
     """Status enum for face detection sessions."""
 
@@ -835,3 +851,103 @@ class SystemConfig(Base):
 
     def __repr__(self) -> str:
         return f"<SystemConfig(key={self.key}, value={self.value}, category={self.category})>"
+
+
+class PersonCentroid(Base):
+    """Person centroid for robust face recognition with versioning support.
+
+    Stores computed centroid embeddings for persons in Qdrant with metadata
+    for versioning, staleness detection, and multi-centroid support.
+
+    Centroids are average embeddings computed from all verified face instances
+    of a person, providing a robust reference point for face→person matching.
+    """
+
+    __tablename__ = "person_centroid"
+
+    centroid_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("persons.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Qdrant reference (1:1 mapping)
+    qdrant_point_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), unique=True, nullable=False
+    )
+
+    # Versioning
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    centroid_version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Centroid type and clustering
+    centroid_type: Mapped[CentroidType] = mapped_column(
+        SQLEnum(
+            CentroidType,
+            name="centroid_type_enum",
+            create_type=False,  # Will be created in migration
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=CentroidType.GLOBAL,
+    )
+    cluster_label: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, default="global"
+    )
+
+    # Build metadata
+    n_faces: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[CentroidStatus] = mapped_column(
+        SQLEnum(
+            CentroidStatus,
+            name="centroid_status_enum",
+            create_type=False,  # Will be created in migration
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=CentroidStatus.ACTIVE,
+    )
+
+    # Staleness detection
+    source_face_ids_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Algorithm parameters (JSON)
+    build_params: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    person: Mapped["Person"] = relationship("Person")
+
+    __table_args__ = (
+        Index("ix_person_centroid_person_id", "person_id"),
+        Index("ix_person_centroid_version", "person_id", "model_version", "centroid_version"),
+        Index("ix_person_centroid_status", "status"),
+        Index(
+            "ix_person_centroid_unique_active",
+            "person_id",
+            "model_version",
+            "centroid_version",
+            "centroid_type",
+            "cluster_label",
+            unique=True,
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PersonCentroid(id={self.centroid_id}, person_id={self.person_id}, "
+            f"type={self.centroid_type}, status={self.status})>"
+        )

@@ -181,6 +181,44 @@ class Settings(BaseSettings):
         description="Maximum age for adult era (36-55 years)",
     )
 
+    # Person centroid settings
+    centroid_model_version: str = Field(
+        default="arcface_r100_glint360k_v1",
+        alias="CENTROID_MODEL_VERSION",
+        description="Embedding model version for centroids",
+    )
+    centroid_algorithm_version: int = Field(
+        default=2,
+        alias="CENTROID_ALGORITHM_VERSION",
+        description="Centroid computation algorithm version",
+    )
+    centroid_min_faces: int = Field(
+        default=2,
+        ge=1,
+        alias="CENTROID_MIN_FACES",
+        description="Minimum number of faces required to compute centroid",
+    )
+    centroid_clustering_min_faces: int = Field(
+        default=200,
+        ge=50,
+        alias="CENTROID_CLUSTERING_MIN_FACES",
+        description="Minimum faces for cluster-based centroid computation",
+    )
+    centroid_trim_threshold_small: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=0.2,
+        alias="CENTROID_TRIM_THRESHOLD_SMALL",
+        description="Outlier trim threshold for 50-300 faces (5% default)",
+    )
+    centroid_trim_threshold_large: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=0.3,
+        alias="CENTROID_TRIM_THRESHOLD_LARGE",
+        description="Outlier trim threshold for 300+ faces (10% default)",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,7 +1,7 @@
 # Image Search API Contract
 
-> **Version**: 1.15.0
-> **Last Updated**: 2026-01-10
+> **Version**: 1.17.0
+> **Last Updated**: 2026-01-16
 > **Status**: FROZEN - Changes require version bump and UI sync
 
 This document defines the API contract between `image-search-service` (backend) and `image-search-ui` (frontend).
@@ -21,6 +21,7 @@ This document defines the API contract between `image-search-service` (backend) 
    - [People/Faces](#peoplefaces)
    - [Face Suggestions](#face-suggestions)
    - [Face Clusters](#face-clusters)
+   - [Face Centroids](#face-centroids)
    - [Temporal Prototypes](#temporal-prototypes)
    - [Configuration](#configuration)
    - [Jobs](#jobs)
@@ -1422,6 +1423,330 @@ GET /api/v1/faces/clusters?page=2&page_size=50
 
 ---
 
+### Face Centroids
+
+Face centroid management for person identity representation. Centroids are computed average embeddings of a person's labeled faces, used for efficient similarity matching and face suggestion generation. Supports both global centroids (all faces) and cluster-based centroids (subdivided by temporal/quality groups).
+
+#### Centroid Schema
+
+```typescript
+interface Centroid {
+	centroidId: string; // UUID
+	centroidType: 'global' | 'cluster'; // Centroid type
+	clusterLabel: string; // Cluster identifier (e.g., "global", "cluster_0")
+	nFaces: number; // Number of faces used to compute centroid
+	modelVersion: string; // Embedding model version (e.g., "arcface_r100_glint360k_v1")
+	centroidVersion: number; // Centroid algorithm version
+	createdAt: string; // ISO 8601 timestamp
+	isStale: boolean; // Whether centroid needs recomputation
+}
+```
+
+#### PersonCentroidsResponse Schema
+
+```typescript
+interface PersonCentroidsResponse {
+	personId: string; // UUID
+	centroids: Centroid[]; // Array of centroids
+	rebuilt?: boolean; // Whether centroids were rebuilt (POST only)
+	isStale: boolean; // Whether any centroid is stale
+	staleReason: string | null; // Reason for staleness (if applicable)
+}
+```
+
+#### CentroidSuggestion Schema
+
+```typescript
+interface CentroidSuggestion {
+	faceInstanceId: string; // UUID of suggested face
+	assetId: string; // UUID of parent asset
+	score: number; // Similarity score (0.0-1.0)
+	matchedCentroid: string; // Cluster label of matching centroid
+	thumbnailUrl: string; // Face thumbnail URL
+}
+```
+
+#### CentroidSuggestionsResponse Schema
+
+```typescript
+interface CentroidSuggestionsResponse {
+	personId: string; // UUID
+	centroidsUsed: string[]; // Array of centroid IDs used for search
+	suggestions: CentroidSuggestion[]; // Array of suggested faces
+	totalFound: number; // Total number of suggestions found
+	rebuiltCentroids: boolean; // Whether centroids were rebuilt during request
+}
+```
+
+#### `POST /api/v1/faces/centroids/persons/{person_id}/compute`
+
+Compute or recompute centroids for a person. By default, creates a single global centroid from all labeled faces. Optionally enable clustering to create multiple centroids for improved representation diversity.
+
+**Path Parameters**
+
+| Parameter   | Type   | Required | Description      |
+| ----------- | ------ | -------- | ---------------- |
+| `person_id` | string | Yes      | Person ID (UUID) |
+
+**Request Body**
+
+```json
+{
+	"forceRebuild": false,
+	"enableClustering": false,
+	"minFaces": 2
+}
+```
+
+| Field              | Type    | Required | Default | Description                                               |
+| ------------------ | ------- | -------- | ------- | --------------------------------------------------------- |
+| `forceRebuild`     | boolean | No       | false   | Force recomputation even if centroids exist               |
+| `enableClustering` | boolean | No       | false   | Create cluster-based centroids (requires ≥10 faces)       |
+| `minFaces`         | integer | No       | 2       | Minimum number of labeled faces required (1-100)          |
+
+**Response** `200 OK`
+
+```json
+{
+	"personId": "550e8400-e29b-41d4-a716-446655440000",
+	"centroids": [
+		{
+			"centroidId": "660e8400-e29b-41d4-a716-446655440111",
+			"centroidType": "global",
+			"clusterLabel": "global",
+			"nFaces": 150,
+			"modelVersion": "arcface_r100_glint360k_v1",
+			"centroidVersion": 2,
+			"createdAt": "2026-01-16T10:30:00Z",
+			"isStale": false
+		}
+	],
+	"rebuilt": true,
+	"isStale": false,
+	"staleReason": null
+}
+```
+
+**Response** `404 Not Found` - Person not found
+
+```json
+{
+	"error": {
+		"code": "PERSON_NOT_FOUND",
+		"message": "Person with ID '550e8400-...' not found"
+	}
+}
+```
+
+**Response** `422 Unprocessable Entity` - Insufficient labeled faces
+
+```json
+{
+	"error": {
+		"code": "INSUFFICIENT_FACES",
+		"message": "Person has only 1 labeled face. Minimum 2 required."
+	}
+}
+```
+
+**Notes:**
+- Global centroid requires at least `minFaces` labeled faces (default: 2)
+- Cluster-based centroids require at least 10 labeled faces
+- Automatically marks old centroids as stale when creating new ones
+- Uses InsightFace embeddings (512-dimensional vectors)
+
+#### `GET /api/v1/faces/centroids/persons/{person_id}`
+
+Get existing centroids for a person without triggering recomputation.
+
+**Path Parameters**
+
+| Parameter   | Type   | Required | Description      |
+| ----------- | ------ | -------- | ---------------- |
+| `person_id` | string | Yes      | Person ID (UUID) |
+
+**Query Parameters**
+
+| Parameter      | Type    | Default | Description                              |
+| -------------- | ------- | ------- | ---------------------------------------- |
+| `includeStale` | boolean | false   | Include deprecated/stale centroids       |
+
+**Response** `200 OK`
+
+```json
+{
+	"personId": "550e8400-e29b-41d4-a716-446655440000",
+	"centroids": [
+		{
+			"centroidId": "660e8400-e29b-41d4-a716-446655440111",
+			"centroidType": "global",
+			"clusterLabel": "global",
+			"nFaces": 150,
+			"modelVersion": "arcface_r100_glint360k_v1",
+			"centroidVersion": 2,
+			"createdAt": "2026-01-16T10:30:00Z",
+			"isStale": false
+		}
+	],
+	"isStale": false,
+	"staleReason": null
+}
+```
+
+**Response** `404 Not Found` - Person not found
+
+```json
+{
+	"error": {
+		"code": "PERSON_NOT_FOUND",
+		"message": "Person with ID '550e8400-...' not found"
+	}
+}
+```
+
+**Response** `200 OK` - No centroids exist (empty array)
+
+```json
+{
+	"personId": "550e8400-e29b-41d4-a716-446655440000",
+	"centroids": [],
+	"isStale": true,
+	"staleReason": "No centroids exist for this person"
+}
+```
+
+#### `POST /api/v1/faces/centroids/persons/{person_id}/suggestions`
+
+Get face suggestions using person centroids. Searches for unassigned faces similar to the person's centroid embeddings. Optionally auto-rebuild stale centroids before searching.
+
+**Path Parameters**
+
+| Parameter   | Type   | Required | Description      |
+| ----------- | ------ | -------- | ---------------- |
+| `person_id` | string | Yes      | Person ID (UUID) |
+
+**Request Body**
+
+```json
+{
+	"minSimilarity": 0.65,
+	"maxResults": 200,
+	"unassignedOnly": true,
+	"excludePrototypes": true,
+	"autoRebuild": true
+}
+```
+
+| Field               | Type    | Required | Default | Description                                          |
+| ------------------- | ------- | -------- | ------- | ---------------------------------------------------- |
+| `minSimilarity`     | number  | No       | 0.65    | Minimum cosine similarity threshold (0.3-1.0)        |
+| `maxResults`        | integer | No       | 200     | Maximum number of suggestions to return (1-1000)     |
+| `unassignedOnly`    | boolean | No       | true    | Only return faces not assigned to any person         |
+| `excludePrototypes` | boolean | No       | true    | Exclude faces already used as prototypes             |
+| `autoRebuild`       | boolean | No       | true    | Auto-rebuild centroids if stale before searching     |
+
+**Response** `200 OK`
+
+```json
+{
+	"personId": "550e8400-e29b-41d4-a716-446655440000",
+	"centroidsUsed": ["660e8400-e29b-41d4-a716-446655440111"],
+	"suggestions": [
+		{
+			"faceInstanceId": "770e8400-e29b-41d4-a716-446655440222",
+			"assetId": "880e8400-e29b-41d4-a716-446655440333",
+			"score": 0.78,
+			"matchedCentroid": "global",
+			"thumbnailUrl": "/api/v1/faces/770e8400-e29b-41d4-a716-446655440222/thumbnail"
+		},
+		{
+			"faceInstanceId": "990e8400-e29b-41d4-a716-446655440444",
+			"assetId": "aa0e8400-e29b-41d4-a716-446655440555",
+			"score": 0.73,
+			"matchedCentroid": "global",
+			"thumbnailUrl": "/api/v1/faces/990e8400-e29b-41d4-a716-446655440444/thumbnail"
+		}
+	],
+	"totalFound": 150,
+	"rebuiltCentroids": false
+}
+```
+
+**Response** `404 Not Found` - Person not found
+
+```json
+{
+	"error": {
+		"code": "PERSON_NOT_FOUND",
+		"message": "Person with ID '550e8400-...' not found"
+	}
+}
+```
+
+**Response** `422 Unprocessable Entity` - No centroids available
+
+```json
+{
+	"error": {
+		"code": "CENTROIDS_NOT_AVAILABLE",
+		"message": "No centroids available for person. Compute centroids first."
+	}
+}
+```
+
+**Notes:**
+- Returns suggestions sorted by similarity score (highest first)
+- If `autoRebuild: true` and centroids are stale, automatically recomputes them
+- Uses InsightFace embedding similarity (cosine distance)
+- Results limited to `maxResults` parameter
+
+#### `DELETE /api/v1/faces/centroids/persons/{person_id}`
+
+Delete all centroids for a person. Centroids will be rebuilt on next compute or suggestion request. Useful when person's labeled faces have changed significantly.
+
+**Path Parameters**
+
+| Parameter   | Type   | Required | Description      |
+| ----------- | ------ | -------- | ---------------- |
+| `person_id` | string | Yes      | Person ID (UUID) |
+
+**Response** `200 OK`
+
+```json
+{
+	"personId": "550e8400-e29b-41d4-a716-446655440000",
+	"deletedCount": 2
+}
+```
+
+**Response** `404 Not Found` - Person not found
+
+```json
+{
+	"error": {
+		"code": "PERSON_NOT_FOUND",
+		"message": "Person with ID '550e8400-...' not found"
+	}
+}
+```
+
+**Response** `200 OK` - No centroids to delete
+
+```json
+{
+	"personId": "550e8400-e29b-41d4-a716-446655440000",
+	"deletedCount": 0
+}
+```
+
+**Notes:**
+- Does not affect labeled faces or prototypes
+- Next compute request will create fresh centroids
+- Suggestion requests with `autoRebuild: true` will trigger rebuild
+- Deletion is idempotent (safe to call multiple times)
+
+---
+
 ### Temporal Prototypes
 
 Manage person prototypes with temporal diversity. Prototypes are exemplar faces representing a person across different age eras. The system supports pinned (user-selected) and automatic prototypes with temporal coverage reporting.
@@ -2445,6 +2770,8 @@ All errors return JSON with consistent structure.
 | `PROTOTYPE_QUOTA_EXCEEDED`   | 400         | Maximum PRIMARY prototypes exceeded  |
 | `TEMPORAL_QUOTA_EXCEEDED`    | 400         | Era already has TEMPORAL prototype   |
 | `FACE_PERSON_MISMATCH`       | 400         | Face does not belong to person       |
+| `INSUFFICIENT_FACES`         | 422         | Insufficient labeled faces for operation |
+| `CENTROIDS_NOT_AVAILABLE`    | 422         | No centroids available for person    |
 | `RATE_LIMITED`               | 429         | Too many requests                    |
 | `INTERNAL_ERROR`             | 500         | Server error                         |
 
@@ -2538,6 +2865,7 @@ All endpoints except:
 
 | Version | Date       | Changes                                                                                      |
 | ------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 1.17.0  | 2026-01-16 | Added Face Centroids section with 4 new endpoints: POST /api/v1/faces/centroids/persons/{person_id}/compute (compute/recompute centroids with optional clustering), GET /api/v1/faces/centroids/persons/{person_id} (retrieve existing centroids), POST /api/v1/faces/centroids/persons/{person_id}/suggestions (get face suggestions using centroid similarity), DELETE /api/v1/faces/centroids/persons/{person_id} (delete all centroids for person). Added Centroid, PersonCentroidsResponse, CentroidSuggestion, and CentroidSuggestionsResponse schemas. Added INSUFFICIENT_FACES and CENTROIDS_NOT_AVAILABLE error codes (HTTP 422). Centroids provide efficient face suggestion generation by computing average embeddings of labeled faces, supporting both global (all faces) and cluster-based (subdivided) representations. |
 | 1.16.0  | 2026-01-14 | Added optional `minConfidence` field to POST /api/v1/faces/suggestions/persons/{person_id}/find-more endpoint. Allows customizing similarity threshold (0.3-1.0) for finding suggestions. Uses system default (0.70) when not provided. |
 | 1.15.0  | 2026-01-10 | Added "Find More Suggestions" feature with dynamic prototype sampling. Added POST /api/v1/faces/suggestions/persons/{person_id}/find-more endpoint to start background job finding additional suggestions using random face sampling. Added Job Progress section with GET /api/v1/job-progress/events (SSE streaming) and GET /api/v1/job-progress/status (polling) endpoints for real-time job progress monitoring. Enhanced POST /api/v1/faces/suggestions/bulk-action with optional `autoFindMore` and `findMorePrototypeCount` fields to auto-trigger find-more jobs after accepting suggestions. Response includes optional `findMoreJobs` array with job IDs and progress keys. Added JobProgress schema for progress tracking. |
 | 1.14.0  | 2026-01-09 | Added `path` field to FaceSuggestion schema exposing the original filesystem path of the image asset. |

@@ -7,6 +7,9 @@ from image_search_service.api.routes.assets import router as assets_router
 from image_search_service.api.routes.categories import router as categories_router
 from image_search_service.api.routes.config import router as config_router
 from image_search_service.api.routes.evidence import router as evidence_router
+from image_search_service.api.routes.face_centroids import (
+    router as face_centroids_router,
+)
 from image_search_service.api.routes.face_sessions import router as face_sessions_router
 from image_search_service.api.routes.face_suggestions import (
     router as face_suggestions_router,
@@ -56,6 +59,7 @@ api_v1_router.include_router(vectors_router)
 api_v1_router.include_router(faces_router)
 api_v1_router.include_router(face_sessions_router)
 api_v1_router.include_router(face_suggestions_router)
+api_v1_router.include_router(face_centroids_router)
 api_v1_router.include_router(queues_router)
 api_v1_router.include_router(jobs_router)
 api_v1_router.include_router(workers_router)
