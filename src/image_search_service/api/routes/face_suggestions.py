@@ -19,6 +19,7 @@ from image_search_service.api.face_session_schemas import (
     FaceSuggestionListResponse,
     FaceSuggestionResponse,
     FaceSuggestionsGroupedResponse,
+    FindMoreCentroidRequest,
     FindMoreJobInfo,
     FindMoreJobResponse,
     FindMoreSuggestionsRequest,
@@ -811,4 +812,80 @@ async def start_find_more_suggestions(
         labeled_face_count=labeled_count,
         status="queued",
         progress_key=progress_key,
+    )
+
+
+@router.post(
+    "/persons/{person_id}/find-more-centroid",
+    response_model=FindMoreJobResponse,
+    status_code=201,
+    summary="Start job to find more suggestions using person centroid",
+    description="""
+    Uses the person's centroid embedding for faster, more consistent matching.
+    Centroids are computed from all labeled faces for the person and provide
+    a robust average representation.
+
+    If no centroid exists, one will be computed on-demand.
+    Requires at least 5 labeled faces for centroid computation.
+    """,
+)
+async def start_find_more_centroid_suggestions(
+    person_id: UUID,
+    request: FindMoreCentroidRequest,
+    db: AsyncSession = Depends(get_db),
+) -> FindMoreJobResponse:
+    """Start a background job to find more suggestions using centroid matching."""
+    from image_search_service.queue.face_jobs import find_more_centroid_suggestions_job
+
+    # Validate person exists
+    person = await db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    # Count available labeled faces
+    labeled_count_result = await db.execute(
+        select(func.count()).where(FaceInstance.person_id == person_id)
+    )
+    labeled_count = labeled_count_result.scalar() or 0
+
+    if labeled_count < 5:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Person has only {labeled_count} labeled faces. "
+                "Minimum 5 required for centroid."
+            ),
+        )
+
+    # Generate job UUID
+    job_uuid = str(uuid_lib.uuid4())
+
+    # Get Redis connection
+    settings = get_settings()
+    redis_conn = Redis.from_url(settings.redis_url)
+
+    # Enqueue job
+    queue = Queue(connection=redis_conn)
+    job = queue.enqueue(
+        find_more_centroid_suggestions_job,
+        str(person_id),
+        request.min_similarity,
+        request.max_results,
+        request.unassigned_only,
+        job_id=job_uuid,
+    )
+
+    logger.info(
+        f"Started centroid find-more job {job.id} for person {person.name} "
+        f"(similarity={request.min_similarity}, max={request.max_results})"
+    )
+
+    return FindMoreJobResponse(
+        job_id=job.id,
+        person_id=str(person_id),
+        person_name=person.name,
+        prototype_count=1,  # Using single centroid
+        labeled_face_count=labeled_count,
+        status="queued",
+        progress_key=f"find_more_centroid:progress:{person_id}:{job_uuid}",
     )

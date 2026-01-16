@@ -229,6 +229,27 @@ class FindMoreSuggestionsRequest(CamelCaseModel):
     )
 
 
+class FindMoreCentroidRequest(CamelCaseModel):
+    """Request to find more suggestions using person centroid."""
+
+    min_similarity: float = Field(
+        default=0.65,
+        ge=0.5,
+        le=0.95,
+        description="Minimum cosine similarity threshold",
+    )
+    max_results: int = Field(
+        default=200,
+        ge=1,
+        le=500,
+        description="Maximum number of new suggestions to create",
+    )
+    unassigned_only: bool = Field(
+        default=True,
+        description="If true, only suggest faces not assigned to any person",
+    )
+
+
 class FindMoreJobResponse(CamelCaseModel):
     """Response when starting a find-more job."""
 

@@ -868,8 +868,9 @@ def detect_faces_for_session_job(
                 )
             else:
                 logger.info(
-                    f"[{job_id}] No persons with labeled faces found, skipping post-training suggestions",
-                    extra={"session_id": session_id}
+                    f"[{job_id}] No persons with labeled faces found, "
+                    "skipping post-training suggestions",
+                    extra={"session_id": session_id},
                 )
 
         except Exception as e:
@@ -1766,6 +1767,281 @@ def propagate_person_label_multiproto_job(
 
     except Exception as e:
         logger.exception(f"[{job_id}] Error in multi-prototype propagation job: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        db_session.close()
+
+
+def find_more_centroid_suggestions_job(
+    person_id: str,
+    min_similarity: float = 0.65,
+    max_results: int = 200,
+    unassigned_only: bool = True,
+) -> dict[str, Any]:
+    """Find more suggestions using person centroid (faster than dynamic prototypes).
+
+    Flow:
+    1. Get or compute centroid for person (use CentroidService)
+    2. Search Qdrant faces collection using centroid embedding
+    3. Filter results (exclude already-assigned faces if unassigned_only)
+    4. Create FaceSuggestion records for matches (status=PENDING)
+    5. Return job result with counts
+
+    Args:
+        person_id: UUID string of the person
+        min_similarity: Minimum cosine similarity threshold (0.5-0.95)
+        max_results: Maximum number of suggestions to create (1-500)
+        unassigned_only: If True, only suggest unassigned faces
+
+    Returns:
+        dict with: suggestions_created, centroids_used, candidates_found,
+        duplicates_skipped
+    """
+    import uuid as uuid_lib
+
+    from image_search_service.db.models import CentroidType, Person, PersonCentroid
+    from image_search_service.vector.centroid_qdrant import get_centroid_qdrant_client
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    person_uuid = uuid_lib.UUID(person_id)
+
+    logger.info(
+        f"[{job_id}] Starting centroid-based find-more for person {person_id} "
+        f"(min_similarity={min_similarity}, max_results={max_results})"
+    )
+
+    db_session = get_sync_session()
+
+    try:
+        # 1. Get person
+        person = db_session.get(Person, person_uuid)
+        if not person:
+            logger.warning(f"[{job_id}] Person {person_id} not found")
+            return {"status": "error", "message": "Person not found"}
+
+        # 2. Get or compute active centroid
+        centroid_query = (
+            select(PersonCentroid)
+            .where(
+                PersonCentroid.person_id == person_uuid,
+                PersonCentroid.status == "active",
+                PersonCentroid.centroid_type == CentroidType.GLOBAL,
+            )
+            .order_by(PersonCentroid.created_at.desc())
+            .limit(1)
+        )
+        centroid_result = db_session.execute(centroid_query)
+        centroid = centroid_result.scalar_one_or_none()
+
+        if not centroid:
+            # Compute centroid on-demand (sync operation)
+            logger.info(f"[{job_id}] No active centroid found, computing...")
+
+            # Import sync centroid computation utilities
+            from image_search_service.db.models import FaceInstance
+
+            # Get all face instances for this person
+            faces_query = select(FaceInstance).where(FaceInstance.person_id == person_uuid)
+            faces = list(db_session.execute(faces_query).scalars().all())
+
+            if len(faces) < 5:
+                logger.warning(
+                    f"[{job_id}] Only {len(faces)} faces available "
+                    f"(minimum 5 required for centroid)"
+                )
+                return {
+                    "status": "error",
+                    "message": f"Only {len(faces)} faces (need 5+)",
+                }
+
+            # Retrieve embeddings from Qdrant
+            face_qdrant = get_face_qdrant_client()
+            embeddings = []
+            face_ids = []
+
+            for face in faces:
+                if face.qdrant_point_id:
+                    embedding = face_qdrant.get_embedding_by_point_id(face.qdrant_point_id)
+                    if embedding:
+                        embeddings.append(embedding)
+                        face_ids.append(face.id)
+
+            if len(embeddings) < 5:
+                logger.warning(
+                    f"[{job_id}] Only {len(embeddings)} embeddings found in Qdrant "
+                    f"(minimum 5 required)"
+                )
+                return {
+                    "status": "error",
+                    "message": f"Only {len(embeddings)} embeddings (need 5+)",
+                }
+
+            # Compute centroid vector
+            import hashlib
+
+            import numpy as np
+
+            from image_search_service.core.config import get_settings
+
+            embeddings_array = np.array(embeddings, dtype=np.float32)
+
+            # Compute mean and normalize
+            centroid_mean = np.mean(embeddings_array, axis=0)
+            norm = np.linalg.norm(centroid_mean)
+            centroid_vector = (centroid_mean / norm).astype(np.float32)
+
+            # Create centroid record
+            centroid_id = uuid_lib.uuid4()
+            settings = get_settings()
+
+            # Compute source hash
+            sorted_ids = sorted(str(fid) for fid in face_ids)
+            hash_input = ":".join(sorted_ids)
+            source_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+
+            centroid = PersonCentroid(
+                centroid_id=centroid_id,
+                person_id=person_uuid,
+                qdrant_point_id=centroid_id,
+                model_version=settings.centroid_model_version,
+                centroid_version=settings.centroid_algorithm_version,
+                centroid_type=CentroidType.GLOBAL,
+                cluster_label="global",
+                n_faces=len(face_ids),
+                status="active",
+                source_face_ids_hash=source_hash,
+                build_params={
+                    "trim_outliers": False,
+                    "n_faces_used": len(face_ids),
+                },
+            )
+            db_session.add(centroid)
+            db_session.flush()
+
+            # Store in Qdrant
+            centroid_qdrant = get_centroid_qdrant_client()
+            centroid_qdrant.upsert_centroid(
+                centroid_id=centroid_id,
+                vector=centroid_vector.tolist(),
+                payload={
+                    "person_id": person_uuid,
+                    "centroid_id": centroid_id,
+                    "model_version": settings.centroid_model_version,
+                    "centroid_version": settings.centroid_algorithm_version,
+                    "centroid_type": "global",
+                    "cluster_label": "global",
+                    "n_faces": len(face_ids),
+                    "created_at": centroid.created_at.isoformat(),
+                    "source_hash": source_hash,
+                    "build_params": centroid.build_params,
+                },
+            )
+
+            db_session.commit()
+            logger.info(
+                f"[{job_id}] Created centroid {centroid_id} from {len(face_ids)} faces"
+            )
+
+        # 3. Get centroid vector from Qdrant
+        centroid_qdrant = get_centroid_qdrant_client()
+        centroid_vector = centroid_qdrant.get_centroid_vector(centroid.centroid_id)
+
+        if not centroid_vector:
+            logger.error(
+                f"[{job_id}] Centroid vector not found in Qdrant for {centroid.centroid_id}"
+            )
+            return {"status": "error", "message": "Centroid vector not found"}
+
+        # 4. Search faces collection using centroid
+        search_results = centroid_qdrant.search_faces_with_centroid(
+            centroid_vector=centroid_vector,
+            limit=max_results * 2,  # Get extra to account for filtering
+            score_threshold=min_similarity,
+            exclude_person_id=person_uuid if unassigned_only else None,
+        )
+
+        logger.info(
+            f"[{job_id}] Found {len(search_results)} candidate faces using centroid"
+        )
+
+        # 5. Get existing pending suggestions to avoid duplicates
+        existing_pending_query = select(FaceSuggestion.face_instance_id).where(
+            FaceSuggestion.suggested_person_id == person_uuid,
+            FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+        )
+        existing_pending_ids = set(
+            str(fid) for fid in db_session.execute(existing_pending_query).scalars().all()
+        )
+
+        # 6. Create FaceSuggestion records
+        suggestions_created = 0
+        duplicates_skipped = 0
+        face_qdrant = get_face_qdrant_client()
+
+        for result in search_results:
+            if suggestions_created >= max_results:
+                break
+
+            # Get face_id from payload
+            if result.payload is None:
+                continue
+
+            face_id_str = result.payload.get("face_id")
+            if not face_id_str:
+                continue
+
+            try:
+                face_id_uuid = uuid_lib.UUID(face_id_str)
+            except ValueError:
+                logger.warning(f"[{job_id}] Invalid face_id in payload: {face_id_str}")
+                continue
+
+            # Check if already has pending suggestion
+            if str(face_id_uuid) in existing_pending_ids:
+                duplicates_skipped += 1
+                continue
+
+            # Get face instance to verify it's still unassigned
+            face_inst = db_session.get(FaceInstance, face_id_uuid)
+            if not face_inst:
+                continue
+
+            # Skip if face is assigned (double-check)
+            if unassigned_only and face_inst.person_id is not None:
+                continue
+
+            # Create suggestion
+            suggestion = FaceSuggestion(
+                face_instance_id=face_id_uuid,
+                suggested_person_id=person_uuid,
+                source_face_id=centroid.centroid_id,  # Track centroid as source
+                confidence=result.score,
+                status=FaceSuggestionStatus.PENDING.value,
+            )
+            db_session.add(suggestion)
+            suggestions_created += 1
+
+        db_session.commit()
+
+        logger.info(
+            f"[{job_id}] Centroid-based find-more complete for {person.name}: "
+            f"{suggestions_created} suggestions created, "
+            f"{duplicates_skipped} duplicates skipped"
+        )
+
+        return {
+            "status": "completed",
+            "suggestions_created": suggestions_created,
+            "centroids_used": 1,
+            "candidates_found": len(search_results),
+            "duplicates_skipped": duplicates_skipped,
+        }
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Error in centroid-based find-more job: {e}")
         return {"status": "error", "message": str(e)}
     finally:
         db_session.close()
