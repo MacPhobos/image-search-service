@@ -68,8 +68,10 @@ exif-backfill: ## Backfill EXIF metadata for existing images
 		$(if $(DRY_RUN),--dry-run)
 
 backfill-hashes: ## Backfill perceptual hashes for existing assets
-	@echo "Backfilling perceptual hashes (batch_size=$(or $(BATCH_SIZE),500))..."
-	uv run python -m image_search_service.queue.hash_backfill_jobs $(or $(BATCH_SIZE),500)
+	@echo "Backfilling perceptual hashes (batch-size=$(or $(BATCH_SIZE),500), limit=$(or $(LIMIT),all))..."
+	uv run python -m image_search_service.queue.hash_backfill_jobs \
+		--batch-size $(or $(BATCH_SIZE),500) \
+		$(if $(LIMIT),--limit $(LIMIT))
 
 # Face detection and recognition targets
 faces-backfill: ## Backfill face detection for assets without faces

@@ -17,7 +17,9 @@ from image_search_service.services.perceptual_hash import compute_perceptual_has
 logger = get_logger(__name__)
 
 
-async def backfill_perceptual_hashes(batch_size: int = 500) -> dict[str, Any]:
+async def backfill_perceptual_hashes(
+    batch_size: int = 500, limit: int | None = None
+) -> dict[str, Any]:
     """Compute perceptual hashes for all assets without hashes.
 
     This function:
@@ -28,6 +30,7 @@ async def backfill_perceptual_hashes(batch_size: int = 500) -> dict[str, Any]:
 
     Args:
         batch_size: Number of assets to process per batch (default: 500)
+        limit: Maximum total images to process (None = all)
 
     Returns:
         Dictionary with keys:
@@ -38,7 +41,7 @@ async def backfill_perceptual_hashes(batch_size: int = 500) -> dict[str, Any]:
         - errors: List of error messages (first 10)
 
     Example:
-        >>> result = await backfill_perceptual_hashes(batch_size=1000)
+        >>> result = await backfill_perceptual_hashes(batch_size=1000, limit=5000)
         >>> print(f"Processed {result['processed']}/{result['total']} assets")
     """
     total = 0
@@ -49,11 +52,16 @@ async def backfill_perceptual_hashes(batch_size: int = 500) -> dict[str, Any]:
     async with get_async_session_context() as db:
         # Query assets without hashes
         query = select(ImageAsset).where(ImageAsset.perceptual_hash.is_(None))
+        if limit is not None:
+            query = query.limit(limit)
         result = await db.execute(query)
         assets = result.scalars().all()
 
         total = len(assets)
-        logger.info(f"Found {total} assets without perceptual hashes")
+        logger.info(
+            f"Found {total} assets without perceptual hashes"
+            + (f" (limited to {limit})" if limit else "")
+        )
 
         if total == 0:
             return {
@@ -124,29 +132,48 @@ async def backfill_perceptual_hashes(batch_size: int = 500) -> dict[str, Any]:
     }
 
 
-def backfill_perceptual_hashes_sync(batch_size: int = 500) -> dict[str, Any]:
+def backfill_perceptual_hashes_sync(
+    batch_size: int = 500, limit: int | None = None
+) -> dict[str, Any]:
     """Synchronous wrapper for backfill_perceptual_hashes.
 
     This function is used for CLI/Makefile integration.
 
     Args:
         batch_size: Number of assets to process per batch
+        limit: Maximum total images to process (None = all)
 
     Returns:
         Same as async version
     """
     import asyncio
 
-    return asyncio.run(backfill_perceptual_hashes(batch_size=batch_size))
+    return asyncio.run(backfill_perceptual_hashes(batch_size=batch_size, limit=limit))
 
 
 if __name__ == "__main__":
     # Allow running as script: python -m image_search_service.queue.hash_backfill_jobs
+    import argparse
     import sys
 
-    batch_size = int(sys.argv[1]) if len(sys.argv) > 1 else 500
+    parser = argparse.ArgumentParser(
+        description="Backfill perceptual hashes for images without hashes."
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="Number of assets to process per batch (default: 500)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum total images to process (default: all)",
+    )
+    args = parser.parse_args()
 
-    result = backfill_perceptual_hashes_sync(batch_size=batch_size)
+    result = backfill_perceptual_hashes_sync(batch_size=args.batch_size, limit=args.limit)
 
     print("\n" + "=" * 60)
     print("HASH BACKFILL RESULTS")
