@@ -22,6 +22,7 @@ from image_search_service.db.models import (
     CentroidStatus,
     CentroidType,
     FaceInstance,
+    ImageAsset,
     Person,
     PersonCentroid,
 )
@@ -348,11 +349,20 @@ async def get_centroid_suggestions(
         if point.payload
     ]
 
-    # Bulk load face instances
+    # Bulk load face instances and their assets for deduplication
     if face_instance_ids:
         face_query = select(FaceInstance).where(FaceInstance.id.in_(face_instance_ids))
         face_result = await db.execute(face_query)
         faces_map = {f.id: f for f in face_result.scalars().all()}
+
+        # Bulk load assets to get perceptual_hash
+        asset_ids = list({f.asset_id for f in faces_map.values()})
+        asset_query = select(ImageAsset).where(ImageAsset.id.in_(asset_ids))
+        asset_result = await db.execute(asset_query)
+        assets_map = {a.id: a for a in asset_result.scalars().all()}
+
+        # Deduplicate by perceptual_hash - keep first (highest scoring) occurrence
+        seen_hashes: set[str] = set()
 
         for point in scored_points:
             if not point.payload:
@@ -371,6 +381,13 @@ async def get_centroid_suggestions(
             # Note: is_prototype field doesn't exist in FaceInstance model
             # Skipping exclude_prototypes filter for now
 
+            # Deduplicate by perceptual_hash
+            asset = assets_map.get(face.asset_id)
+            if asset and asset.perceptual_hash:
+                if asset.perceptual_hash in seen_hashes:
+                    continue
+                seen_hashes.add(asset.perceptual_hash)
+
             suggestions.append(
                 CentroidSuggestion(
                     face_instance_id=face_id,
@@ -384,6 +401,16 @@ async def get_centroid_suggestions(
     # Sort by score descending and limit
     suggestions.sort(key=lambda s: s.score, reverse=True)
     suggestions = suggestions[: request.max_results]
+
+    # Log deduplication statistics
+    total_before_dedup = len(scored_points)
+    total_after_dedup = len(suggestions)
+    duplicates_removed = total_before_dedup - total_after_dedup
+
+    logger.debug(
+        f"Deduplication: {total_before_dedup} → {total_after_dedup} results "
+        f"({duplicates_removed} duplicates removed)"
+    )
 
     logger.info(
         f"Found {len(suggestions)} face suggestions for person {person.name} "
