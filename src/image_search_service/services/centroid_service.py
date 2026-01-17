@@ -267,9 +267,9 @@ async def compute_centroids_for_person(
     This is the main entry point for centroid computation. It:
     1. Checks if existing centroid is stale (if not forcing rebuild)
     2. Retrieves face embeddings from Qdrant
-    3. Computes robust centroid with outlier trimming
-    4. Stores centroid in DB and Qdrant
-    5. Marks old centroids as deprecated
+    3. Deprecates old centroids BEFORE creating new one (avoids unique constraint violation)
+    4. Computes robust centroid with outlier trimming
+    5. Stores centroid in DB and Qdrant
 
     Args:
         db: Database session
@@ -318,6 +318,11 @@ async def compute_centroids_for_person(
             ):
                 logger.debug(f"Existing centroid {existing_centroid.centroid_id} is fresh")
                 return existing_centroid
+
+    # Deprecate old centroids BEFORE creating new one to avoid unique constraint violation
+    # The unique index is partial (status = 'active'), so we can't have two active centroids
+    # with the same (person_id, model_version, centroid_version, centroid_type, cluster_label)
+    await deprecate_centroids(db, centroid_qdrant, person_id)
 
     # Compute centroid
     embeddings_array = np.array(embeddings, dtype=np.float32)
@@ -387,9 +392,6 @@ async def compute_centroids_for_person(
         centroid.status = CentroidStatus.FAILED
         await db.flush()
         raise
-
-    # Deprecate old centroids
-    await deprecate_centroids(db, centroid_qdrant, person_id)
 
     return centroid
 
