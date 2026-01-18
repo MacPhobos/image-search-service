@@ -1,6 +1,9 @@
 """Training session management endpoints."""
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +11,9 @@ from image_search_service.api.schemas import PaginatedResponse
 from image_search_service.api.training_schemas import (
     ClusteringRestartResponse,
     ControlResponse,
+    DirectoryImageInfo,
     DirectoryInfo,
+    DirectoryPreviewResponse,
     DirectoryScanRequest,
     DirectoryScanResponse,
     FaceDetectionRestartResponse,
@@ -1009,3 +1014,209 @@ async def trigger_incremental_scan(
     )
 
     return result
+
+
+# ============================================================================
+# Directory Image Preview Endpoints (for non-ingested images)
+# ============================================================================
+
+
+@router.get("/directories/preview", response_model=DirectoryPreviewResponse)
+async def list_directory_preview_images(
+    path: str = Query(..., description="Directory path to preview")
+) -> DirectoryPreviewResponse:
+    """List images in a directory for preview BEFORE ingestion.
+
+    Returns image metadata without creating database records.
+    Images are NOT treated as ingested.
+
+    Args:
+        path: Directory path (must be under IMAGE_ROOT_DIR)
+
+    Returns:
+        List of image files with metadata
+
+    Raises:
+        HTTPException: If path validation fails or directory not found
+    """
+    from datetime import datetime
+
+    # Validate directory path (security)
+    dir_service = DirectoryService()
+    try:
+        dir_service.validate_path(path)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    # List image files
+    dir_path = Path(path)
+    allowed_extensions = {"jpg", "jpeg", "png", "webp"}
+    image_files: list[DirectoryImageInfo] = []
+
+    try:
+        for file_path in sorted(dir_path.iterdir()):
+            # Skip non-files
+            if not file_path.is_file():
+                continue
+
+            # Check extension
+            ext = file_path.suffix.lower().lstrip(".")
+            if ext not in allowed_extensions:
+                continue
+
+            # Get file metadata
+            stat = file_path.stat()
+
+            # Store full path for thumbnail endpoint
+            full_path = str(file_path)
+
+            image_files.append(
+                DirectoryImageInfo(
+                    filename=file_path.name,
+                    fullPath=full_path,
+                    sizeBytes=stat.st_size,
+                    modifiedAt=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                )
+            )
+
+        return DirectoryPreviewResponse(
+            directory=path,
+            imageCount=len(image_files),
+            images=image_files,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to list directory preview images: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list images: {str(e)}",
+        )
+
+
+@router.get("/directories/preview/thumbnail")
+async def get_directory_preview_thumbnail(
+    path: str = Query(..., description="Full path to image file (URL-encoded)")
+) -> FileResponse:
+    """Serve thumbnail for a non-ingested image.
+
+    Generates thumbnail on-the-fly if needed, caches for reuse.
+    Images are NOT treated as ingested (no database records created).
+
+    Args:
+        path: Full path to image file (must be under IMAGE_ROOT_DIR)
+
+    Returns:
+        Thumbnail image (JPEG, max 400x400, maintains aspect ratio)
+
+    Raises:
+        HTTPException: If path invalid, file not found, or unsupported type
+    """
+    import hashlib
+    from urllib.parse import unquote
+
+    from PIL import Image, ImageOps
+
+    from image_search_service.core.config import get_settings
+
+    settings = get_settings()
+
+    # Decode path
+    file_path = Path(unquote(path))
+
+    # Validate file exists
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image file not found: {path}",
+        )
+
+    # Security: Validate path is within IMAGE_ROOT_DIR
+    if settings.image_root_dir:
+        allowed_dirs = [Path(settings.image_root_dir)]
+        # Use security validation from images.py
+        try:
+            abs_path = file_path.resolve()
+            found_allowed = False
+            for allowed_dir in allowed_dirs:
+                try:
+                    abs_path.relative_to(allowed_dir.resolve())
+                    found_allowed = True
+                    break
+                except ValueError:
+                    continue
+            if not found_allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access to file path not allowed",
+                )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid file path: {e}",
+            )
+
+    # Validate extension
+    allowed_extensions = {"jpg", "jpeg", "png", "webp"}
+    ext = file_path.suffix.lower().lstrip(".")
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {file_path.suffix}",
+        )
+
+    # Generate hash-based thumbnail path
+    path_hash = hashlib.md5(str(file_path).encode()).hexdigest()
+    shard_prefix = path_hash[:2]
+    thumbnail_dir = Path(settings.thumbnail_dir) / "preview" / shard_prefix
+    thumbnail_dir.mkdir(parents=True, exist_ok=True)
+    thumbnail_path = thumbnail_dir / f"{path_hash}.jpg"
+
+    # Generate thumbnail if doesn't exist
+    if not thumbnail_path.exists():
+        try:
+            logger.info(f"Generating preview thumbnail for {file_path}")
+
+            # Open and process image (similar to ThumbnailService)
+            with Image.open(file_path) as img:
+                # Apply EXIF orientation
+                img = ImageOps.exif_transpose(img) or img
+
+                # Convert to RGB if needed
+                if img.mode in ("RGBA", "P", "LA"):
+                    background = Image.new("RGB", img.size, (255, 255, 255))
+                    if img.mode == "P":
+                        img = img.convert("RGBA")
+                    if img.mode == "RGBA":
+                        background.paste(img, mask=img.split()[-1])
+                    else:
+                        background.paste(img)
+                    img = background
+                elif img.mode != "RGB":
+                    img = img.convert("RGB")
+
+                # Resize to thumbnail (400x400 max as per requirements)
+                max_size = 400
+                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+                # Save as JPEG
+                img.save(thumbnail_path, "JPEG", quality=85, optimize=True)
+
+        except Exception as e:
+            logger.error(f"Failed to generate preview thumbnail: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to generate thumbnail: {str(e)}",
+            )
+
+    # Serve thumbnail with cache headers
+    return FileResponse(
+        path=thumbnail_path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=86400",  # 24-hour cache
+            "ETag": f'"{path_hash}"',
+        },
+    )

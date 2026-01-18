@@ -371,3 +371,29 @@ class ClusteringRestartResponse(RestartResponseBase):
     """Response for clustering restart (Phase 3: HDBSCAN)."""
 
     pass
+
+
+# ============================================================================
+# Directory Image Preview Schemas (for non-ingested images)
+# ============================================================================
+
+
+class DirectoryImageInfo(BaseModel):
+    """Information about a single image file in directory preview."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    filename: str
+    full_path: str = Field(alias="fullPath")  # For thumbnail URL construction
+    size_bytes: int = Field(alias="sizeBytes")
+    modified_at: str = Field(alias="modifiedAt")  # ISO datetime
+
+
+class DirectoryPreviewResponse(BaseModel):
+    """Response for directory image preview (before ingestion)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    directory: str
+    image_count: int = Field(alias="imageCount")
+    images: list[DirectoryImageInfo]
