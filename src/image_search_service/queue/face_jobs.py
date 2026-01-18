@@ -788,6 +788,8 @@ def detect_faces_for_session_job(
         # ============================================================
         suggestions_jobs_queued = 0
         suggestions_mode = "all"
+        centroid_jobs_queued = 0
+        prototype_jobs_queued = 0
 
         try:
             from sqlalchemy import func
@@ -800,12 +802,16 @@ def detect_faces_for_session_job(
             sync_config = SyncConfigService(db_session)
             suggestions_mode = sync_config.get_string("post_training_suggestions_mode")
             top_n_count = sync_config.get_int("post_training_suggestions_top_n_count")
+            use_centroids = sync_config.get_bool("post_training_use_centroids")
+            min_faces_for_centroid = sync_config.get_int("centroid_min_faces_for_suggestions")
 
             logger.info(
                 f"[{job_id}] Queuing post-training suggestions",
                 extra={
                     "session_id": session_id,
                     "mode": suggestions_mode,
+                    "use_centroids": use_centroids,
+                    "min_faces_for_centroid": min_faces_for_centroid,
                     "top_n_count": top_n_count if suggestions_mode == "top_n" else None,
                 }
             )
@@ -834,35 +840,64 @@ def detect_faces_for_session_job(
             persons = persons_query.all()
 
             if persons:
-                # Queue multi-prototype suggestion jobs
+                # Queue suggestion jobs (centroid or prototype based on config)
                 from rq import Queue
 
                 redis_client = get_redis()
                 queue = Queue("default", connection=redis_client)
 
                 for person in persons:
-                    job = queue.enqueue(
-                        "image_search_service.queue.face_jobs.propagate_person_label_multiproto_job",
-                        person_id=str(person.id),
-                        max_suggestions=50,  # Standard limit
-                        min_confidence=0.7,  # Standard threshold
-                        job_timeout="10m",
-                    )
+                    # Decide which job to use based on face count and config
+                    if use_centroids and person.face_count >= min_faces_for_centroid:
+                        # Use faster centroid-based search
+                        job = queue.enqueue(
+                            "image_search_service.queue.face_jobs.find_more_centroid_suggestions_job",
+                            person_id=str(person.id),
+                            min_similarity=0.70,
+                            max_results=50,
+                            unassigned_only=True,
+                            job_timeout="10m",
+                        )
+                        centroid_jobs_queued += 1
+                        logger.debug(
+                            f"[{job_id}] Queued centroid suggestion job",
+                            extra={
+                                "person_id": str(person.id),
+                                "face_count": person.face_count,
+                                "job_id": job.id,
+                                "job_type": "centroid",
+                            }
+                        )
+                    else:
+                        # Fall back to prototype-based (for persons with few faces or when disabled)
+                        job = queue.enqueue(
+                            "image_search_service.queue.face_jobs.propagate_person_label_multiproto_job",
+                            person_id=str(person.id),
+                            max_suggestions=50,  # Standard limit
+                            min_confidence=0.7,  # Standard threshold
+                            job_timeout="10m",
+                        )
+                        prototype_jobs_queued += 1
+                        logger.debug(
+                            f"[{job_id}] Queued multi-proto suggestion job",
+                            extra={
+                                "person_id": str(person.id),
+                                "face_count": person.face_count,
+                                "job_id": job.id,
+                                "job_type": "prototype",
+                                "reason": "insufficient_faces" if use_centroids else "centroids_disabled",
+                            }
+                        )
+
                     suggestions_jobs_queued += 1
-                    logger.debug(
-                        f"[{job_id}] Queued multi-proto suggestion job",
-                        extra={
-                            "person_id": str(person.id),
-                            "face_count": person.face_count,
-                            "job_id": job.id,
-                        }
-                    )
 
                 logger.info(
                     f"[{job_id}] Post-training suggestion jobs queued",
                     extra={
                         "session_id": session_id,
                         "jobs_queued": suggestions_jobs_queued,
+                        "centroid_jobs": centroid_jobs_queued,
+                        "prototype_jobs": prototype_jobs_queued,
                         "mode": suggestions_mode,
                     }
                 )

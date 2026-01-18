@@ -32,6 +32,9 @@ class ConfigService:
         # Post-training suggestions
         "post_training_suggestions_mode": "all",
         "post_training_suggestions_top_n_count": 10,
+        # Centroid-based suggestions (faster alternative to prototype-based)
+        "post_training_use_centroids": True,
+        "centroid_min_faces_for_suggestions": 5,
     }
 
     def __init__(self, db_session: AsyncSession):
