@@ -1,5 +1,6 @@
 """Face suggestion API routes."""
 
+import json
 import logging
 import uuid as uuid_lib
 from datetime import UTC, datetime
@@ -708,6 +709,17 @@ async def bulk_suggestion_action(
             job_uuid = str(uuid_lib.uuid4())
             progress_key = f"find_more:progress:{person_id}:{job_uuid}"
 
+            # Initialize progress key so SSE subscription doesn't 404
+            initial_progress = {
+                "phase": "queued",
+                "current": 0,
+                "total": 100,
+                "message": "Job queued, waiting for worker...",
+                "person_id": str(person_id),
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            redis_conn.set(progress_key, json.dumps(initial_progress), ex=3600)  # 1 hour TTL
+
             job = queue.enqueue(
                 find_more_suggestions_job,
                 str(person_id),
@@ -787,6 +799,17 @@ async def start_find_more_suggestions(
     settings = get_settings()
     redis_conn = Redis.from_url(settings.redis_url)
 
+    # Initialize progress key so SSE subscription doesn't 404
+    initial_progress = {
+        "phase": "queued",
+        "current": 0,
+        "total": 100,
+        "message": "Job queued, waiting for worker...",
+        "person_id": str(person_id),
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    redis_conn.set(progress_key, json.dumps(initial_progress), ex=3600)  # 1 hour TTL
+
     # Enqueue job
     queue = Queue(connection=redis_conn)
     job = queue.enqueue(
@@ -864,6 +887,17 @@ async def start_find_more_centroid_suggestions(
     # Get Redis connection
     settings = get_settings()
     redis_conn = Redis.from_url(settings.redis_url)
+
+    # Initialize progress key so SSE subscription doesn't 404
+    initial_progress = {
+        "phase": "queued",
+        "current": 0,
+        "total": 100,
+        "message": "Job queued, waiting for worker...",
+        "person_id": str(person_id),
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    redis_conn.set(progress_key, json.dumps(initial_progress), ex=3600)  # 1 hour TTL
 
     # Enqueue job
     queue = Queue(connection=redis_conn)
