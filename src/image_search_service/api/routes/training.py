@@ -17,6 +17,10 @@ from image_search_service.api.training_schemas import (
     DirectoryScanRequest,
     DirectoryScanResponse,
     FaceDetectionRestartResponse,
+    IgnoredDirectoriesResponse,
+    IgnoredDirectoryInfo,
+    IgnoreDirectoryRequest,
+    IgnoreDirectoryResponse,
     SubdirectorySelectionUpdate,
     TrainingJobResponse,
     TrainingProgressResponse,
@@ -28,7 +32,12 @@ from image_search_service.api.training_schemas import (
     UnifiedProgressResponse,
 )
 from image_search_service.core.logging import get_logger
-from image_search_service.db.models import JobStatus, SessionStatus, TrainingSubdirectory
+from image_search_service.db.models import (
+    IgnoredDirectory,
+    JobStatus,
+    SessionStatus,
+    TrainingSubdirectory,
+)
 from image_search_service.db.session import get_db
 from image_search_service.services.directory_service import DirectoryService
 from image_search_service.services.training_service import TrainingService
@@ -238,6 +247,10 @@ async def list_directories(
         False,
         description="Include training status metadata (requires DB lookup)",
     ),
+    include_ignored: bool = Query(
+        False,
+        description="Include ignored directories in results (default: false)",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> list[DirectoryInfo]:
     """List subdirectories at a given path.
@@ -245,10 +258,11 @@ async def list_directories(
     Args:
         path: Root directory path
         include_training_status: If True, include training status metadata
+        include_ignored: If True, include ignored directories (default: False)
         db: Database session
 
     Returns:
-        List of subdirectory information
+        List of subdirectory information (filtered by ignore status)
 
     Raises:
         HTTPException: If path validation fails
@@ -257,6 +271,16 @@ async def list_directories(
 
     try:
         subdirs = dir_service.list_subdirectories(path)
+
+        # Filter out ignored directories unless explicitly requested
+        if not include_ignored:
+            # Get list of ignored directory paths
+            query = select(IgnoredDirectory.path)
+            result = await db.execute(query)
+            ignored_paths = set(result.scalars().all())
+
+            # Filter subdirectories
+            subdirs = [s for s in subdirs if s.path not in ignored_paths]
 
         # Optionally enrich with training status
         if include_training_status:
@@ -1219,4 +1243,131 @@ async def get_directory_preview_thumbnail(
             "Cache-Control": "public, max-age=86400",  # 24-hour cache
             "ETag": f'"{path_hash}"',
         },
+    )
+
+
+# ============================================================================
+# Directory Ignore Endpoints
+# ============================================================================
+
+
+@router.post("/directories/ignore", response_model=IgnoreDirectoryResponse)
+async def ignore_directory(
+    data: IgnoreDirectoryRequest, db: AsyncSession = Depends(get_db)
+) -> IgnoreDirectoryResponse:
+    """Mark a directory as ignored (excluded from directory listings).
+
+    Args:
+        data: Directory ignore request with path and optional reason
+        db: Database session
+
+    Returns:
+        Ignore operation response
+
+    Raises:
+        HTTPException: If path validation fails or directory already ignored
+    """
+    # Validate directory path (security check)
+    dir_service = DirectoryService()
+    try:
+        dir_service.validate_path(data.path)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    # Normalize path (resolve to absolute path)
+    normalized_path = str(Path(data.path).resolve())
+
+    # Check if already ignored
+    query = select(IgnoredDirectory).where(IgnoredDirectory.path == normalized_path)
+    result = await db.execute(query)
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Directory already ignored: {normalized_path}",
+        )
+
+    # Create ignored directory record
+    ignored_dir = IgnoredDirectory(
+        path=normalized_path,
+        reason=data.reason,
+        ignored_by=None,  # TODO: Add user context when auth is implemented
+    )
+    db.add(ignored_dir)
+    await db.commit()
+    await db.refresh(ignored_dir)
+
+    logger.info(f"Directory marked as ignored: {normalized_path}")
+
+    return IgnoreDirectoryResponse(
+        status="success",
+        path=ignored_dir.path,
+        ignoredAt=ignored_dir.ignored_at,
+    )
+
+
+@router.delete("/directories/ignore", response_model=IgnoreDirectoryResponse)
+async def unignore_directory(
+    data: IgnoreDirectoryRequest, db: AsyncSession = Depends(get_db)
+) -> IgnoreDirectoryResponse:
+    """Remove a directory from the ignore list.
+
+    Args:
+        data: Directory unignore request with path
+        db: Database session
+
+    Returns:
+        Unignore operation response
+
+    Raises:
+        HTTPException: If directory not found in ignore list
+    """
+    # Normalize path
+    normalized_path = str(Path(data.path).resolve())
+
+    # Find and delete ignored directory record
+    query = select(IgnoredDirectory).where(IgnoredDirectory.path == normalized_path)
+    result = await db.execute(query)
+    ignored_dir = result.scalar_one_or_none()
+
+    if not ignored_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Directory not in ignore list: {normalized_path}",
+        )
+
+    await db.delete(ignored_dir)
+    await db.commit()
+
+    logger.info(f"Directory removed from ignore list: {normalized_path}")
+
+    return IgnoreDirectoryResponse(
+        status="success",
+        path=normalized_path,
+        ignoredAt=None,
+    )
+
+
+@router.get("/directories/ignored", response_model=IgnoredDirectoriesResponse)
+async def list_ignored_directories(
+    db: AsyncSession = Depends(get_db),
+) -> IgnoredDirectoriesResponse:
+    """List all ignored directories.
+
+    Args:
+        db: Database session
+
+    Returns:
+        List of ignored directories with metadata
+    """
+    query = select(IgnoredDirectory).order_by(IgnoredDirectory.path)
+    result = await db.execute(query)
+    ignored_dirs = result.scalars().all()
+
+    return IgnoredDirectoriesResponse(
+        directories=[IgnoredDirectoryInfo.model_validate(d) for d in ignored_dirs]
     )

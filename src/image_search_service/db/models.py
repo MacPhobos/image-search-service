@@ -951,3 +951,20 @@ class PersonCentroid(Base):
             f"<PersonCentroid(id={self.centroid_id}, person_id={self.person_id}, "
             f"type={self.centroid_type}, status={self.status})>"
         )
+
+
+class IgnoredDirectory(Base):
+    """Directory marked as ignored (excluded from directory listings)."""
+
+    __tablename__ = "ignored_directories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    path: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ignored_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    ignored_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<IgnoredDirectory(id={self.id}, path={self.path})>"

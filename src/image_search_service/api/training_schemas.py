@@ -397,3 +397,46 @@ class DirectoryPreviewResponse(BaseModel):
     directory: str
     image_count: int = Field(alias="imageCount")
     images: list[DirectoryImageInfo]
+
+
+# ============================================================================
+# Directory Ignore Schemas
+# ============================================================================
+
+
+class IgnoreDirectoryRequest(BaseModel):
+    """Request to mark a directory as ignored."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    path: str
+    reason: str | None = None
+
+
+class IgnoreDirectoryResponse(BaseModel):
+    """Response from directory ignore operation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str
+    path: str
+    ignored_at: datetime | None = Field(None, alias="ignoredAt")
+
+
+class IgnoredDirectoryInfo(BaseModel):
+    """Information about an ignored directory."""
+
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    path: str
+    reason: str | None
+    ignored_at: datetime = Field(alias="ignoredAt")
+    ignored_by: str | None = Field(None, alias="ignoredBy")
+
+
+class IgnoredDirectoriesResponse(BaseModel):
+    """Response with list of ignored directories."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    directories: list[IgnoredDirectoryInfo]
