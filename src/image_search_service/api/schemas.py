@@ -208,9 +208,87 @@ class SimilarSearchRequest(BaseModel):
 
     limit: int = 50
     offset: int = 0
-    exclude_self: bool = Field(True, alias="excludeSelf", description="Exclude source image from results")
+    exclude_self: bool = Field(
+        True, alias="excludeSelf", description="Exclude source image from results"
+    )
     filters: dict[str, str | int] | None = None
     category_id: int | None = Field(None, alias="categoryId", description="Filter by category ID")
+
+
+class HybridSearchRequest(BaseModel):
+    """Request for hybrid search combining text and image."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    text_query: str | None = Field(
+        None, alias="textQuery", description="Text search query (optional)"
+    )
+    text_weight: float = Field(
+        default=0.5,
+        alias="textWeight",
+        ge=0.0,
+        le=1.0,
+        description="Weight for text search (0.0-1.0, default: 0.5)",
+    )
+    limit: int = Field(default=20, ge=1, le=100, description="Maximum results")
+    offset: int = Field(default=0, ge=0, description="Offset for pagination")
+    category_id: int | None = Field(None, alias="categoryId", description="Filter by category ID")
+
+
+class HybridSearchResult(BaseModel):
+    """Single result from hybrid search with scores from both modalities."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    asset: Asset
+    text_score: float | None = Field(None, alias="textScore", description="Score from text search")
+    image_score: float | None = Field(
+        None, alias="imageScore", description="Score from image search"
+    )
+    combined_score: float = Field(alias="combinedScore", description="RRF combined score")
+    rank: int = Field(description="Final rank after fusion")
+
+
+class HybridSearchResponse(BaseModel):
+    """Response from hybrid search."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    results: list[HybridSearchResult]
+    total: int
+    text_query: str | None = Field(None, alias="textQuery")
+    image_filename: str | None = Field(None, alias="imageFilename")
+
+
+class ComposeSearchRequest(BaseModel):
+    """Request for composed image retrieval (image + text modifier)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    modifier_text: str = Field(
+        alias="modifierText", description="Text describing modification (e.g., 'at sunset')"
+    )
+    alpha: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Mixing weight for text vector (0.0=pure image, 1.0=pure text)",
+    )
+    limit: int = Field(default=20, ge=1, le=100, description="Maximum results")
+    offset: int = Field(default=0, ge=0, description="Offset for pagination")
+    category_id: int | None = Field(None, alias="categoryId", description="Filter by category ID")
+
+
+class ComposeSearchResponse(BaseModel):
+    """Response from composed image retrieval."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    results: list[SearchResult]
+    total: int
+    reference_image: str = Field(alias="referenceImage", description="Reference image filename")
+    modifier_text: str = Field(alias="modifierText", description="Text modifier applied")
+    alpha: float = Field(description="Mixing weight used")
 
 
 class ErrorResponse(BaseModel):
