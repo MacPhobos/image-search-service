@@ -95,7 +95,7 @@ class TestSelectTemporalPrototypes:
                 mock_get_protos.return_value = []
 
                 # Mock DB operations
-                # The execute() call is async and returns a result that has scalar_one_or_none() method
+                # The execute() call is async and returns a result that has scalar_one_or_none() method  # noqa: E501
                 mock_result = MagicMock()
                 mock_result.scalar_one_or_none.return_value = None
 
@@ -240,7 +240,7 @@ class TestSelectTemporalPrototypes:
                     # We can verify this by checking the order of db.add calls
                     added_protos = [call.args[0] for call in mock_db.add.call_args_list]
                     if added_protos:
-                        # Check that the first added prototype for YOUNG_ADULT era uses highest quality face
+                        # Check that the first added prototype for YOUNG_ADULT era uses highest quality face  # noqa: E501
                         young_adult_protos = [
                             p
                             for p in added_protos

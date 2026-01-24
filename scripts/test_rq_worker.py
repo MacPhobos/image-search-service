@@ -66,7 +66,7 @@ logger = get_logger(__name__)
 # Test configuration
 REDIS_TEST_DB = int(os.environ.get("REDIS_TEST_DB", "0"))  # Use same DB as worker (default is 0)
 QDRANT_TEST_COLLECTION = os.environ.get("QDRANT_TEST_COLLECTION", "test_rq_worker_assets")
-SAMPLE_IMAGE_PATH = Path(__file__).parent.parent / "tests" / "sample-images" / "Charlize Theron_30.jpg"
+SAMPLE_IMAGE_PATH = Path(__file__).parent.parent / "tests" / "sample-images" / "Charlize Theron_30.jpg"  # noqa: E501
 
 
 class TestEnvironment:
@@ -367,7 +367,7 @@ def print_environment_info() -> None:
 
     if cuda_available:
         logger.info(f"CUDA device: {torch.cuda.get_device_name(0)}")
-        logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1024:.1f} GB")
+        logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1024:.1f} GB")  # noqa: E501
 
     # Environment variables
     logger.info(f"Redis DB: {REDIS_TEST_DB}")
@@ -375,7 +375,7 @@ def print_environment_info() -> None:
     logger.info(f"Sample image: {SAMPLE_IMAGE_PATH.name}")
 
     # RQ configuration
-    logger.info(f"OBJC_DISABLE_INITIALIZE_FORK_SAFETY: {os.environ.get('OBJC_DISABLE_INITIALIZE_FORK_SAFETY', 'not set')}")
+    logger.info(f"OBJC_DISABLE_INITIALIZE_FORK_SAFETY: {os.environ.get('OBJC_DISABLE_INITIALIZE_FORK_SAFETY', 'not set')}")  # noqa: E501
     logger.info(f"WORKER_DEBUG: {os.environ.get('WORKER_DEBUG', 'not set')}")
 
 

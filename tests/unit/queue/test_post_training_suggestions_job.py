@@ -8,7 +8,6 @@ Tests the SQL queries used to select persons for post-training suggestions:
 These tests verify the SQL query logic without mocking Redis/Queue/Config.
 """
 
-import json
 import uuid
 
 import pytest

@@ -32,19 +32,19 @@ def upgrade() -> None:
         sa.Column('min_face_size', sa.Integer(), nullable=False),
         sa.Column('batch_size', sa.Integer(), nullable=False),
         sa.Column('last_error', sa.Text(), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),  # noqa: E501
         sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('job_id', sa.String(length=100), nullable=True),
-        sa.ForeignKeyConstraint(['training_session_id'], ['training_sessions.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['training_session_id'], ['training_sessions.id'], ondelete='SET NULL'),  # noqa: E501
         sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ix_face_detection_sessions_status', 'face_detection_sessions', ['status'], unique=False)
-    op.create_index('ix_face_detection_sessions_training_session_id', 'face_detection_sessions', ['training_session_id'], unique=False)
+    op.create_index('ix_face_detection_sessions_status', 'face_detection_sessions', ['status'], unique=False)  # noqa: E501
+    op.create_index('ix_face_detection_sessions_training_session_id', 'face_detection_sessions', ['training_session_id'], unique=False)  # noqa: E501
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_index('ix_face_detection_sessions_training_session_id', table_name='face_detection_sessions')
+    op.drop_index('ix_face_detection_sessions_training_session_id', table_name='face_detection_sessions')  # noqa: E501
     op.drop_index('ix_face_detection_sessions_status', table_name='face_detection_sessions')
     op.drop_table('face_detection_sessions')

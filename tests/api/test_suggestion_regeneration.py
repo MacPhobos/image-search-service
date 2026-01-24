@@ -217,7 +217,7 @@ class TestRegenerateSuggestions:
         await create_prototype(person_id=person.id, face_instance_id=face.id)
 
         # Create old pending suggestion
-        old_suggestion = await create_suggestion(
+        await create_suggestion(
             suggested_person_id=person.id, status="pending"
         )
 
@@ -250,7 +250,7 @@ class TestRegenerateSuggestions:
             assert call_args.args[0] == propagate_person_label_multiproto_job
             # Check person_id is passed (could be positional or keyword)
             call_kwargs = call_args.kwargs
-            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
+            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)  # noqa: E501
             assert call_kwargs.get("min_confidence", 0.7) == 0.7
             assert call_kwargs.get("max_suggestions", 50) == 50
 
@@ -304,7 +304,7 @@ class TestRegenerateSuggestions:
             assert call_args.args[0] == propagate_person_label_multiproto_job
             # Check person_id is passed
             call_kwargs = call_args.kwargs
-            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
+            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)  # noqa: E501
 
     @pytest.mark.asyncio
     async def test_regenerate_no_pending_suggestions_to_expire(
@@ -469,9 +469,9 @@ class TestRegenerateSuggestions:
         await create_prototype(person_id=person.id, face_instance_id=face.id)
 
         # Create multiple pending suggestions
-        suggestion1 = await create_suggestion(suggested_person_id=person.id, status="pending")
-        suggestion2 = await create_suggestion(suggested_person_id=person.id, status="pending")
-        suggestion3 = await create_suggestion(suggested_person_id=person.id, status="pending")
+        await create_suggestion(suggested_person_id=person.id, status="pending")
+        await create_suggestion(suggested_person_id=person.id, status="pending")
+        await create_suggestion(suggested_person_id=person.id, status="pending")
 
         # Mock Redis Queue (patch where they're imported FROM, not where they're used)
         with patch("redis.Redis") as mock_redis_cls, patch("rq.Queue") as mock_queue_cls:
@@ -512,10 +512,10 @@ class TestRegenerateSuggestions:
         await create_prototype(person_id=person_alice.id, face_instance_id=face_alice.id)
 
         # Create pending suggestions for both persons
-        suggestion_alice = await create_suggestion(
+        await create_suggestion(
             suggested_person_id=person_alice.id, status="pending"
         )
-        suggestion_bob = await create_suggestion(
+        await create_suggestion(
             suggested_person_id=person_bob.id, status="pending"
         )
 
@@ -577,8 +577,8 @@ class TestRegenerateSuggestions:
 
             assert response.status_code == 200
 
-            # Verify job was called with person_id (multi-proto job handles all prototypes internally)
+            # Verify job was called with person_id (multi-proto job handles all prototypes internally)  # noqa: E501
             call_args = mock_queue.enqueue.call_args
             assert call_args.args[0] == propagate_person_label_multiproto_job
             call_kwargs = call_args.kwargs
-            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)
+            assert str(person.id) == call_kwargs.get("person_id", call_args.args[1] if len(call_args.args) > 1 else None)  # noqa: E501

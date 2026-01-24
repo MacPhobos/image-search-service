@@ -1,10 +1,8 @@
 """Unit tests for RRF fusion service."""
 
-import pytest
 from pydantic import BaseModel
 
 from image_search_service.services.fusion import (
-    FusedResult,
     RankedItem,
     reciprocal_rank_fusion,
     weighted_reciprocal_rank_fusion,

@@ -20,13 +20,13 @@ def upgrade() -> None:
     """Add face prototype configuration keys."""
     op.execute(
         """
-        INSERT INTO system_configs (key, value, data_type, description, min_value, max_value, category)
+        INSERT INTO system_configs (key, value, data_type, description, min_value, max_value, category)  # noqa: E501
         VALUES
         (
             'face_prototype_min_quality',
             '0.5',
             'float',
-            'Minimum quality score required for a face to be used as an exemplar prototype. Higher values ensure only high-quality faces are selected as representatives.',
+            'Minimum quality score required for a face to be used as an exemplar prototype. Higher values ensure only high-quality faces are selected as representatives.',  # noqa: E501
             '0.0',
             '1.0',
             'face_matching'
@@ -35,7 +35,7 @@ def upgrade() -> None:
             'face_prototype_max_exemplars',
             '5',
             'int',
-            'Maximum number of exemplar faces to store per person. More exemplars improve matching accuracy but increase storage and computation costs.',
+            'Maximum number of exemplar faces to store per person. More exemplars improve matching accuracy but increase storage and computation costs.',  # noqa: E501
             '1',
             '20',
             'face_matching'

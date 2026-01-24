@@ -147,7 +147,7 @@ async def create_suggestion(
 
 @pytest.mark.asyncio
 async def test_unassign_face_expires_pending_suggestions(
-    test_client, db_session, face_assigned_to_person_a, unassigned_face, person_a, mock_qdrant_client
+    test_client, db_session, face_assigned_to_person_a, unassigned_face, person_a, mock_qdrant_client  # noqa: E501
 ):
     """Test that unassigning a face expires pending suggestions where it was the source.
 

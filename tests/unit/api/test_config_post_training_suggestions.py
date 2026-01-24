@@ -5,7 +5,6 @@ Tests the new configuration options added to the face-matching config endpoint:
 - post_training_suggestions_top_n_count (1-100)
 """
 
-import pytest
 from fastapi.testclient import TestClient
 
 from image_search_service.main import app

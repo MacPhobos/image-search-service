@@ -92,7 +92,7 @@ class FaceClusteringService:
                     embeddings.append(np.array(embedding))
             except Exception as e:
                 logger.warning(
-                    f"Failed to retrieve embedding for point {point_id} in cluster {cluster_id}: {e}"
+                    f"Failed to retrieve embedding for point {point_id} in cluster {cluster_id}: {e}"  # noqa: E501
                 )
                 continue
 

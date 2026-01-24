@@ -818,7 +818,7 @@ async def test_import_person_metadata_face_matching_success(
                 face_mappings=[
                     FaceMappingExport(
                         image_path="/photos/group.jpg",
-                        bounding_box=BoundingBoxExport(x=105, y=205, width=48, height=62),  # Close to face1
+                        bounding_box=BoundingBoxExport(x=105, y=205, width=48, height=62),  # Close to face1  # noqa: E501
                         detection_confidence=0.95,
                         quality_score=0.85,
                     )
@@ -833,7 +833,7 @@ async def test_import_person_metadata_face_matching_success(
 
     # Import (skip_missing_images=False since files don't exist in test)
     options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
-    result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
+    await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
 
     # Verify face1 was matched
     await db_session.refresh(face1)
@@ -930,7 +930,7 @@ async def test_import_person_metadata_tolerance_parameter(
                 face_mappings=[
                     FaceMappingExport(
                         image_path="/photos/alice.jpg",
-                        bounding_box=BoundingBoxExport(x=108, y=200, width=50, height=60),  # 8px off in x
+                        bounding_box=BoundingBoxExport(x=108, y=200, width=50, height=60),  # 8px off in x  # noqa: E501
                         detection_confidence=0.95,
                         quality_score=0.85,
                     )
@@ -945,7 +945,7 @@ async def test_import_person_metadata_tolerance_parameter(
 
     # Test with tolerance=5 (should NOT match)
     options_strict = ImportOptions(dry_run=False, tolerance_pixels=5, skip_missing_images=False)
-    result_strict = await import_person_metadata(db_session, import_data, options_strict, mock_face_qdrant)
+    result_strict = await import_person_metadata(db_session, import_data, options_strict, mock_face_qdrant)  # noqa: E501
 
     assert result_strict.total_faces_matched == 0
     assert result_strict.total_faces_not_found == 1
@@ -960,7 +960,7 @@ async def test_import_person_metadata_tolerance_parameter(
     await db_session.commit()
 
     options_loose = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
-    result_loose = await import_person_metadata(db_session, import_data, options_loose, mock_face_qdrant)
+    result_loose = await import_person_metadata(db_session, import_data, options_loose, mock_face_qdrant)  # noqa: E501
 
     assert result_loose.total_faces_matched == 1
     assert result_loose.total_faces_not_found == 0
@@ -1103,7 +1103,7 @@ async def test_import_person_metadata_updates_qdrant(
 
     # Import (skip_missing_images=False since files don't exist in test)
     options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
-    result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
+    await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
 
     # Verify Qdrant was updated
     assert mock_face_qdrant.update_person_ids.called

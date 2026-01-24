@@ -26,14 +26,14 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+from sqlalchemy.orm import joinedload  # noqa: E402
 
-from image_search_service.core.logging import configure_logging, get_logger
-from image_search_service.db.models import FaceInstance, PersonPrototype
-from image_search_service.db.session import get_async_session_context
-from image_search_service.services.temporal_service import (
+from image_search_service.core.logging import configure_logging, get_logger  # noqa: E402
+from image_search_service.db.models import FaceInstance, PersonPrototype  # noqa: E402
+from image_search_service.db.session import get_async_session_context  # noqa: E402
+from image_search_service.services.temporal_service import (  # noqa: E402
     classify_age_era,
     extract_decade_from_timestamp,
 )
@@ -63,7 +63,8 @@ async def backfill_prototype_temporal_data(
     # Skip if already has temporal data
     if prototype.age_era_bucket is not None:
         logger.debug(
-            f"Prototype {prototype.id} already has age_era_bucket={prototype.age_era_bucket}, skipping"
+            f"Prototype {prototype.id} already has "
+            f"age_era_bucket={prototype.age_era_bucket}, skipping"
         )
         return False
 
@@ -82,7 +83,8 @@ async def backfill_prototype_temporal_data(
 
     if face is None:
         logger.warning(
-            f"Prototype {prototype.id} references non-existent face {prototype.face_instance_id}, skipping"
+            f"Prototype {prototype.id} references non-existent face "
+            f"{prototype.face_instance_id}, skipping"
         )
         return False
 

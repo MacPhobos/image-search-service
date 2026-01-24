@@ -119,7 +119,7 @@ def create_siglip_collection(dry_run: bool = False) -> bool:
         print(f"\n✓ Collection '{collection_name}' already exists")
         info = get_collection_info(client, collection_name)
         if "error" not in info:
-            print(f"\nCollection details:")
+            print("\nCollection details:")
             print(f"  Status: {info['status']}")
             print(f"  Points: {info['points_count']}")
             print(f"  Vector size: {info['vector_size']}")
@@ -131,12 +131,12 @@ def create_siglip_collection(dry_run: bool = False) -> bool:
 
     if dry_run:
         print(
-            f"\n[DRY RUN] Would create collection with:"
+            "\n[DRY RUN] Would create collection with:"
         )
         print(f"  - Vector size: {embedding_dim}")
-        print(f"  - Distance: COSINE")
-        print(f"  - Quantization: INT8 scalar (enabled from start)")
-        print(f"  - HNSW settings: m=16, ef_construct=100")
+        print("  - Distance: COSINE")
+        print("  - Quantization: INT8 scalar (enabled from start)")
+        print("  - HNSW settings: m=16, ef_construct=100")
         return True
 
     # Create collection with optimized settings
@@ -172,7 +172,7 @@ def create_siglip_collection(dry_run: bool = False) -> bool:
             print(f"Warning: Could not verify collection: {info['error']}")
             return False
 
-        print(f"\nCollection details:")
+        print("\nCollection details:")
         print(f"  Status: {info['status']}")
         print(f"  Vector size: {info['vector_size']}")
         print(f"  Distance: {info['distance']}")
@@ -214,10 +214,10 @@ def main() -> int:
         exists = check_collection_exists(client, collection_name)
 
         if exists:
-            print(f"✓ Collection exists")
+            print("✓ Collection exists")
             info = get_collection_info(client, collection_name)
             if "error" not in info:
-                print(f"\nCollection details:")
+                print("\nCollection details:")
                 print(f"  Status: {info['status']}")
                 print(f"  Points: {info['points_count']}")
                 print(f"  Vector size: {info['vector_size']}")
@@ -226,7 +226,7 @@ def main() -> int:
                 print(f"  HNSW m: {info['hnsw_m']}")
                 print(f"  HNSW ef_construct: {info['hnsw_ef_construct']}")
         else:
-            print(f"✗ Collection does not exist")
+            print("✗ Collection does not exist")
 
         return 0 if exists else 1
 

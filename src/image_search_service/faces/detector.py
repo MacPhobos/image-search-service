@@ -37,7 +37,7 @@ def _ensure_model_loaded() -> Any:
             ctx_id = 0 if _has_gpu_provider() else -1
             _face_analysis.prepare(ctx_id=ctx_id, det_size=(640, 640))
             provider_name = providers[0] if providers else "CPU"
-            logger.info(f"Loaded InsightFace model ({settings.face_model_name}) with {provider_name}")
+            logger.info(f"Loaded InsightFace model ({settings.face_model_name}) with {provider_name}")  # noqa: E501
         except ImportError as e:
             logger.error("InsightFace not installed. Run: pip install insightface onnxruntime-gpu")
             raise ImportError(

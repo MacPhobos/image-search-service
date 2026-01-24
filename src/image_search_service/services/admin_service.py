@@ -481,7 +481,7 @@ async def _ingest_image_sync(
                 # Batch upsert faces to Qdrant
                 if qdrant_face_points:
                     face_qdrant.upsert_faces_batch(qdrant_face_points)
-                    logger.info(f"Detected and stored {len(qdrant_face_points)} faces for asset {asset.id}")
+                    logger.info(f"Detected and stored {len(qdrant_face_points)} faces for asset {asset.id}")  # noqa: E501
             else:
                 logger.debug(f"No faces detected in {normalized_path}")
 
@@ -639,9 +639,9 @@ async def import_person_metadata(
                 # Normalize path for consistent lookups
                 normalized_path = _normalize_path(image_path)
 
-                # Check if image file exists on filesystem (if skip_missing_images enabled OR auto_ingest enabled)
+                # Check if image file exists on filesystem (if skip_missing_images enabled OR auto_ingest enabled)  # noqa: E501
                 filesystem_check_needed = options.skip_missing_images or options.auto_ingest_images
-                filesystem_exists = os.path.exists(normalized_path) if filesystem_check_needed else True
+                filesystem_exists = os.path.exists(normalized_path) if filesystem_check_needed else True  # noqa: E501
 
                 if filesystem_check_needed and not filesystem_exists:
                     # Image doesn't exist on filesystem

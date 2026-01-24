@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.db.models import ImageAsset, JobStatus, TrainingJob, TrainingSession
-from image_search_service.services.perceptual_hash import compute_perceptual_hash
 from image_search_service.services.training_service import TrainingService
 
 

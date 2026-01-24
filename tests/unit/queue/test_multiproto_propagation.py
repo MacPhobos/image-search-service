@@ -249,7 +249,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -294,7 +294,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -350,7 +350,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -358,7 +358,7 @@ class TestMultiPrototypePropagation:
                 return_value=mock_qdrant,
             ),
         ):
-            result = propagate_person_label_multiproto_job(str(person.id))
+            propagate_person_label_multiproto_job(str(person.id))
 
         # Verify aggregate_confidence is MAX
         from sqlalchemy import select
@@ -403,7 +403,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -411,7 +411,7 @@ class TestMultiPrototypePropagation:
                 return_value=mock_qdrant,
             ),
         ):
-            result = propagate_person_label_multiproto_job(str(person.id))
+            propagate_person_label_multiproto_job(str(person.id))
 
         # Verify source_face_id is the highest quality prototype
         from sqlalchemy import select
@@ -458,7 +458,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -511,7 +511,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -556,7 +556,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -596,7 +596,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -604,7 +604,7 @@ class TestMultiPrototypePropagation:
                 return_value=mock_qdrant,
             ),
         ):
-            result = propagate_person_label_multiproto_job(
+            propagate_person_label_multiproto_job(
                 str(person.id), min_confidence=0.7  # Threshold
             )
 
@@ -634,7 +634,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(
@@ -679,7 +679,7 @@ class TestMultiPrototypePropagation:
 
         with (
             patch(
-                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session
+                "image_search_service.queue.face_jobs.get_sync_session", return_value=sync_db_session  # noqa: E501
             ),
             patch("image_search_service.queue.face_jobs.get_current_job", return_value=None),
             patch(

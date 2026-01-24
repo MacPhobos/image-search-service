@@ -374,7 +374,7 @@ class TestGetFaceSuggestions:
     async def test_get_face_suggestions_deduplicates_by_person(
         self, test_client, db_session, mock_face_instance, mock_person
     ):
-        """Test that multiple prototypes for same person are deduplicated with highest confidence kept."""
+        """Test that multiple prototypes for same person are deduplicated with highest confidence kept."""  # noqa: E501
         with patch(
             "image_search_service.vector.face_qdrant.get_face_qdrant_client"
         ) as mock_qdrant:
@@ -529,7 +529,7 @@ class TestGetFaceSuggestions:
             assert "failed to search" in data["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_get_face_suggestions_validation_min_confidence(self, test_client, mock_face_instance):
+    async def test_get_face_suggestions_validation_min_confidence(self, test_client, mock_face_instance):  # noqa: E501
         """Test validation for min_confidence parameter boundaries."""
         # Test below minimum (< 0.0)
         response = await test_client.get(

@@ -110,7 +110,7 @@ class TestClustersFiltering:
         ) as mock_calc:
             # High confidence cluster returns 0.95
             # Low confidence cluster returns 0.75
-            async def mock_calculate(cluster_id, qdrant_point_ids=None, max_faces_for_calculation=20):
+            async def mock_calculate(cluster_id, qdrant_point_ids=None, max_faces_for_calculation=20):  # noqa: E501
                 if cluster_id == cluster_high:
                     return 0.95
                 elif cluster_id == cluster_low:
@@ -362,7 +362,7 @@ class TestClustersFiltering:
             "image_search_service.services.face_clustering_service.FaceClusteringService.calculate_cluster_confidence"
         ) as mock_calc:
 
-            async def mock_calculate(cluster_id, qdrant_point_ids=None, max_faces_for_calculation=20):
+            async def mock_calculate(cluster_id, qdrant_point_ids=None, max_faces_for_calculation=20):  # noqa: E501
                 if cluster_id == cluster_large_high:
                     return 0.95
                 elif cluster_id == cluster_large_low:

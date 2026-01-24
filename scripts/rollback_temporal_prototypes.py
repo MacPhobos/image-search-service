@@ -22,11 +22,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update  # noqa: E402
 
-from image_search_service.core.logging import configure_logging, get_logger
-from image_search_service.db.models import PersonPrototype
-from image_search_service.db.session import get_async_session_context
+from image_search_service.core.logging import configure_logging, get_logger  # noqa: E402
+from image_search_service.db.models import PersonPrototype  # noqa: E402
+from image_search_service.db.session import get_async_session_context  # noqa: E402
 
 logger = get_logger(__name__)
 

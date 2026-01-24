@@ -23,13 +23,13 @@ def upgrade() -> None:
     op.create_table(
         'face_assignment_events',
         sa.Column('id', sa.UUID(), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),  # noqa: E501
         sa.Column('actor', sa.String(length=255), nullable=True),
         sa.Column('operation', sa.String(length=50), nullable=False),
         sa.Column('from_person_id', sa.UUID(), nullable=True),
         sa.Column('to_person_id', sa.UUID(), nullable=True),
         sa.Column('affected_photo_ids', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column('affected_face_instance_ids', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column('affected_face_instance_ids', postgresql.JSONB(astext_type=sa.Text()), nullable=True),  # noqa: E501
         sa.Column('face_count', sa.Integer(), nullable=False),
         sa.Column('photo_count', sa.Integer(), nullable=False),
         sa.Column('note', sa.Text(), nullable=True),
@@ -37,10 +37,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['to_person_id'], ['persons.id'], ondelete='SET NULL'),
         sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ix_face_assignment_events_created_at', 'face_assignment_events', ['created_at'], unique=False)
-    op.create_index('ix_face_assignment_events_operation', 'face_assignment_events', ['operation'], unique=False)
-    op.create_index('ix_face_assignment_events_from_person_id', 'face_assignment_events', ['from_person_id'], unique=False)
-    op.create_index('ix_face_assignment_events_to_person_id', 'face_assignment_events', ['to_person_id'], unique=False)
+    op.create_index('ix_face_assignment_events_created_at', 'face_assignment_events', ['created_at'], unique=False)  # noqa: E501
+    op.create_index('ix_face_assignment_events_operation', 'face_assignment_events', ['operation'], unique=False)  # noqa: E501
+    op.create_index('ix_face_assignment_events_from_person_id', 'face_assignment_events', ['from_person_id'], unique=False)  # noqa: E501
+    op.create_index('ix_face_assignment_events_to_person_id', 'face_assignment_events', ['to_person_id'], unique=False)  # noqa: E501
 
 
 def downgrade() -> None:

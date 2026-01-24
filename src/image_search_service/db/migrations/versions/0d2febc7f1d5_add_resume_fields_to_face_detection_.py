@@ -21,7 +21,7 @@ def upgrade() -> None:
     """Upgrade schema."""
     # Add resume support fields to face_detection_sessions
     op.add_column('face_detection_sessions', sa.Column('asset_ids_json', sa.Text(), nullable=True))
-    op.add_column('face_detection_sessions', sa.Column('current_asset_index', sa.Integer(), nullable=False, server_default='0'))
+    op.add_column('face_detection_sessions', sa.Column('current_asset_index', sa.Integer(), nullable=False, server_default='0'))  # noqa: E501
 
 
 def downgrade() -> None:

@@ -298,7 +298,6 @@ class TestTemporalMigration:
         # This test verifies the dry_run flag prevents commits
 
         # Get initial state
-        initial_era_bucket = prototype_without_temporal.age_era_bucket
 
         # Run migration in dry-run mode
         # Note: In real scenario, this would need its own DB setup

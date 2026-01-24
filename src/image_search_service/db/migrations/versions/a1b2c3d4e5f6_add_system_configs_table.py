@@ -54,13 +54,13 @@ def upgrade() -> None:
     # Seed data for face matching configuration
     op.execute(
         """
-        INSERT INTO system_configs (key, value, data_type, description, min_value, max_value, category)
+        INSERT INTO system_configs (key, value, data_type, description, min_value, max_value, category)  # noqa: E501
         VALUES
         (
             'face_auto_assign_threshold',
             '0.85',
             'float',
-            'Confidence threshold for automatic face-to-person assignment. Faces with similarity scores above this threshold are automatically assigned to the matching person.',
+            'Confidence threshold for automatic face-to-person assignment. Faces with similarity scores above this threshold are automatically assigned to the matching person.',  # noqa: E501
             '0.5',
             '1.0',
             'face_matching'
@@ -69,7 +69,7 @@ def upgrade() -> None:
             'face_suggestion_threshold',
             '0.70',
             'float',
-            'Minimum confidence threshold to create face-to-person suggestions. Faces with similarity scores between this and the auto-assign threshold create suggestions for user review.',
+            'Minimum confidence threshold to create face-to-person suggestions. Faces with similarity scores between this and the auto-assign threshold create suggestions for user review.',  # noqa: E501
             '0.3',
             '0.95',
             'face_matching'
@@ -78,7 +78,7 @@ def upgrade() -> None:
             'face_suggestion_max_results',
             '50',
             'int',
-            'Maximum number of suggestions to create when a face is manually labeled to a person. Higher values find more similar faces but may increase processing time.',
+            'Maximum number of suggestions to create when a face is manually labeled to a person. Higher values find more similar faces but may increase processing time.',  # noqa: E501
             '1',
             '200',
             'face_matching'
@@ -87,7 +87,7 @@ def upgrade() -> None:
             'face_suggestion_expiry_days',
             '30',
             'int',
-            'Number of days after which pending face suggestions expire automatically. Expired suggestions are marked as expired and excluded from review.',
+            'Number of days after which pending face suggestions expire automatically. Expired suggestions are marked as expired and excluded from review.',  # noqa: E501
             '1',
             '365',
             'face_matching'

@@ -43,15 +43,15 @@ class TestFaceClusterer:
         cluster1 = cluster1 / np.linalg.norm(cluster1, axis=1, keepdims=True)
         cluster2 = cluster2 / np.linalg.norm(cluster2, axis=1, keepdims=True)
 
-        X = np.vstack([cluster1, cluster2])
+        embeddings_array = np.vstack([cluster1, cluster2])
 
         mock_session = MagicMock()
         clusterer = FaceClusterer(mock_session, min_cluster_size=3, min_samples=2)
-        labels = clusterer._run_hdbscan(X)
+        labels = clusterer._run_hdbscan(embeddings_array)
 
         # Should find 2 clusters (labels 0 and 1, plus possibly -1 for noise)
         unique_labels = set(labels)
-        cluster_labels = [l for l in unique_labels if l >= 0]
+        cluster_labels = [label for label in unique_labels if label >= 0]
 
         assert len(cluster_labels) == 2
 
@@ -76,14 +76,14 @@ class TestFaceClusterer:
         tight_cluster = tight_cluster / np.linalg.norm(tight_cluster, axis=1, keepdims=True)
         noise = noise / np.linalg.norm(noise, axis=1, keepdims=True)
 
-        X = np.vstack([tight_cluster, noise])
+        embeddings_array = np.vstack([tight_cluster, noise])
 
         mock_session = MagicMock()
         clusterer = FaceClusterer(mock_session, min_cluster_size=3, min_samples=2)
-        labels = clusterer._run_hdbscan(X)
+        labels = clusterer._run_hdbscan(embeddings_array)
 
         # Should have at least one cluster (the tight cluster)
-        cluster_labels = [l for l in labels if l >= 0]
+        cluster_labels = [label for label in labels if label >= 0]
         assert len(cluster_labels) >= 3  # At least 3 points should be in a cluster
 
     @pytest.mark.asyncio

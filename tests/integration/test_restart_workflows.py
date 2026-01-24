@@ -15,7 +15,6 @@ Key test categories:
 
 import uuid
 from datetime import UTC, datetime
-from typing import AsyncGenerator
 
 import pytest
 from httpx import AsyncClient
@@ -31,11 +30,9 @@ from image_search_service.db.models import (
     Person,
     PersonStatus,
     SessionStatus,
-    TrainingEvidence,
     TrainingJob,
     TrainingSession,
 )
-
 
 # ============================================================================
 # Fixtures

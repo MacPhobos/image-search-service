@@ -1,6 +1,5 @@
 """Tests for perceptual hash service."""
 
-import tempfile
 from pathlib import Path
 
 import pytest

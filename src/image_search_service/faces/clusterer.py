@@ -126,10 +126,10 @@ class FaceClusterer:
         logger.info(f"Clustering {len(embeddings)} unlabeled faces")
 
         # Convert to numpy array
-        X = np.array(embeddings)
+        embeddings_array = np.array(embeddings)
 
         # Run HDBSCAN clustering
-        cluster_labels = self._run_hdbscan(X)
+        cluster_labels = self._run_hdbscan(embeddings_array)
 
         # Process cluster assignments
         cluster_assignments: dict[str, list[tuple[uuid.UUID, uuid.UUID]]] = {}
@@ -182,11 +182,11 @@ class FaceClusterer:
             "cluster_sizes": cluster_sizes,
         }
 
-    def _run_hdbscan(self, X: np.ndarray) -> np.ndarray:
+    def _run_hdbscan(self, embeddings_array: np.ndarray) -> np.ndarray:
         """Run HDBSCAN clustering on embedding matrix.
 
         Args:
-            X: Numpy array of shape (n_samples, embedding_dim)
+            embeddings_array: Numpy array of shape (n_samples, embedding_dim)
 
         Returns:
             Cluster labels array of shape (n_samples,)
@@ -207,7 +207,7 @@ class FaceClusterer:
             core_dist_n_jobs=-1,  # Use all CPU cores
         )
 
-        cluster_labels = clusterer.fit_predict(X)
+        cluster_labels = clusterer.fit_predict(embeddings_array)
 
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         logger.debug(f"HDBSCAN found {n_clusters} clusters")
@@ -273,8 +273,8 @@ class FaceClusterer:
         original_min = self.min_cluster_size
         self.min_cluster_size = min_cluster_size
 
-        X = np.array(embeddings)
-        cluster_labels = self._run_hdbscan(X)
+        embeddings_array = np.array(embeddings)
+        cluster_labels = self._run_hdbscan(embeddings_array)
 
         self.min_cluster_size = original_min
 

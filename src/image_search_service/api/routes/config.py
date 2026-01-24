@@ -11,14 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from image_search_service.db.session import get_db
+from image_search_service.services.config_service import ConfigService
+
 
 def to_camel(string: str) -> str:
     """Convert snake_case to camelCase."""
     words = string.split("_")
     return words[0] + "".join(word.capitalize() for word in words[1:])
-
-from image_search_service.db.session import get_db
-from image_search_service.services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)
 
@@ -173,8 +173,12 @@ async def get_face_matching_config(
         prototype_min_quality=await service.get_float("face_prototype_min_quality"),
         prototype_max_exemplars=await service.get_int("face_prototype_max_exemplars"),
         # Post-training suggestions
-        post_training_suggestions_mode=await service.get_string("post_training_suggestions_mode"),
-        post_training_suggestions_top_n_count=await service.get_int("post_training_suggestions_top_n_count"),
+        post_training_suggestions_mode=await service.get_string(
+            "post_training_suggestions_mode"
+        ),
+        post_training_suggestions_top_n_count=await service.get_int(
+            "post_training_suggestions_top_n_count"
+        ),
     )
 
 

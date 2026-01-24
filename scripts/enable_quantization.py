@@ -104,7 +104,7 @@ def enable_quantization(
     # Estimate savings
     if info["vectors_count"] and info["vector_size"]:
         savings = estimate_memory_savings(info["vectors_count"], info["vector_size"])
-        print(f"\n  Memory estimation:")
+        print("\n  Memory estimation:")
         print(f"    Current: {savings['current_memory_mb']:.2f} MB")
         print(f"    After quantization: {savings['quantized_memory_mb']:.2f} MB")
         print(f"    Savings: {savings['savings_mb']:.2f} MB ({savings['savings_percent']:.1f}%)")
@@ -193,13 +193,20 @@ def show_status(client: QdrantClient, collection_names: list[str]) -> None:
             else:
                 print(f"  Memory (current): ~{savings['current_memory_mb']:.2f} MB")
                 print(
-                    f"  Potential savings: ~{savings['savings_mb']:.2f} MB ({savings['savings_percent']:.1f}%)"
+                    f"  Potential savings: ~{savings['savings_mb']:.2f} MB "
+                    f"({savings['savings_percent']:.1f}%)"
                 )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Enable scalar quantization on Qdrant collections")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would happen without making changes")
+    parser = argparse.ArgumentParser(
+        description="Enable scalar quantization on Qdrant collections"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would happen without making changes",
+    )
     parser.add_argument("--status", action="store_true", help="Show collection status only")
     parser.add_argument(
         "--collections",

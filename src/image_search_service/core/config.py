@@ -112,7 +112,10 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         alias="UNKNOWN_FACE_CLUSTER_MIN_CONFIDENCE",
-        description="Minimum intra-cluster confidence threshold for displaying unknown faces (0.0-1.0)",
+        description=(
+            "Minimum intra-cluster confidence threshold for displaying unknown "
+            "faces (0.0-1.0)"
+        ),
     )
     unknown_face_cluster_min_size: int = Field(
         default=2,

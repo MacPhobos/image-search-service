@@ -56,7 +56,7 @@ def test_find_orphans_no_orphans(mock_db_session, mock_face_instances):
     mock_qdrant.point_exists.return_value = True
 
     with patch("image_search_service.db.sync_operations.get_sync_session") as mock_get_session:
-        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:  # noqa: E501
             mock_get_session.return_value = mock_db_session
             mock_get_qdrant.return_value = mock_qdrant
 
@@ -80,12 +80,12 @@ def test_find_orphans_with_orphans(mock_db_session, mock_face_instances):
 
     def point_exists_side_effect(point_id):
         # First two faces are orphaned
-        return point_id not in [mock_face_instances[0].qdrant_point_id, mock_face_instances[1].qdrant_point_id]
+        return point_id not in [mock_face_instances[0].qdrant_point_id, mock_face_instances[1].qdrant_point_id]  # noqa: E501
 
     mock_qdrant.point_exists.side_effect = point_exists_side_effect
 
     with patch("image_search_service.db.sync_operations.get_sync_session") as mock_get_session:
-        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:  # noqa: E501
             mock_get_session.return_value = mock_db_session
             mock_get_qdrant.return_value = mock_qdrant
 
@@ -124,7 +124,7 @@ def test_find_orphans_with_fix(mock_db_session, mock_face_instances, mock_assets
     mock_service.process_asset.return_value = [MagicMock()]  # Return 1 face per asset
 
     with patch("image_search_service.db.sync_operations.get_sync_session") as mock_get_session:
-        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:  # noqa: E501
             with patch("image_search_service.faces.service.get_face_service") as mock_get_service:
                 mock_get_session.return_value = mock_db_session
                 mock_get_qdrant.return_value = mock_qdrant
@@ -151,7 +151,7 @@ def test_find_orphans_respects_limit(mock_db_session, mock_face_instances):
     mock_qdrant.point_exists.return_value = True
 
     with patch("image_search_service.db.sync_operations.get_sync_session") as mock_get_session:
-        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get_qdrant:  # noqa: E501
             mock_get_session.return_value = mock_db_session
             mock_get_qdrant.return_value = mock_qdrant
 

@@ -101,8 +101,12 @@ class TestClusterEndpoints:
         assert data["page"] == 1
 
     @pytest.mark.asyncio
-    async def test_list_clusters_partially_labeled(self, test_client, db_session, mock_image_asset, mock_person):
-        """Test listing clusters with mixed labeled/unlabeled faces (regression test for duplicate bug).
+    async def test_list_clusters_partially_labeled(  # noqa: E501
+        self, test_client, db_session, mock_image_asset, mock_person
+    ):
+        """Test listing clusters with mixed labeled/unlabeled faces.
+
+        Regression test for duplicate bug.
 
         This tests the fix for the bug where grouping by both cluster_id AND person_id
         caused duplicate cluster rows when a cluster had some faces labeled and some unlabeled.
@@ -169,7 +173,7 @@ class TestClusterEndpoints:
         cluster = data["items"][0]
         assert cluster["clusterId"] == cluster_id
         assert cluster["faceCount"] == 3, "Should aggregate all 3 faces in the cluster"
-        assert cluster["personId"] == str(mock_person.id), "Should use MAX person_id (labeled over unlabeled)"
+        assert cluster["personId"] == str(mock_person.id), "Should use MAX person_id (labeled over unlabeled)"  # noqa: E501
         assert cluster["personName"] == mock_person.name
 
         # Test with include_labeled=False (should NOT see this cluster since it has labeled faces)
@@ -377,7 +381,7 @@ class TestPersonEndpoints:
         assert data["photoCount"] == 2  # 2 distinct photos
 
     @pytest.mark.asyncio
-    async def test_get_person_with_thumbnail(self, test_client, db_session, mock_person, mock_image_asset):
+    async def test_get_person_with_thumbnail(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
         """Test getting person with thumbnail URL from highest quality face."""
         from image_search_service.db.models import FaceInstance
 
@@ -504,7 +508,7 @@ class TestPersonEndpoints:
         assert data["personName"] == mock_person.name
 
     @pytest.mark.asyncio
-    async def test_get_person_photos_success(self, test_client, db_session, mock_person, mock_image_asset):
+    async def test_get_person_photos_success(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
         """Test getting photos for person with faces."""
         from image_search_service.db.models import FaceInstance
 
@@ -845,7 +849,7 @@ class TestBulkOperations:
         assert data["skippedFaces"] == 0
 
     @pytest.mark.asyncio
-    async def test_bulk_remove_no_matching_faces(self, test_client, db_session, mock_person, mock_image_asset):
+    async def test_bulk_remove_no_matching_faces(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
         """Test bulk remove when no faces match."""
         # Photo exists but has no faces from this person
         response = await test_client.post(
@@ -859,7 +863,7 @@ class TestBulkOperations:
         assert data["updatedPhotos"] == 0
 
     @pytest.mark.asyncio
-    async def test_bulk_remove_success(self, test_client, db_session, mock_person, mock_image_asset):
+    async def test_bulk_remove_success(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
         """Test successful bulk remove operation."""
 
         from image_search_service.db.models import FaceInstance
@@ -961,7 +965,7 @@ class TestBulkOperations:
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_bulk_move_create_new_person(self, test_client, db_session, mock_person, mock_image_asset):
+    async def test_bulk_move_create_new_person(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
         """Test bulk move creating a new person."""
 
         from image_search_service.db.models import FaceInstance
@@ -999,7 +1003,7 @@ class TestBulkOperations:
             assert data["personCreated"] is True
 
     @pytest.mark.asyncio
-    async def test_bulk_move_to_existing_person(self, test_client, db_session, mock_person, mock_image_asset):
+    async def test_bulk_move_to_existing_person(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
         """Test bulk move to existing person."""
 
         from image_search_service.db.models import FaceInstance, Person

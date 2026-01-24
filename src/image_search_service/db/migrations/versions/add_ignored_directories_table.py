@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('path', sa.String(length=1024), nullable=False),
         sa.Column('reason', sa.String(length=255), nullable=True),
-        sa.Column('ignored_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('ignored_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),  # noqa: E501
         sa.Column('ignored_by', sa.String(length=255), nullable=True),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('path', name='uq_ignored_directories_path')

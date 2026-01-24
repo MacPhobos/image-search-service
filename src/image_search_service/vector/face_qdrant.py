@@ -779,7 +779,7 @@ class FaceQdrantClient:
             Dict with collection info or None if collection doesn't exist
         """
         try:
-            collection_info = self.client.get_collection(collection_name=_get_face_collection_name())
+            collection_info = self.client.get_collection(collection_name=_get_face_collection_name())  # noqa: E501
 
             return {
                 "name": _get_face_collection_name(),
@@ -792,7 +792,7 @@ class FaceQdrantClient:
             }
 
         except Exception as e:
-            logger.warning(f"Failed to get collection info for '{_get_face_collection_name()}': {e}")
+            logger.warning(f"Failed to get collection info for '{_get_face_collection_name()}': {e}")  # noqa: E501
             return None
 
     def reset_collection(self) -> int:

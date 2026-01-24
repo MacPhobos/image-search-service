@@ -686,7 +686,7 @@ class FaceDetectionSession(Base):
     faces_detected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     faces_assigned: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
-    )  # Auto-assigned to known persons (DEPRECATED: sum of faces_assigned_to_persons + clusters_created)
+    )  # Auto-assigned to known persons (DEPRECATED: sum of faces_assigned_to_persons + clusters_created)  # noqa: E501
 
     # Detailed assignment breakdown
     faces_assigned_to_persons: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -778,7 +778,7 @@ class FaceSuggestion(Base):
         Float,
         nullable=True,
         default=None,
-        doc="Aggregated confidence score across all matching prototypes (e.g., max or weighted avg)",
+        doc="Aggregated confidence score across all matching prototypes (e.g., max or weighted avg)",  # noqa: E501
     )
     prototype_match_count: Mapped[int | None] = mapped_column(
         Integer,

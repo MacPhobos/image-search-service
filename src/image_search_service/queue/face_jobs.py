@@ -885,7 +885,7 @@ def detect_faces_for_session_job(
                                 "face_count": person.face_count,
                                 "job_id": job.id,
                                 "job_type": "prototype",
-                                "reason": "insufficient_faces" if use_centroids else "centroids_disabled",
+                                "reason": "insufficient_faces" if use_centroids else "centroids_disabled",  # noqa: E501
                             }
                         )
 

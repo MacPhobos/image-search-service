@@ -47,7 +47,7 @@ class TestFaceProcessingService:
                 mock_session = MagicMock()
                 service = FaceProcessingService(mock_session)
 
-                with patch("image_search_service.faces.detector.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.detector.detect_faces_from_path") as mock_detect:  # noqa: E501
                     mock_detect.return_value = []
                     faces = service.process_asset(mock_image_asset)
 
@@ -77,7 +77,7 @@ class TestFaceProcessingService:
 
             mock_session.add = mock_add
             mock_session.commit = MagicMock()
-            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))  # noqa: E501
 
             service = FaceProcessingService(mock_session)
 
@@ -86,7 +86,7 @@ class TestFaceProcessingService:
             with patch("image_search_service.faces.service.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:  # noqa: E501
                     mock_detect.return_value = [mock_detected_face]
                     faces = service.process_asset(mock_image_asset)
 
@@ -114,7 +114,7 @@ class TestFaceProcessingService:
             mock_session = MagicMock()
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
-            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))  # noqa: E501
 
             service = FaceProcessingService(mock_session)
 
@@ -122,7 +122,7 @@ class TestFaceProcessingService:
             with patch("image_search_service.faces.service.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:  # noqa: E501
                     mock_detect.return_value = [mock_detected_face]
                     service.process_asset(mock_image_asset)
 
@@ -174,7 +174,7 @@ class TestFaceProcessingService:
             with patch("image_search_service.faces.service.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:  # noqa: E501
                     mock_detect.return_value = [mock_detected_face]
                     faces = service.process_asset(mock_image_asset)
 
@@ -204,7 +204,7 @@ class TestFaceProcessingService:
             mock_session.get = MagicMock(return_value=mock_image_asset)
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
-            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))  # noqa: E501
 
             service = FaceProcessingService(mock_session)
 
@@ -310,7 +310,7 @@ class TestFaceProcessingService:
             mock_session.get = MagicMock(return_value=mock_image_asset)
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
-            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))  # noqa: E501
 
             service = FaceProcessingService(mock_session)
 
@@ -318,7 +318,7 @@ class TestFaceProcessingService:
             with patch("image_search_service.faces.service.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
 
-                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:
+                with patch("image_search_service.faces.service.detect_faces_from_path") as mock_detect:  # noqa: E501
                     mock_detect.return_value = [mock_detected_face]
                     result = service.process_assets_batch(
                         [mock_image_asset.id],
@@ -386,7 +386,7 @@ class TestFaceProcessingService:
             mock_session.get = get_asset
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
-            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))  # noqa: E501
 
             service = FaceProcessingService(mock_session)
 
@@ -445,7 +445,7 @@ class TestFaceProcessingService:
             mock_session.get = get_asset
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
-            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+            mock_session.execute = MagicMock(return_value=MagicMock(scalar_one_or_none=lambda: None))  # noqa: E501
 
             service = FaceProcessingService(mock_session)
 

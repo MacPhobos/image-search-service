@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
+from PIL import Image
 
 
 class MockSigLIPEmbeddingService:

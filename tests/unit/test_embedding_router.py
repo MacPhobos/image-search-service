@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 def test_router_returns_clip_by_default() -> None:
     """Test that router returns CLIP service by default (use_siglip=False)."""
@@ -139,7 +137,7 @@ def test_router_gradual_rollout_0_percent_uses_clip() -> None:
             "image_search_service.services.embedding_router.get_embedding_service"
         ) as mock_clip, patch(
             "image_search_service.services.embedding_router.get_siglip_service"
-        ) as mock_siglip:
+        ):
             mock_clip_service = MagicMock()
             mock_clip.return_value = mock_clip_service
 
@@ -169,7 +167,7 @@ def test_router_gradual_rollout_100_percent_uses_siglip() -> None:
 
         with patch(
             "image_search_service.services.embedding_router.get_embedding_service"
-        ) as mock_clip, patch(
+        ), patch(
             "image_search_service.services.embedding_router.get_siglip_service"
         ) as mock_siglip:
             mock_siglip_service = MagicMock()
@@ -201,7 +199,7 @@ def test_router_use_siglip_overrides_rollout_percentage() -> None:
 
         with patch(
             "image_search_service.services.embedding_router.get_embedding_service"
-        ) as mock_clip, patch(
+        ), patch(
             "image_search_service.services.embedding_router.get_siglip_service"
         ) as mock_siglip:
             mock_siglip_service = MagicMock()

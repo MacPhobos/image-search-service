@@ -41,14 +41,14 @@ References
   and individual rank learning methods." SIGIR 2009.
 """
 
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel
 
 T = TypeVar("T")
 
 
-class RankedItem(BaseModel, Generic[T]):
+class RankedItem[T](BaseModel):
     """Single item with its rank in a result list.
 
     Attributes:
@@ -64,7 +64,7 @@ class RankedItem(BaseModel, Generic[T]):
     source: str | None = None
 
 
-class FusedResult(BaseModel, Generic[T]):
+class FusedResult[T](BaseModel):
     """Result after RRF fusion with aggregated scores.
 
     Attributes:
@@ -82,7 +82,7 @@ class FusedResult(BaseModel, Generic[T]):
     combined_rank: int
 
 
-def reciprocal_rank_fusion(
+def reciprocal_rank_fusion[T](
     ranked_lists: list[list[RankedItem[T]]],
     k: int = 60,
 ) -> list[FusedResult[T]]:
@@ -167,7 +167,7 @@ def reciprocal_rank_fusion(
     return fused_results
 
 
-def weighted_reciprocal_rank_fusion(
+def weighted_reciprocal_rank_fusion[T](
     ranked_lists: list[list[RankedItem[T]]],
     source_weights: dict[str, float] | None = None,
     k: int = 60,
