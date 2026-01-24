@@ -44,10 +44,22 @@ class Settings(BaseSettings):
             return int(url.split(":")[1].split("/")[0])
         return 6333  # Default Qdrant port
 
-    # CLIP model settings
+    # CLIP model settings (kept for backward compatibility)
     clip_model_name: str = Field(default="ViT-B-32", alias="CLIP_MODEL_NAME")
     clip_pretrained: str = Field(default="laion2b_s34b_b79k", alias="CLIP_PRETRAINED")
     embedding_dim: int = Field(default=512, alias="EMBEDDING_DIM")
+
+    # SigLIP model settings
+    siglip_model_name: str = Field(default="ViT-B-16-SigLIP", alias="SIGLIP_MODEL_NAME")
+    siglip_pretrained: str = Field(default="webli", alias="SIGLIP_PRETRAINED")
+    siglip_embedding_dim: int = Field(default=768, alias="SIGLIP_EMBEDDING_DIM")
+    siglip_collection: str = Field(default="image_assets_siglip", alias="SIGLIP_COLLECTION")
+
+    # Feature flags for gradual rollout
+    use_siglip: bool = Field(default=False, alias="USE_SIGLIP")
+    siglip_rollout_percentage: int = Field(
+        default=0, ge=0, le=100, alias="SIGLIP_ROLLOUT_PERCENTAGE"
+    )
 
     # Application
     log_level: str = "INFO"

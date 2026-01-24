@@ -20,6 +20,7 @@ from image_search_service.core.logging import get_logger
 from image_search_service.db.models import ImageAsset
 from image_search_service.db.session import get_db
 from image_search_service.services.embedding import get_embedding_service
+from image_search_service.services.embedding_router import get_search_embedding_service
 from image_search_service.vector.qdrant import get_qdrant_client, search_vectors
 
 logger = get_logger(__name__)
@@ -58,8 +59,10 @@ async def search_assets(
             },
         )
 
+    # Get embedding service based on feature flags (CLIP or SigLIP)
+    embedding_service, collection = get_search_embedding_service(user_id=None)
+
     # Embed the query
-    embedding_service = get_embedding_service()
     try:
         query_vector = embedding_service.embed_text(request.query)
     except Exception as e:
@@ -84,6 +87,7 @@ async def search_assets(
             offset=request.offset,
             filters=search_filters if search_filters else None,
             client=qdrant,
+            collection_name=collection,  # Use selected collection (CLIP or SigLIP)
         )
     except Exception as e:
         logger.error(f"Qdrant search failed: {e}")
@@ -175,8 +179,10 @@ async def search_by_image(
             content = await file.read()
             temp_file.write(content)
 
+        # Get embedding service based on feature flags (CLIP or SigLIP)
+        embedding_service, collection = get_search_embedding_service(user_id=None)
+
         # Embed the image
-        embedding_service = get_embedding_service()
         try:
             query_vector = embedding_service.embed_image(temp_path)
         except Exception as e:
@@ -202,6 +208,7 @@ async def search_by_image(
                 offset=offset,
                 filters=search_filters if search_filters else None,
                 client=qdrant,
+                collection_name=collection,  # Use selected collection (CLIP or SigLIP)
             )
         except Exception as e:
             logger.error(f"Qdrant search failed: {e}")
@@ -291,13 +298,16 @@ async def search_similar(
             },
         )
 
-    # Retrieve the existing embedding from Qdrant
+    # Get embedding service and collection based on feature flags
+    # Note: For similar search, we need to retrieve from the same collection
+    # that was used for the original asset embedding
     from image_search_service.core.config import get_settings
 
-    settings = get_settings()
+    _, collection = get_search_embedding_service(user_id=None)
+
     try:
         point = qdrant.retrieve(
-            collection_name=settings.qdrant_collection,
+            collection_name=collection,
             ids=[asset_id],
             with_vectors=True,
         )
@@ -360,6 +370,7 @@ async def search_similar(
             offset=offset,
             filters=search_filters if search_filters else None,
             client=qdrant,
+            collection_name=collection,  # Use selected collection (CLIP or SigLIP)
         )
     except Exception as e:
         logger.error(f"Qdrant search failed: {e}")
