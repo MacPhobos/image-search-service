@@ -190,6 +190,29 @@ class BatchThumbnailResponse(BaseModel):
     )
 
 
+class ImageSearchRequest(BaseModel):
+    """Request to search by image with optional filters."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    limit: int = 50
+    offset: int = 0
+    filters: dict[str, str | int] | None = None
+    category_id: int | None = Field(None, alias="categoryId", description="Filter by category ID")
+
+
+class SimilarSearchRequest(BaseModel):
+    """Request to find similar images."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    limit: int = 50
+    offset: int = 0
+    exclude_self: bool = Field(True, alias="excludeSelf", description="Exclude source image from results")
+    filters: dict[str, str | int] | None = None
+    category_id: int | None = Field(None, alias="categoryId", description="Filter by category ID")
+
+
 class ErrorResponse(BaseModel):
     """Error response schema."""
 

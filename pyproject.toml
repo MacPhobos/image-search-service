@@ -26,6 +26,7 @@ dependencies = [
     "opencv-python>=4.8.0",
     "hdbscan>=0.8.33",
     "tqdm>=4.67.1",
+    "python-multipart>=0.0.21",
 ]
 
 [project.optional-dependencies]
