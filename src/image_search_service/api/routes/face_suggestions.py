@@ -38,6 +38,7 @@ from image_search_service.db.models import (
 from image_search_service.db.session import get_db
 from image_search_service.queue.face_jobs import find_more_suggestions_job
 from image_search_service.services.config_service import ConfigService
+from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
 logger = logging.getLogger(__name__)
 
@@ -533,6 +534,20 @@ async def accept_suggestion(
     await db.commit()
     await db.refresh(suggestion)
 
+    # Sync person_id to Qdrant (must happen after DB commit succeeds)
+    try:
+        qdrant = get_face_qdrant_client()
+        qdrant.update_person_ids(
+            [face.qdrant_point_id],
+            suggestion.suggested_person_id,
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to sync person_id to Qdrant for face {face.id}: {e}. "
+            f"DB is updated but Qdrant is out of sync."
+        )
+        # Do not re-raise -- DB commit succeeded, Qdrant can be repaired later
+
     # Get person for response
     person = await db.get(Person, suggestion.suggested_person_id)
 
@@ -658,6 +673,7 @@ async def bulk_suggestion_action(
     failed = 0
     errors: list[str] = []
     affected_person_ids: set[UUID] = set()
+    qdrant_sync_batch: dict[UUID, list[UUID]] = {}
 
     for suggestion_id in request.suggestion_ids:
         suggestion = await db.get(FaceSuggestion, suggestion_id)
@@ -679,6 +695,12 @@ async def bulk_suggestion_action(
                 face = await db.get(FaceInstance, suggestion.face_instance_id)
                 if face:
                     face.person_id = suggestion.suggested_person_id
+                    # Collect for Qdrant batch sync
+                    if suggestion.suggested_person_id not in qdrant_sync_batch:
+                        qdrant_sync_batch[suggestion.suggested_person_id] = []
+                    qdrant_sync_batch[suggestion.suggested_person_id].append(
+                        face.qdrant_point_id
+                    )
                 suggestion.status = FaceSuggestionStatus.ACCEPTED.value
                 # Track affected person IDs for auto-find-more
                 affected_person_ids.add(suggestion.suggested_person_id)
@@ -693,6 +715,22 @@ async def bulk_suggestion_action(
             errors.append(f"Error processing suggestion {suggestion_id}: {str(e)}")
 
     await db.commit()
+
+    # Batch sync person_ids to Qdrant (after DB commit succeeds)
+    if qdrant_sync_batch:
+        try:
+            qdrant = get_face_qdrant_client()
+            for person_id, point_ids in qdrant_sync_batch.items():
+                qdrant.update_person_ids(point_ids, person_id)
+            logger.info(
+                f"Synced {sum(len(v) for v in qdrant_sync_batch.values())} "
+                f"face person_ids to Qdrant for {len(qdrant_sync_batch)} persons"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to sync person_ids to Qdrant during bulk action: {e}. "
+                f"DB is updated but Qdrant is out of sync."
+            )
 
     logger.info(f"Bulk {request.action}: processed {processed}, failed {failed}")
 
