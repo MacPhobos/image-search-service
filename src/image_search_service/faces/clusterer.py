@@ -17,6 +17,7 @@ class FaceClusterer:
     def __init__(
         self,
         db_session: SyncSession,
+        qdrant_client,  # FaceQdrantClient type hint would create circular import
         min_cluster_size: int = 5,
         min_samples: int = 3,
         cluster_selection_epsilon: float = 0.0,
@@ -26,12 +27,14 @@ class FaceClusterer:
 
         Args:
             db_session: Synchronous SQLAlchemy session
+            qdrant_client: Face Qdrant client for vector operations
             min_cluster_size: Minimum cluster size for HDBSCAN
             min_samples: Minimum samples for core point
             cluster_selection_epsilon: Cluster selection epsilon (0 = default behavior)
             metric: Distance metric (euclidean or cosine)
         """
         self.db = db_session
+        self.qdrant = qdrant_client
         self.min_cluster_size = min_cluster_size
         self.min_samples = min_samples
         self.cluster_selection_epsilon = cluster_selection_epsilon
@@ -54,14 +57,14 @@ class FaceClusterer:
             Summary dict with cluster counts and statistics
         """
         from image_search_service.db.models import FaceInstance
-        from image_search_service.vector.face_qdrant import get_face_qdrant_client
+        from image_search_service.vector.face_qdrant import _get_face_collection_name
 
         logger.info(
             f"Starting face clustering (quality>={quality_threshold}, max={max_faces})"
         )
 
-        # Get unlabeled faces with embeddings from Qdrant
-        qdrant = get_face_qdrant_client()
+        # Use injected Qdrant client
+        qdrant = self.qdrant
 
         # Scroll through unlabeled faces and collect embeddings
         face_ids: list[uuid.UUID] = []
@@ -85,7 +88,7 @@ class FaceClusterer:
 
             # Scroll with filter
             records, next_offset = qdrant.client.scroll(
-                collection_name="faces",
+                collection_name=_get_face_collection_name(),
                 scroll_filter=scroll_filter,
                 limit=min(1000, max_faces - len(face_ids)),
                 offset=offset,
@@ -229,9 +232,9 @@ class FaceClusterer:
             Summary of sub-clusters created
         """
         from image_search_service.db.models import FaceInstance
-        from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
-        qdrant = get_face_qdrant_client()
+        # Use injected Qdrant client
+        qdrant = self.qdrant
 
         # Get all faces in this cluster
         face_ids: list[uuid.UUID] = []
@@ -312,6 +315,7 @@ class FaceClusterer:
 
 def get_face_clusterer(
     db_session: SyncSession,
+    qdrant_client,  # FaceQdrantClient type hint would create circular import
     min_cluster_size: int = 5,
     min_samples: int = 3,
 ) -> FaceClusterer:
@@ -319,6 +323,7 @@ def get_face_clusterer(
 
     Args:
         db_session: Synchronous SQLAlchemy session
+        qdrant_client: Face Qdrant client for vector operations
         min_cluster_size: Minimum cluster size for HDBSCAN
         min_samples: Minimum samples for core point
 
@@ -327,6 +332,7 @@ def get_face_clusterer(
     """
     return FaceClusterer(
         db_session=db_session,
+        qdrant_client=qdrant_client,
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
     )

@@ -1,7 +1,7 @@
 """Database session management with lazy initialization."""
 
 import platform
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session as SyncSession
 
 from image_search_service.core.config import get_settings
 from image_search_service.core.logging import get_logger
@@ -110,6 +111,23 @@ def get_sync_engine() -> Engine:
         logger.info("Sync database engine initialized for workers")
 
     return _sync_engine
+
+
+def get_sync_db() -> Generator[SyncSession, None, None]:
+    """Dependency for FastAPI to get synchronous database session.
+
+    Used for routes that need synchronous database access (e.g., face clustering
+    with HDBSCAN which uses synchronous libraries).
+
+    Yields:
+        Synchronous SQLAlchemy session
+    """
+    engine = get_sync_engine()
+    session = SyncSession(engine)
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 async def close_db() -> None:

@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Integer, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session as SyncSession
 
 from image_search_service.api.face_schemas import (
     AssignFaceRequest,
@@ -71,11 +72,39 @@ from image_search_service.db.models import (
     PersonStatus,
     PrototypeRole,
 )
-from image_search_service.db.session import get_db
+from image_search_service.db.session import get_db, get_sync_db
+from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/faces", tags=["Faces"])
+
+
+# ============ Dependencies ============
+
+
+def get_face_clusterer_dep(
+    sync_db: SyncSession = Depends(get_sync_db),
+    min_cluster_size: int = 5,
+) -> "FaceClusterer":  # type: ignore
+    """Dependency for getting a configured FaceClusterer instance.
+
+    Args:
+        sync_db: Synchronous database session
+        min_cluster_size: Minimum cluster size for HDBSCAN
+
+    Returns:
+        Configured FaceClusterer instance with injected dependencies
+    """
+    from image_search_service.faces.clusterer import get_face_clusterer
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    qdrant_client = get_face_qdrant_client()
+    return get_face_clusterer(
+        db_session=sync_db,
+        qdrant_client=qdrant_client,
+        min_cluster_size=min_cluster_size,
+    )
 
 
 # ============ Cluster Endpoints ============
@@ -442,18 +471,19 @@ async def split_cluster(
     cluster_id: str,
     request: SplitClusterRequest,
     db: AsyncSession = Depends(get_db),
+    sync_db: SyncSession = Depends(get_sync_db),
+    qdrant_client: "FaceQdrantClient" = Depends(get_face_qdrant_client),  # type: ignore
 ) -> SplitClusterResponse:
     """Split a cluster into smaller sub-clusters using tighter HDBSCAN params."""
-    from image_search_service.db.sync_operations import get_sync_session
     from image_search_service.faces.clusterer import get_face_clusterer
 
-    # Use sync session for clusterer
-    with get_sync_session() as sync_db:
-        clusterer = get_face_clusterer(
-            sync_db,
-            min_cluster_size=request.min_cluster_size,
-        )
-        result = clusterer.recluster_within_cluster(cluster_id)
+    # Get clusterer with injected dependencies
+    clusterer = get_face_clusterer(
+        db_session=sync_db,
+        qdrant_client=qdrant_client,
+        min_cluster_size=request.min_cluster_size,
+    )
+    result = clusterer.recluster_within_cluster(cluster_id)
 
     if result.get("status") == "too_small":
         raise HTTPException(
@@ -1568,20 +1598,22 @@ async def detect_faces_in_asset(
 async def trigger_clustering(
     request: TriggerClusteringRequest,
     db: AsyncSession = Depends(get_db),
+    sync_db: SyncSession = Depends(get_sync_db),
+    qdrant_client: "FaceQdrantClient" = Depends(get_face_qdrant_client),  # type: ignore
 ) -> ClusteringResultResponse:
     """Trigger face clustering on unlabeled faces."""
-    from image_search_service.db.sync_operations import get_sync_session
     from image_search_service.faces.clusterer import get_face_clusterer
 
-    with get_sync_session() as sync_db:
-        clusterer = get_face_clusterer(
-            sync_db,
-            min_cluster_size=request.min_cluster_size,
-        )
-        result = clusterer.cluster_unlabeled_faces(
-            quality_threshold=request.quality_threshold,
-            max_faces=request.max_faces,
-        )
+    # Get clusterer with injected dependencies
+    clusterer = get_face_clusterer(
+        db_session=sync_db,
+        qdrant_client=qdrant_client,
+        min_cluster_size=request.min_cluster_size,
+    )
+    result = clusterer.cluster_unlabeled_faces(
+        quality_threshold=request.quality_threshold,
+        max_faces=request.max_faces,
+    )
 
     return ClusteringResultResponse(
         total_faces=result["total_faces"],

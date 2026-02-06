@@ -19,9 +19,10 @@ from sqlalchemy.ext.asyncio import (
 
 from image_search_service.core.config import get_settings
 from image_search_service.db.models import Base
-from image_search_service.db.session import get_db
+from image_search_service.db.session import get_db, get_sync_db
 from image_search_service.main import create_app
 from image_search_service.services.embedding import get_embedding_service
+from image_search_service.vector.face_qdrant import get_face_qdrant_client
 from image_search_service.vector.qdrant import get_qdrant_client
 
 # Use SQLite for tests (no external dependencies)
@@ -180,10 +181,18 @@ def qdrant_client() -> QdrantClient:
     """
     client = QdrantClient(":memory:")
 
-    # Create test collection with 512-dim vectors
+    # Create test collections with 512-dim vectors
     settings = get_settings()
+
+    # Main image assets collection
     client.create_collection(
         collection_name=settings.qdrant_collection,
+        vectors_config=VectorParams(size=512, distance=Distance.COSINE),
+    )
+
+    # Face embeddings collection
+    client.create_collection(
+        collection_name=settings.qdrant_face_collection,
         vectors_config=VectorParams(size=512, distance=Distance.COSINE),
     )
 
@@ -194,6 +203,20 @@ def qdrant_client() -> QdrantClient:
 def mock_embedding_service() -> MockEmbeddingService:
     """Create mock embedding service that doesn't load OpenCLIP."""
     return MockEmbeddingService()
+
+
+@pytest.fixture
+def face_qdrant_client(qdrant_client: QdrantClient):
+    """Create face Qdrant client wrapper for testing.
+
+    Uses the same in-memory Qdrant client as the main fixture.
+    """
+    from image_search_service.vector.face_qdrant import FaceQdrantClient
+
+    # Create instance and inject test client
+    face_client = FaceQdrantClient()
+    face_client._client = qdrant_client
+    return face_client
 
 
 @pytest.fixture
@@ -248,19 +271,25 @@ def temp_image_factory(tmp_path: Path) -> Callable[..., Path]:
 @pytest.fixture
 async def test_client(
     db_session: AsyncSession,
+    sync_db_session,
     qdrant_client: QdrantClient,
+    face_qdrant_client,
     mock_embedding_service: MockEmbeddingService,
 ) -> AsyncGenerator[AsyncClient, None]:
     """Create test client for FastAPI application with dependency overrides.
 
     Overrides:
         - get_db: Uses test database session (SQLite in-memory)
+        - get_sync_db: Uses test sync database session (SQLite in-memory)
         - get_qdrant_client: Uses in-memory Qdrant client
+        - get_face_qdrant_client: Uses in-memory face Qdrant client
         - get_embedding_service: Uses mock service (no OpenCLIP loading)
 
     Args:
         db_session: Test database session fixture
+        sync_db_session: Test sync database session fixture
         qdrant_client: In-memory Qdrant client fixture
+        face_qdrant_client: In-memory face Qdrant client fixture
         mock_embedding_service: Mock embedding service fixture
 
     Yields:
@@ -272,14 +301,22 @@ async def test_client(
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
+    def override_get_sync_db():
+        yield sync_db_session
+
     def override_get_qdrant() -> QdrantClient:
         return qdrant_client
+
+    def override_get_face_qdrant():
+        return face_qdrant_client
 
     def override_get_embedding() -> MockEmbeddingService:
         return mock_embedding_service
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_sync_db] = override_get_sync_db
     app.dependency_overrides[get_qdrant_client] = override_get_qdrant
+    app.dependency_overrides[get_face_qdrant_client] = override_get_face_qdrant
     app.dependency_overrides[get_embedding_service] = override_get_embedding
 
     # Create test client
