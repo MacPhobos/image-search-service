@@ -1435,7 +1435,7 @@ def find_more_suggestions_job(
                 if result.payload is None:
                     continue
 
-                face_id_str = result.payload.get("face_id")
+                face_id_str = result.payload.get("face_instance_id")
                 if not face_id_str:
                     continue
 
@@ -1662,7 +1662,7 @@ def propagate_person_label_multiproto_job(
                 if result.payload is None:
                     continue
 
-                face_id_str = result.payload.get("face_id")
+                face_id_str = result.payload.get("face_instance_id")
                 if not face_id_str:
                     continue
 
@@ -2059,7 +2059,7 @@ def find_more_centroid_suggestions_job(
             if result.payload is None:
                 continue
 
-            face_id_str = result.payload.get("face_id")
+            face_id_str = result.payload.get("face_instance_id")
             if not face_id_str:
                 continue
 
