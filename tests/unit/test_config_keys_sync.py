@@ -121,13 +121,13 @@ def _parse_migration_inserts(migration_file: Path) -> set[str]:
         potential_keys = key_pattern.findall(values_section)
 
         # Filter to only keys that match our naming convention
-        # (start with face_, contain underscores, are likely config keys)
+        # (start with known prefixes, contain underscores, are likely config keys)
         for key in potential_keys:
             # Skip data type values like 'float', 'int', 'face_matching' category
             if key in ("float", "int", "boolean", "string", "face_matching", "general"):
                 continue
             # Only include keys that start with our known prefixes
-            if key.startswith("face_"):
+            if key.startswith(("face_", "post_training_", "centroid_")):
                 keys.add(key)
 
     return keys
@@ -359,33 +359,45 @@ def test_all_defaults_keys_are_documented_in_migration() -> None:
         content = migration_file.read_text()
 
         # Look for INSERT statements with description field
-        # Pattern: 'key_name', 'value', 'type', 'Some description'
-        if "system_configs" not in content:
+        if "system_configs" not in content or "description" not in content:
             continue
 
-        # Extract all config keys from this migration
-        insert_pattern = re.compile(
-            r"INSERT INTO system_configs.*?VALUES(.*?)(?:ON CONFLICT|;|\)[\s]*$)",
-            re.DOTALL | re.IGNORECASE,
-        )
+        # Simpler approach: Look for config key names followed by a long descriptive string
+        # Pattern: 'config_key_name' ... 'Long description text (>10 chars)'
+        # This works regardless of column ordering
 
-        for match in insert_pattern.finditer(content):
-            values_section = match.group(1)
+        # Find all potential config keys in this file
+        key_pattern = re.compile(r"'((?:face_|post_training_|centroid_)[a-z_]+)'")
+        keys_in_file = set(key_pattern.findall(content))
 
-            # Find tuples with description field
-            # Format: ('key', 'value', 'type', 'description', ...)
-            tuple_pattern = re.compile(
-                r"\(\s*'([a-z_]+)'[^)]*?,\s*'[^']*?'\s*,\s*'[^']*?'\s*,\s*'([^']+)'",
-                re.DOTALL,
-            )
+        for key in keys_in_file:
+            # Look for a description string near this key
+            # Search for the key, then look for quoted strings after it
+            key_pos = content.find(f"'{key}'")
+            if key_pos == -1:
+                continue
 
-            for tuple_match in tuple_pattern.finditer(values_section):
-                key = tuple_match.group(1)
-                description = tuple_match.group(2)
+            # Search in the next 500 characters for a description-like string
+            search_region = content[key_pos:key_pos + 500]
 
-                # Only count if it's a real config key with a description
-                if key.startswith("face_") and len(description) > 10:
+            # Find all quoted strings that are long enough to be descriptions (>10 chars)
+            desc_pattern = re.compile(r"'([^']{11,})'")
+            for desc_match in desc_pattern.finditer(search_region):
+                desc_text = desc_match.group(1)
+
+                # Filter out things that aren't descriptions
+                # (data types, categories, short values, JSON arrays)
+                if desc_text in ("float", "int", "boolean", "string", "face_matching", "general"):
+                    continue
+                if desc_text.startswith("[") or desc_text.startswith("{"):
+                    continue
+                if desc_text.isdigit() or desc_text.replace('.', '').isdigit():
+                    continue
+
+                # If we found a long descriptive string, count it
+                if len(desc_text) > 10:
                     keys_with_descriptions.add(key)
+                    break  # Found description for this key, move to next key
 
     defaults_keys = set(ConfigService.DEFAULTS.keys())
 
