@@ -466,7 +466,7 @@ class TestMultiPrototypePropagation:
                 return_value=mock_qdrant,
             ),
         ):
-            result = propagate_person_label_multiproto_job(str(person.id))
+            result = propagate_person_label_multiproto_job(str(person.id), preserve_existing=False)
 
         # Verify old suggestions were expired
         assert result["expired_count"] == 2
