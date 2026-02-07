@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = Field(default="image_assets", alias="QDRANT_COLLECTION")
     qdrant_face_collection: str = Field(default="faces", alias="QDRANT_FACE_COLLECTION")
+    qdrant_centroid_collection: str = Field(
+        default="person_centroids", alias="QDRANT_CENTROID_COLLECTION"
+    )
 
     @property
     def qdrant_host(self) -> str:

@@ -13,10 +13,13 @@ import pytest
 from qdrant_client.models import CollectionInfo
 
 from image_search_service.vector.centroid_qdrant import (
-    CENTROID_COLLECTION_NAME,
     CENTROID_VECTOR_DIM,
     CentroidQdrantClient,
 )
+from image_search_service.core.config import get_settings
+
+# Use settings value for collection name to match runtime behavior
+CENTROID_COLLECTION_NAME = get_settings().qdrant_centroid_collection
 
 
 class TestCentroidQdrantClient:

@@ -31,7 +31,6 @@ logger = get_logger(__name__)
 
 # Collection configuration
 CENTROID_VECTOR_DIM = 512  # ArcFace embedding dimension
-CENTROID_COLLECTION_NAME = "person_centroids"
 
 
 class CentroidQdrantClient:
@@ -55,7 +54,8 @@ class CentroidQdrantClient:
 
     def __init__(self) -> None:
         """Initialize client with lazy loading."""
-        pass
+        settings = get_settings()
+        self.collection_name = settings.qdrant_centroid_collection
 
     @classmethod
     def get_instance(cls) -> "CentroidQdrantClient":
@@ -96,58 +96,58 @@ class CentroidQdrantClient:
             collections = self.client.get_collections().collections
             collection_names = [c.name for c in collections]
 
-            if CENTROID_COLLECTION_NAME not in collection_names:
+            if self.collection_name not in collection_names:
                 # Create collection with cosine distance
                 self.client.create_collection(
-                    collection_name=CENTROID_COLLECTION_NAME,
+                    collection_name=self.collection_name,
                     vectors_config=VectorParams(size=CENTROID_VECTOR_DIM, distance=Distance.COSINE),
                 )
                 logger.info(
-                    f"Created Qdrant collection '{CENTROID_COLLECTION_NAME}' "
+                    f"Created Qdrant collection '{self.collection_name}' "
                     f"with dim={CENTROID_VECTOR_DIM}"
                 )
 
                 # Create payload indexes for efficient filtering
                 self.client.create_payload_index(
-                    collection_name=CENTROID_COLLECTION_NAME,
+                    collection_name=self.collection_name,
                     field_name="person_id",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'person_id'")
 
                 self.client.create_payload_index(
-                    collection_name=CENTROID_COLLECTION_NAME,
+                    collection_name=self.collection_name,
                     field_name="centroid_id",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'centroid_id'")
 
                 self.client.create_payload_index(
-                    collection_name=CENTROID_COLLECTION_NAME,
+                    collection_name=self.collection_name,
                     field_name="model_version",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'model_version'")
 
                 self.client.create_payload_index(
-                    collection_name=CENTROID_COLLECTION_NAME,
+                    collection_name=self.collection_name,
                     field_name="centroid_version",
                     field_schema=PayloadSchemaType.INTEGER,
                 )
                 logger.info("Created payload index on 'centroid_version'")
 
                 self.client.create_payload_index(
-                    collection_name=CENTROID_COLLECTION_NAME,
+                    collection_name=self.collection_name,
                     field_name="centroid_type",
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 logger.info("Created payload index on 'centroid_type'")
 
             else:
-                logger.debug(f"Collection '{CENTROID_COLLECTION_NAME}' already exists")
+                logger.debug(f"Collection '{self.collection_name}' already exists")
 
         except Exception as e:
-            logger.error(f"Failed to ensure collection '{CENTROID_COLLECTION_NAME}': {e}")
+            logger.error(f"Failed to ensure collection '{self.collection_name}': {e}")
             raise
 
     def upsert_centroid(
@@ -185,7 +185,7 @@ class CentroidQdrantClient:
 
         try:
             self.client.upsert(
-                collection_name=CENTROID_COLLECTION_NAME,
+                collection_name=self.collection_name,
                 points=[
                     PointStruct(
                         id=str(centroid_id),
@@ -208,7 +208,7 @@ class CentroidQdrantClient:
         """
         try:
             self.client.delete(
-                collection_name=CENTROID_COLLECTION_NAME,
+                collection_name=self.collection_name,
                 points_selector=PointIdsList(points=[str(centroid_id)]),
             )
             logger.info(f"Deleted centroid {centroid_id}")
@@ -228,7 +228,7 @@ class CentroidQdrantClient:
         """
         try:
             points = self.client.retrieve(
-                collection_name=CENTROID_COLLECTION_NAME,
+                collection_name=self.collection_name,
                 ids=[str(centroid_id)],
                 with_payload=False,
                 with_vectors=True,
@@ -379,7 +379,7 @@ class CentroidQdrantClient:
             scroll_filter = Filter(must=conditions) if conditions else None  # type: ignore[arg-type]
 
             records, next_offset = self.client.scroll(
-                collection_name=CENTROID_COLLECTION_NAME,
+                collection_name=self.collection_name,
                 scroll_filter=scroll_filter,
                 limit=limit,
                 offset=offset,
@@ -416,7 +416,7 @@ class CentroidQdrantClient:
 
             while True:
                 records, next_offset = self.client.scroll(
-                    collection_name=CENTROID_COLLECTION_NAME,
+                    collection_name=self.collection_name,
                     scroll_filter=person_filter,
                     limit=100,
                     offset=offset,
@@ -432,7 +432,7 @@ class CentroidQdrantClient:
                 # Delete batch
                 if point_ids:
                     self.client.delete(
-                        collection_name=CENTROID_COLLECTION_NAME,
+                        collection_name=self.collection_name,
                         points_selector=PointIdsList(points=point_ids),
                     )
                     deleted_count += len(point_ids)
@@ -459,10 +459,10 @@ class CentroidQdrantClient:
             Dict with collection info or None if collection doesn't exist
         """
         try:
-            collection_info = self.client.get_collection(collection_name=CENTROID_COLLECTION_NAME)
+            collection_info = self.client.get_collection(collection_name=self.collection_name)
 
             return {
-                "name": CENTROID_COLLECTION_NAME,
+                "name": self.collection_name,
                 "points_count": collection_info.points_count,
                 "vectors_count": collection_info.points_count,
                 "indexed_vectors_count": collection_info.indexed_vectors_count,
@@ -471,7 +471,7 @@ class CentroidQdrantClient:
             }
 
         except Exception as e:
-            logger.warning(f"Failed to get collection info for '{CENTROID_COLLECTION_NAME}': {e}")
+            logger.warning(f"Failed to get collection info for '{self.collection_name}': {e}")
             return None
 
     def reset_collection(self) -> int:
@@ -487,23 +487,23 @@ class CentroidQdrantClient:
             centroid_count = 0
             try:
                 collection_info = self.client.get_collection(
-                    collection_name=CENTROID_COLLECTION_NAME
+                    collection_name=self.collection_name
                 )
                 centroid_count = collection_info.points_count or 0
             except Exception:
                 logger.info(
-                    f"Collection '{CENTROID_COLLECTION_NAME}' does not exist, nothing to reset"
+                    f"Collection '{self.collection_name}' does not exist, nothing to reset"
                 )
                 return 0
 
             # Delete the entire collection
-            self.client.delete_collection(collection_name=CENTROID_COLLECTION_NAME)
-            logger.warning(f"Deleted collection '{CENTROID_COLLECTION_NAME}'")
+            self.client.delete_collection(collection_name=self.collection_name)
+            logger.warning(f"Deleted collection '{self.collection_name}'")
 
             # Recreate empty collection with same configuration
             self.ensure_collection()
             logger.info(
-                f"Recreated collection '{CENTROID_COLLECTION_NAME}' with dim={CENTROID_VECTOR_DIM}"
+                f"Recreated collection '{self.collection_name}' with dim={CENTROID_VECTOR_DIM}"
             )
 
             logger.warning(f"Reset centroid collection: deleted {centroid_count} centroids")

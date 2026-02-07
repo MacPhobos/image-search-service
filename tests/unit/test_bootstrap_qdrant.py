@@ -80,39 +80,49 @@ def test_ensure_image_assets_collection_already_exists(mock_qdrant_client: Magic
 
 def test_ensure_faces_collection_creates_new(mock_qdrant_client: MagicMock) -> None:
     """Test creating faces collection with payload indexes."""
-    # Collection doesn't exist
-    mock_qdrant_client.get_collections.return_value = CollectionsResponse(collections=[])
+    with patch("image_search_service.scripts.bootstrap_qdrant.get_settings") as mock_get_settings:
+        mock_settings = Mock()
+        mock_settings.qdrant_face_collection = "test_faces"
+        mock_get_settings.return_value = mock_settings
 
-    result = ensure_faces_collection(mock_qdrant_client)
+        # Collection doesn't exist
+        mock_qdrant_client.get_collections.return_value = CollectionsResponse(collections=[])
 
-    assert result is True
-    mock_qdrant_client.create_collection.assert_called_once()
-    call_args = mock_qdrant_client.create_collection.call_args
-    assert call_args.kwargs["collection_name"] == "faces"
-    assert call_args.kwargs["vectors_config"].size == 512
-    assert call_args.kwargs["vectors_config"].distance == Distance.COSINE
+        result = ensure_faces_collection(mock_qdrant_client)
 
-    # Should create 5 payload indexes
-    assert mock_qdrant_client.create_payload_index.call_count == 5
+        assert result is True
+        mock_qdrant_client.create_collection.assert_called_once()
+        call_args = mock_qdrant_client.create_collection.call_args
+        assert call_args.kwargs["collection_name"] == "test_faces"
+        assert call_args.kwargs["vectors_config"].size == 512
+        assert call_args.kwargs["vectors_config"].distance == Distance.COSINE
+
+        # Should create 5 payload indexes
+        assert mock_qdrant_client.create_payload_index.call_count == 5
 
 
 def test_ensure_faces_collection_already_exists(mock_qdrant_client: MagicMock) -> None:
     """Test that existing faces collection is not recreated."""
-    # Collection already exists
-    existing_collection = CollectionDescription(name="faces")
-    mock_qdrant_client.get_collections.return_value = CollectionsResponse(
-        collections=[existing_collection]
-    )
+    with patch("image_search_service.scripts.bootstrap_qdrant.get_settings") as mock_get_settings:
+        mock_settings = Mock()
+        mock_settings.qdrant_face_collection = "test_faces"
+        mock_get_settings.return_value = mock_settings
 
-    result = ensure_faces_collection(mock_qdrant_client)
+        # Collection already exists
+        existing_collection = CollectionDescription(name="test_faces")
+        mock_qdrant_client.get_collections.return_value = CollectionsResponse(
+            collections=[existing_collection]
+        )
 
-    assert result is False
-    mock_qdrant_client.create_collection.assert_not_called()
-    mock_qdrant_client.create_payload_index.assert_not_called()
+        result = ensure_faces_collection(mock_qdrant_client)
+
+        assert result is False
+        mock_qdrant_client.create_collection.assert_not_called()
+        mock_qdrant_client.create_payload_index.assert_not_called()
 
 
 def test_init_command_success() -> None:
-    """Test init command creates both collections."""
+    """Test init command creates all collections."""
     runner = CliRunner()
 
     with (
@@ -126,14 +136,21 @@ def test_init_command_success() -> None:
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
         mock_settings.embedding_dim = 768  # Image search uses 768-dim
+        mock_settings.qdrant_face_collection = "test_faces"
+        mock_settings.qdrant_centroid_collection = "test_person_centroids"
+        mock_settings.siglip_embedding_dim = 768
+        mock_settings.use_siglip = False
+        mock_settings.siglip_rollout_percentage = 0
+        mock_settings.siglip_collection = "test_image_assets_siglip"
         mock_get_settings.return_value = mock_settings
 
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
         assert "Bootstrap complete!" in result.stdout
-        # Should create both collections
-        assert mock_client.create_collection.call_count == 2
+        # Should create image_assets, faces, and person_centroids (3 collections)
+        # SigLIP is skipped because use_siglip=False and rollout=0
+        assert mock_client.create_collection.call_count == 3
 
 
 def test_init_command_connection_failure() -> None:
@@ -163,11 +180,12 @@ def test_verify_command_success() -> None:
     ):
         mock_client = MagicMock()
 
-        # Mock existing collections
+        # Mock existing collections (include person_centroids)
         image_collection = CollectionDescription(name="image_assets")
-        faces_collection = CollectionDescription(name="faces")
+        faces_collection = CollectionDescription(name="test_faces")
+        centroids_collection = CollectionDescription(name="test_person_centroids")
         mock_client.get_collections.return_value = CollectionsResponse(
-            collections=[image_collection, faces_collection]
+            collections=[image_collection, faces_collection, centroids_collection]
         )
 
         # Mock collection info for verification
@@ -187,12 +205,28 @@ def test_verify_command_success() -> None:
         mock_faces_info.config.params.vectors.size = 512  # Face collection stays at 512-dim
         mock_faces_info.config.params.vectors.distance = Distance.COSINE
 
-        mock_client.get_collection.side_effect = [mock_image_info, mock_faces_info]
+        mock_centroids_info = Mock(spec=CollectionInfo)
+        mock_centroids_info.points_count = 10
+        mock_centroids_info.config = Mock()
+        mock_centroids_info.config.params = Mock()
+        mock_centroids_info.config.params.vectors = Mock()
+        mock_centroids_info.config.params.vectors.size = 512  # Centroid collection uses 512-dim
+        mock_centroids_info.config.params.vectors.distance = Distance.COSINE
+
+        mock_client.get_collection.side_effect = [
+            mock_image_info,
+            mock_faces_info,
+            mock_centroids_info,
+        ]
         mock_get_client.return_value = mock_client
 
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
         mock_settings.embedding_dim = 768  # Image search uses 768-dim
+        mock_settings.qdrant_face_collection = "test_faces"
+        mock_settings.qdrant_centroid_collection = "test_person_centroids"
+        mock_settings.use_siglip = False
+        mock_settings.siglip_rollout_percentage = 0
         mock_get_settings.return_value = mock_settings
 
         result = runner.invoke(app, ["verify"])
@@ -217,6 +251,10 @@ def test_verify_command_collection_not_found() -> None:
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
         mock_settings.embedding_dim = 768  # Image search uses 768-dim
+        mock_settings.qdrant_face_collection = "test_faces"
+        mock_settings.qdrant_centroid_collection = "test_person_centroids"
+        mock_settings.use_siglip = False
+        mock_settings.siglip_rollout_percentage = 0
         mock_get_settings.return_value = mock_settings
 
         result = runner.invoke(app, ["verify"])
