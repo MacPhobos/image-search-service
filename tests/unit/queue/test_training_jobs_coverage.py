@@ -48,12 +48,12 @@ def training_job_fixtures(sync_db_session: Session, tmp_path: Path, monkeypatch)
         lambda: sync_db_session,
     )
 
-    # Mock embedding service
+    # Mock embedding service (768-dim for image search)
     mock_embed = MagicMock()
-    mock_embed.embed_image.return_value = [0.1] * 512
-    mock_embed.embed_images_batch.return_value = [[0.1] * 512, [0.2] * 512, [0.3] * 512]
-    mock_embed.embed_image_from_pil.return_value = [0.1] * 512
-    mock_embed.embedding_dim = 512
+    mock_embed.embed_image.return_value = [0.1] * 768
+    mock_embed.embed_images_batch.return_value = [[0.1] * 768, [0.2] * 768, [0.3] * 768]
+    mock_embed.embed_image_from_pil.return_value = [0.1] * 768
+    mock_embed.embedding_dim = 768
     mock_embed.device = "cpu"
     monkeypatch.setattr(
         "image_search_service.queue.training_jobs.get_embedding_service",
@@ -196,7 +196,7 @@ def test_build_evidence_metadata_basic(training_job_fixtures):
     """Test _build_evidence_metadata returns dict with expected keys."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 512
+    vector = [0.1] * 768  # 768-dim for image search
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(
@@ -223,7 +223,7 @@ def test_build_evidence_metadata_with_image_metadata(training_job_fixtures):
     """Test metadata includes image dimensions and file info."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 512
+    vector = [0.1] * 768  # 768-dim for image search
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(
@@ -246,7 +246,7 @@ def test_build_evidence_metadata_with_embedding_stats(training_job_fixtures):
     """Test metadata includes embedding dimension and norm."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 512
+    vector = [0.1] * 768  # 768-dim for image search
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(
@@ -259,7 +259,7 @@ def test_build_evidence_metadata_with_embedding_stats(training_job_fixtures):
 
     # Check embedding metadata
     embed_meta = metadata["embedding"]
-    assert embed_meta["dimension"] == 512
+    assert embed_meta["dimension"] == 768
     assert "norm" in embed_meta
     assert embed_meta["norm"] > 0  # L2 norm should be positive
     assert embed_meta["generation_time_ms"] == 100
@@ -289,7 +289,7 @@ def test_build_evidence_metadata_environment_info(training_job_fixtures):
     """Test metadata includes environment details."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 512
+    vector = [0.1] * 768  # 768-dim for image search
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(

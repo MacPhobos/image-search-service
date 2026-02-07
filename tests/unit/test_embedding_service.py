@@ -1,5 +1,6 @@
 """Test embedding service (using mock to avoid loading OpenCLIP)."""
 
+import numpy as np
 from collections.abc import Callable
 from pathlib import Path
 
@@ -7,23 +8,23 @@ from tests.conftest import MockEmbeddingService
 
 
 def test_mock_embedding_service_embed_text_returns_vector() -> None:
-    """Test that mock embedding service returns 512-dim vector for text."""
+    """Test that mock embedding service returns 768-dim vector for text."""
     service = MockEmbeddingService()
 
     vector = service.embed_text("a beautiful sunset")
 
-    # Should return 512-dimensional vector
-    assert len(vector) == 512
+    # Should return 768-dimensional vector
+    assert len(vector) == 768
     # All values should be floats
     assert all(isinstance(v, float) for v in vector)
-    # Values should be normalized (between 0 and 1)
-    assert all(0.0 <= v <= 1.0 for v in vector)
+    # Vector should be L2-normalized (norm ≈ 1.0)
+    assert abs(np.linalg.norm(vector) - 1.0) < 0.01
 
 
 def test_mock_embedding_service_embed_image_returns_vector(
     temp_image_factory: Callable[..., Path]
 ) -> None:
-    """Test that mock embedding service returns 512-dim vector for image."""
+    """Test that mock embedding service returns 768-dim vector for image."""
     service = MockEmbeddingService()
 
     # Create test image
@@ -31,19 +32,19 @@ def test_mock_embedding_service_embed_image_returns_vector(
 
     vector = service.embed_image(image_path)
 
-    # Should return 512-dimensional vector
-    assert len(vector) == 512
+    # Should return 768-dimensional vector
+    assert len(vector) == 768
     # All values should be floats
     assert all(isinstance(v, float) for v in vector)
-    # Values should be normalized
-    assert all(0.0 <= v <= 1.0 for v in vector)
+    # Vector should be L2-normalized (norm ≈ 1.0)
+    assert abs(np.linalg.norm(vector) - 1.0) < 0.01
 
 
 def test_mock_embedding_dim_correct() -> None:
     """Test that embedding_dim property returns correct dimension."""
     service = MockEmbeddingService()
 
-    assert service.embedding_dim == 512
+    assert service.embedding_dim == 768
 
 
 def test_mock_embedding_deterministic() -> None:

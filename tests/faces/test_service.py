@@ -401,7 +401,9 @@ class TestFaceProcessingService:
                     mock_load_image.side_effect = load_image_side_effect
 
                     # Mock detect_faces (not detect_faces_from_path - Phase 4 uses detect_faces)
-                    with patch("image_search_service.faces.detector.detect_faces") as mock_detect:
+                    # IMPORTANT: Patch at service module level, not detector module, because
+                    # service.py imports detect_faces at the top level
+                    with patch("image_search_service.faces.service.detect_faces") as mock_detect:
                         mock_detect.return_value = [mock_detected_face]
                         result = service.process_assets_batch(
                             [mock_asset1.id, mock_asset2.id],

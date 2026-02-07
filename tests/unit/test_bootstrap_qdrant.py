@@ -31,7 +31,7 @@ def mock_settings() -> Mock:
     """Create mock settings."""
     settings = Mock()
     settings.qdrant_collection = "image_assets"
-    settings.embedding_dim = 512
+    settings.embedding_dim = 768  # Image search uses 768-dim (CLIP/SigLIP)
     settings.qdrant_url = "http://localhost:6333"
     settings.qdrant_api_key = None
     return settings
@@ -42,7 +42,7 @@ def test_ensure_image_assets_collection_creates_new(mock_qdrant_client: MagicMoc
     with patch("image_search_service.scripts.bootstrap_qdrant.get_settings") as mock_get_settings:
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
-        mock_settings.embedding_dim = 512
+        mock_settings.embedding_dim = 768  # Image search uses 768-dim
         mock_get_settings.return_value = mock_settings
 
         # Collection doesn't exist
@@ -54,7 +54,7 @@ def test_ensure_image_assets_collection_creates_new(mock_qdrant_client: MagicMoc
         mock_qdrant_client.create_collection.assert_called_once()
         call_args = mock_qdrant_client.create_collection.call_args
         assert call_args.kwargs["collection_name"] == "image_assets"
-        assert call_args.kwargs["vectors_config"].size == 512
+        assert call_args.kwargs["vectors_config"].size == 768
         assert call_args.kwargs["vectors_config"].distance == Distance.COSINE
 
 
@@ -63,7 +63,7 @@ def test_ensure_image_assets_collection_already_exists(mock_qdrant_client: Magic
     with patch("image_search_service.scripts.bootstrap_qdrant.get_settings") as mock_get_settings:
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
-        mock_settings.embedding_dim = 512
+        mock_settings.embedding_dim = 768  # Image search uses 768-dim
         mock_get_settings.return_value = mock_settings
 
         # Collection already exists
@@ -125,7 +125,7 @@ def test_init_command_success() -> None:
 
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
-        mock_settings.embedding_dim = 512
+        mock_settings.embedding_dim = 768  # Image search uses 768-dim
         mock_get_settings.return_value = mock_settings
 
         result = runner.invoke(app, ["init"])
@@ -176,7 +176,7 @@ def test_verify_command_success() -> None:
         mock_image_info.config = Mock()
         mock_image_info.config.params = Mock()
         mock_image_info.config.params.vectors = Mock()
-        mock_image_info.config.params.vectors.size = 512
+        mock_image_info.config.params.vectors.size = 768  # Image collection uses 768-dim
         mock_image_info.config.params.vectors.distance = Distance.COSINE
 
         mock_faces_info = Mock(spec=CollectionInfo)
@@ -184,7 +184,7 @@ def test_verify_command_success() -> None:
         mock_faces_info.config = Mock()
         mock_faces_info.config.params = Mock()
         mock_faces_info.config.params.vectors = Mock()
-        mock_faces_info.config.params.vectors.size = 512
+        mock_faces_info.config.params.vectors.size = 512  # Face collection stays at 512-dim
         mock_faces_info.config.params.vectors.distance = Distance.COSINE
 
         mock_client.get_collection.side_effect = [mock_image_info, mock_faces_info]
@@ -192,7 +192,7 @@ def test_verify_command_success() -> None:
 
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
-        mock_settings.embedding_dim = 512
+        mock_settings.embedding_dim = 768  # Image search uses 768-dim
         mock_get_settings.return_value = mock_settings
 
         result = runner.invoke(app, ["verify"])
@@ -216,7 +216,7 @@ def test_verify_command_collection_not_found() -> None:
 
         mock_settings = Mock()
         mock_settings.qdrant_collection = "image_assets"
-        mock_settings.embedding_dim = 512
+        mock_settings.embedding_dim = 768  # Image search uses 768-dim
         mock_get_settings.return_value = mock_settings
 
         result = runner.invoke(app, ["verify"])

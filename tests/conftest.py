@@ -5,11 +5,12 @@ from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, PayloadSchemaType, VectorParams
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -78,8 +79,278 @@ def use_test_settings(monkeypatch):
     get_settings.cache_clear()
 
 
-class MockEmbeddingService:
-    """Mock embedding service that returns deterministic vectors without loading OpenCLIP."""
+@pytest.fixture(autouse=True)
+def clear_embedding_cache(monkeypatch):
+    """Clear embedding service cache and redirect to mock implementation.
+
+    CRITICAL: This prevents tests from loading the real OpenCLIP/SigLIP models,
+    which are expensive and not needed for unit tests.
+
+    Approach:
+    1. Clear @lru_cache on get_embedding_service()
+    2. Monkeypatch embed_text() and embed_image() methods to use SemanticMockEmbeddingService
+    3. This avoids loading the real models while keeping EmbeddingService structure
+
+    This ensures all tests use the lightweight mock embedding service with semantic similarity.
+    """
+    from image_search_service.services.embedding import EmbeddingService, get_embedding_service
+
+    # Clear any cached embedding services from previous tests
+    get_embedding_service.cache_clear()
+
+    # Create a shared mock instance for consistent semantic embeddings
+    semantic_mock = SemanticMockEmbeddingService()
+
+    # Monkeypatch EmbeddingService methods to use SemanticMockEmbeddingService
+    original_embed_text = EmbeddingService.embed_text
+    original_embed_image = EmbeddingService.embed_image
+    original_embed_images_batch = EmbeddingService.embed_images_batch
+    original_embedding_dim = EmbeddingService.embedding_dim
+
+    def mock_embed_text(self, text: str) -> list[float]:
+        """Use semantic mock instead of real CLIP."""
+        return semantic_mock.embed_text(text)
+
+    def mock_embed_image(self, image_path: str | Path) -> list[float]:
+        """Use semantic mock instead of real CLIP."""
+        return semantic_mock.embed_image(image_path)
+
+    def mock_embed_images_batch(self, images: list) -> list[list[float]]:
+        """Use semantic mock instead of real CLIP."""
+        return semantic_mock.embed_images_batch(images)
+
+    def mock_embedding_dim(self) -> int:
+        """Return 768-dim to match semantic mock."""
+        return semantic_mock.embedding_dim
+
+    monkeypatch.setattr(EmbeddingService, "embed_text", mock_embed_text)
+    monkeypatch.setattr(EmbeddingService, "embed_image", mock_embed_image)
+    monkeypatch.setattr(EmbeddingService, "embed_images_batch", mock_embed_images_batch)
+    monkeypatch.setattr(EmbeddingService, "embedding_dim", property(mock_embedding_dim))
+
+    yield
+
+    # Cleanup after test
+    get_embedding_service.cache_clear()
+    # Restore original methods (monkeypatch handles this automatically)
+
+
+@pytest.fixture(autouse=True)
+def validate_embedding_dimensions():
+    """Validate that test embedding dimensions match expected values.
+
+    This guard catches the most common mock accuracy issue: dimension
+    mismatch between test and production embedding services.
+
+    Expected dimensions:
+    - Image search (CLIP/SigLIP): 768
+    - Face recognition (InsightFace/ArcFace): 512
+
+    This runs at import time before any tests execute to fail fast.
+    """
+    # Pre-test validation - check class constant
+    assert MockEmbeddingService.EMBEDDING_DIM == 768, (
+        f"Mock embedding service dimension mismatch: "
+        f"got {MockEmbeddingService.EMBEDDING_DIM}, expected 768 (CLIP/SigLIP). "
+        f"Make sure MockEmbeddingService = SemanticMockEmbeddingService in conftest.py"
+    )
+
+    # Also verify instance dimension property
+    test_instance = MockEmbeddingService()
+    assert test_instance.embedding_dim == 768, (
+        f"Mock embedding instance dimension mismatch: "
+        f"got {test_instance.embedding_dim}, expected 768 (CLIP/SigLIP)"
+    )
+
+    yield
+
+    # Post-test: no additional validation needed since pre-test catches issues
+
+
+class SemanticMockEmbeddingService:
+    """Mock embedding service with meaningful semantic similarity.
+
+    Uses predefined "concept clusters" to generate embeddings where:
+    - Semantically similar texts produce similar vectors (high cosine similarity)
+    - Unrelated texts produce dissimilar vectors (low cosine similarity)
+    - Results are deterministic (same input always produces same output)
+    - Vectors are L2-normalized (matches production CLIP/SigLIP behavior)
+
+    Dimension: 768 to match production CLIP/SigLIP model output.
+    """
+
+    CONCEPT_CLUSTERS = {
+        "nature": [
+            "sunset",
+            "beach",
+            "ocean",
+            "mountain",
+            "forest",
+            "lake",
+            "sky",
+            "sunrise",
+            "landscape",
+            "outdoors",
+            "nature",
+            "tree",
+            "river",
+        ],
+        "animal": [
+            "dog",
+            "cat",
+            "bird",
+            "fish",
+            "animal",
+            "puppy",
+            "kitten",
+            "horse",
+            "pet",
+            "wildlife",
+        ],
+        "food": [
+            "pizza",
+            "burger",
+            "sushi",
+            "food",
+            "meal",
+            "restaurant",
+            "cooking",
+            "kitchen",
+            "chef",
+            "recipe",
+        ],
+        "urban": [
+            "city",
+            "building",
+            "street",
+            "car",
+            "traffic",
+            "downtown",
+            "skyscraper",
+            "road",
+            "architecture",
+            "bridge",
+        ],
+        "people": [
+            "person",
+            "face",
+            "portrait",
+            "family",
+            "group",
+            "crowd",
+            "smile",
+            "child",
+            "baby",
+            "wedding",
+        ],
+    }
+
+    EMBEDDING_DIM = 768
+
+    def __init__(self, seed: int = 42):
+        self._rng = np.random.RandomState(seed)
+        self._cluster_centers = self._generate_cluster_centers()
+        self._cache: dict[str, list[float]] = {}
+
+    def _generate_cluster_centers(self) -> dict[str, np.ndarray]:
+        """Generate cluster centers for each concept cluster."""
+        centers = {}
+        for cluster_name in self.CONCEPT_CLUSTERS:
+            center = self._rng.randn(self.EMBEDDING_DIM)
+            center = center / np.linalg.norm(center)
+            centers[cluster_name] = center
+        return centers
+
+    def _find_cluster(self, text: str) -> str | None:
+        """Find which concept cluster a text belongs to."""
+        text_lower = text.lower()
+        for cluster_name, keywords in self.CONCEPT_CLUSTERS.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return cluster_name
+        return None
+
+    @property
+    def embedding_dim(self) -> int:
+        """Return fixed embedding dimension."""
+        return self.EMBEDDING_DIM
+
+    def embed_text(self, text: str) -> list[float]:
+        """Generate semantically meaningful vector from text.
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            Deterministic 768-dim L2-normalized vector
+        """
+        if text in self._cache:
+            return self._cache[text]
+
+        cluster = self._find_cluster(text)
+
+        if cluster:
+            # Text belongs to a known cluster - generate vector near cluster center
+            center = self._cluster_centers[cluster]
+            text_hash = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
+            noise_rng = np.random.RandomState(text_hash)
+            noise = noise_rng.randn(self.EMBEDDING_DIM) * 0.1
+            vector = center + noise
+        else:
+            # Unknown text - generate random vector
+            text_hash = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
+            text_rng = np.random.RandomState(text_hash)
+            vector = text_rng.randn(self.EMBEDDING_DIM)
+
+        # L2 normalize
+        vector = vector / np.linalg.norm(vector)
+
+        result = vector.tolist()
+        self._cache[text] = result
+        return result
+
+    def embed_image(self, image_path: str | Path) -> list[float]:
+        """Generate vector from image path (uses filename as semantic hint).
+
+        Args:
+            image_path: Path to image
+
+        Returns:
+            Deterministic 768-dim vector
+        """
+        filename = Path(image_path).stem
+        return self.embed_text(filename)
+
+    def embed_image_from_pil(self, image: Image.Image) -> list[float]:
+        """Generate vector from PIL image (uses size/mode as deterministic seed).
+
+        Args:
+            image: PIL Image object
+
+        Returns:
+            Deterministic 768-dim vector
+        """
+        size_key = f"pil_{image.size[0]}x{image.size[1]}_{image.mode}"
+        return self.embed_text(size_key)
+
+    def embed_images_batch(self, images: list[Image.Image]) -> list[list[float]]:
+        """Generate vectors from batch of PIL images.
+
+        Args:
+            images: List of PIL Image objects
+
+        Returns:
+            List of 768-dim vectors
+        """
+        return [self.embed_image_from_pil(img) for img in images]
+
+
+class LegacyMockEmbeddingService:
+    """Legacy mock embedding service that returns deterministic vectors without loading OpenCLIP.
+
+    DEPRECATED: Use SemanticMockEmbeddingService for tests requiring semantic similarity.
+    This class is kept for backward compatibility during migration.
+    """
 
     @property
     def embedding_dim(self) -> int:
@@ -119,6 +390,10 @@ class MockEmbeddingService:
         """
         # Use path as seed for deterministic embedding
         return self.embed_text(str(image_path))
+
+
+# Alias for backward compatibility during migration
+MockEmbeddingService = SemanticMockEmbeddingService
 
 
 @pytest.fixture
@@ -194,19 +469,46 @@ def qdrant_client() -> QdrantClient:
     """
     client = QdrantClient(":memory:")
 
-    # Create test collections with 512-dim vectors
+    # Create test collections with 768-dim vectors for images, 512-dim for faces
     settings = get_settings()
 
-    # Main image assets collection
+    # Main image assets collection (768-dim for CLIP/SigLIP)
     client.create_collection(
         collection_name=settings.qdrant_collection,
-        vectors_config=VectorParams(size=512, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
     )
 
-    # Face embeddings collection
+    # Face embeddings collection with payload indexes (mirrors production)
     client.create_collection(
         collection_name=settings.qdrant_face_collection,
         vectors_config=VectorParams(size=512, distance=Distance.COSINE),
+    )
+
+    # Add payload indexes for face collection (same as production bootstrap)
+    client.create_payload_index(
+        collection_name=settings.qdrant_face_collection,
+        field_name="person_id",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
+    client.create_payload_index(
+        collection_name=settings.qdrant_face_collection,
+        field_name="cluster_id",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
+    client.create_payload_index(
+        collection_name=settings.qdrant_face_collection,
+        field_name="is_prototype",
+        field_schema=PayloadSchemaType.BOOL,
+    )
+    client.create_payload_index(
+        collection_name=settings.qdrant_face_collection,
+        field_name="asset_id",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
+    client.create_payload_index(
+        collection_name=settings.qdrant_face_collection,
+        field_name="face_instance_id",
+        field_schema=PayloadSchemaType.KEYWORD,
     )
 
     return client

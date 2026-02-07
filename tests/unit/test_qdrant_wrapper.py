@@ -154,7 +154,7 @@ def test_ensure_collection_creates_if_missing() -> None:
     qdrant_module.get_qdrant_client = lambda: client
 
     try:
-        ensure_collection(embedding_dim=512)
+        ensure_collection(embedding_dim=768)  # Image search uses 768-dim
 
         # Verify collection was created
         collections = client.get_collections().collections
@@ -173,7 +173,7 @@ def test_ensure_collection_idempotent() -> None:
     # Manually create collection
     client.create_collection(
         collection_name=settings.qdrant_collection,
-        vectors_config=VectorParams(size=512, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=768, distance=Distance.COSINE),  # Image search uses 768-dim
     )
 
     # Patch get_qdrant_client
@@ -184,7 +184,7 @@ def test_ensure_collection_idempotent() -> None:
 
     try:
         # Should not raise error when collection already exists
-        ensure_collection(embedding_dim=512)
+        ensure_collection(embedding_dim=768)  # Image search uses 768-dim
 
         # Collection should still exist
         collections = client.get_collections().collections
