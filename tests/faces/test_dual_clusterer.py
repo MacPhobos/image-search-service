@@ -1,12 +1,10 @@
 """Tests for dual-mode face clustering (supervised + unsupervised)."""
 
 import uuid
-from typing import Any
 
 import numpy as np
 import pytest
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import PointStruct
 
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 from image_search_service.faces.dual_clusterer import DualModeClusterer

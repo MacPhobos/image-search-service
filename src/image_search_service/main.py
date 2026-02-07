@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             error_message = (
                 f"\n{'='*80}\n"
                 f"FATAL: Missing {len(missing_collections)} required Qdrant collection(s):\n"
-                f"  - {chr(10).join('  - ' + name for name in missing_collections)}\n"
+                f"{chr(10).join('  - ' + name for name in missing_collections)}\n"
                 f"\n"
                 f"These collections are required for the service to function.\n"
                 f"\n"

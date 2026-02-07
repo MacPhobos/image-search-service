@@ -14,7 +14,6 @@ from image_search_service.db.models import (
     PersonStatus,
 )
 
-
 # ============ Fixtures ============
 
 

@@ -1,8 +1,9 @@
 """Test embedding service (using mock to avoid loading OpenCLIP)."""
 
-import numpy as np
 from collections.abc import Callable
 from pathlib import Path
+
+import numpy as np
 
 from tests.conftest import MockEmbeddingService
 

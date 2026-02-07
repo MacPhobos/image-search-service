@@ -30,7 +30,6 @@ from image_search_service.db.models import (
     FaceSuggestionStatus,
     ImageAsset,
     Person,
-    PersonCentroid,
     PersonStatus,
     TrainingStatus,
 )

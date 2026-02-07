@@ -6,10 +6,8 @@ Covers success cases, error handling, cancellation, and metadata generation.
 Target: 40%+ coverage for training_jobs.py module.
 """
 
-import hashlib
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -19,14 +17,13 @@ from image_search_service.db.models import (
     ImageAsset,
     JobStatus,
     SessionStatus,
-    TrainingEvidence,
     TrainingJob,
     TrainingSession,
 )
 from image_search_service.queue.training_jobs import (
     _build_evidence_metadata,
-    train_single_asset,
     train_session,
+    train_single_asset,
 )
 
 

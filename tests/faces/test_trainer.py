@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,7 +11,6 @@ from qdrant_client.models import Distance, PointStruct, VectorParams
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 from image_search_service.faces.trainer import FaceTrainer, TripletFaceDataset
 from image_search_service.vector.face_qdrant import FaceQdrantClient
-
 
 # ==============================================================================
 # TripletFaceDataset Tests (Pure NumPy, No Mocking)
