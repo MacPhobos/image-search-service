@@ -5,20 +5,99 @@ Tests the new configuration options added to the face-matching config endpoint:
 - post_training_suggestions_top_n_count (1-100)
 """
 
-from fastapi.testclient import TestClient
+import pytest
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from image_search_service.main import app
+from image_search_service.db.models import ConfigDataType, SystemConfig
 
-client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+async def seed_config(db_session: AsyncSession):
+    """Seed database with required config keys for face-matching endpoint tests."""
+    configs = [
+        SystemConfig(
+            key="face_auto_assign_threshold",
+            value="0.85",
+            data_type=ConfigDataType.FLOAT,
+            min_value=0.0,
+            max_value=1.0,
+        ),
+        SystemConfig(
+            key="face_suggestion_threshold",
+            value="0.70",
+            data_type=ConfigDataType.FLOAT,
+            min_value=0.0,
+            max_value=1.0,
+        ),
+        SystemConfig(
+            key="face_suggestion_max_results",
+            value="50",
+            data_type=ConfigDataType.INT,
+            min_value=1,
+            max_value=200,
+        ),
+        SystemConfig(
+            key="face_suggestion_expiry_days",
+            value="30",
+            data_type=ConfigDataType.INT,
+            min_value=1,
+            max_value=365,
+        ),
+        SystemConfig(
+            key="face_prototype_min_quality",
+            value="0.5",
+            data_type=ConfigDataType.FLOAT,
+            min_value=0.0,
+            max_value=1.0,
+        ),
+        SystemConfig(
+            key="face_prototype_max_exemplars",
+            value="5",
+            data_type=ConfigDataType.INT,
+            min_value=1,
+            max_value=20,
+        ),
+        SystemConfig(
+            key="post_training_suggestions_mode",
+            value="all",
+            data_type=ConfigDataType.STRING,
+        ),
+        SystemConfig(
+            key="post_training_suggestions_top_n_count",
+            value="10",
+            data_type=ConfigDataType.INT,
+            min_value=1,
+            max_value=100,
+        ),
+        SystemConfig(
+            key="post_training_use_centroids",
+            value="true",
+            data_type=ConfigDataType.BOOLEAN,
+        ),
+        SystemConfig(
+            key="centroid_min_faces_for_suggestions",
+            value="5",
+            data_type=ConfigDataType.INT,
+            min_value=1,
+            max_value=100,
+        ),
+    ]
+    for config in configs:
+        db_session.add(config)
+    await db_session.commit()
 
 
 class TestPostTrainingSuggestionsConfig:
     """Tests for post-training suggestions settings in /api/v1/config/face-matching."""
 
-    def test_get_face_matching_config_includes_post_training_fields(self):
+    @pytest.mark.asyncio
+    async def test_get_face_matching_config_includes_post_training_fields(
+        self, test_client: AsyncClient
+    ):
         """GET should return post-training suggestion settings."""
         # When: get face-matching config
-        response = client.get("/api/v1/config/face-matching")
+        response = await test_client.get("/api/v1/config/face-matching")
 
         # Then: returns 200 with all config including post-training settings
         assert response.status_code == 200
@@ -31,7 +110,10 @@ class TestPostTrainingSuggestionsConfig:
         assert data["post_training_suggestions_mode"] in ["all", "top_n"]
         assert 1 <= data["post_training_suggestions_top_n_count"] <= 100
 
-    def test_update_post_training_suggestions_mode_to_top_n(self):
+    @pytest.mark.asyncio
+    async def test_update_post_training_suggestions_mode_to_top_n(
+        self, test_client: AsyncClient
+    ):
         """PUT should accept switching from 'all' to 'top_n' mode."""
         # Given: update request with top_n mode and count
         payload = {
@@ -42,7 +124,7 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: returns 200 with updated values
         assert response.status_code == 200
@@ -50,7 +132,10 @@ class TestPostTrainingSuggestionsConfig:
         assert data["post_training_suggestions_mode"] == "top_n"
         assert data["post_training_suggestions_top_n_count"] == 15
 
-    def test_update_post_training_suggestions_mode_to_all(self):
+    @pytest.mark.asyncio
+    async def test_update_post_training_suggestions_mode_to_all(
+        self, test_client: AsyncClient
+    ):
         """PUT should accept 'all' mode."""
         # Given: update request with 'all' mode
         payload = {
@@ -61,14 +146,15 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: returns 200 with updated mode
         assert response.status_code == 200
         data = response.json()
         assert data["post_training_suggestions_mode"] == "all"
 
-    def test_invalid_mode_rejected(self):
+    @pytest.mark.asyncio
+    async def test_invalid_mode_rejected(self, test_client: AsyncClient):
         """PUT should reject invalid mode values."""
         # Given: invalid mode
         payload = {
@@ -78,12 +164,13 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: returns 422 validation error
         assert response.status_code == 422
 
-    def test_top_n_count_too_high_rejected(self):
+    @pytest.mark.asyncio
+    async def test_top_n_count_too_high_rejected(self, test_client: AsyncClient):
         """PUT should reject top_n_count > 100."""
         # Given: value exceeds maximum (100)
         payload = {
@@ -93,12 +180,13 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: returns 422 validation error
         assert response.status_code == 422
 
-    def test_top_n_count_too_low_rejected(self):
+    @pytest.mark.asyncio
+    async def test_top_n_count_too_low_rejected(self, test_client: AsyncClient):
         """PUT should reject top_n_count < 1."""
         # Given: value below minimum (1)
         payload = {
@@ -108,12 +196,13 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: returns 422 validation error
         assert response.status_code == 422
 
-    def test_top_n_count_negative_rejected(self):
+    @pytest.mark.asyncio
+    async def test_top_n_count_negative_rejected(self, test_client: AsyncClient):
         """PUT should reject negative top_n_count values."""
         # Given: negative value
         payload = {
@@ -123,12 +212,13 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: returns 422 validation error
         assert response.status_code == 422
 
-    def test_boundary_value_1_accepted(self):
+    @pytest.mark.asyncio
+    async def test_boundary_value_1_accepted(self, test_client: AsyncClient):
         """PUT should accept minimum boundary value (1)."""
         # Given: minimum boundary value
         payload = {
@@ -138,14 +228,15 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: accepts value
         assert response.status_code == 200
         data = response.json()
         assert data["post_training_suggestions_top_n_count"] == 1
 
-    def test_boundary_value_100_accepted(self):
+    @pytest.mark.asyncio
+    async def test_boundary_value_100_accepted(self, test_client: AsyncClient):
         """PUT should accept maximum boundary value (100)."""
         # Given: maximum boundary value
         payload = {
@@ -155,14 +246,15 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: accepts value
         assert response.status_code == 200
         data = response.json()
         assert data["post_training_suggestions_top_n_count"] == 100
 
-    def test_common_value_25_accepted(self):
+    @pytest.mark.asyncio
+    async def test_common_value_25_accepted(self, test_client: AsyncClient):
         """PUT should accept common middle value (25)."""
         # Given: typical use case value
         payload = {
@@ -173,7 +265,7 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: accepts value
         assert response.status_code == 200
@@ -181,7 +273,8 @@ class TestPostTrainingSuggestionsConfig:
         assert data["post_training_suggestions_mode"] == "top_n"
         assert data["post_training_suggestions_top_n_count"] == 25
 
-    def test_update_only_mode_without_count(self):
+    @pytest.mark.asyncio
+    async def test_update_only_mode_without_count(self, test_client: AsyncClient):
         """PUT should accept updating only mode (count is optional)."""
         # Given: update only mode, not count
         payload = {
@@ -191,7 +284,7 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: accepts and returns with existing count
         assert response.status_code == 200
@@ -199,7 +292,8 @@ class TestPostTrainingSuggestionsConfig:
         assert data["post_training_suggestions_mode"] == "all"
         # Count should retain previous value or default
 
-    def test_update_only_count_without_mode(self):
+    @pytest.mark.asyncio
+    async def test_update_only_count_without_mode(self, test_client: AsyncClient):
         """PUT should accept updating only count (mode is optional)."""
         # Given: update only count, not mode
         payload = {
@@ -209,7 +303,7 @@ class TestPostTrainingSuggestionsConfig:
         }
 
         # When: update config
-        response = client.put("/api/v1/config/face-matching", json=payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=payload)
 
         # Then: accepts and returns with existing mode
         assert response.status_code == 200
@@ -217,7 +311,8 @@ class TestPostTrainingSuggestionsConfig:
         assert data["post_training_suggestions_top_n_count"] == 50
         # Mode should retain previous value or default
 
-    def test_update_preserves_other_config_values(self):
+    @pytest.mark.asyncio
+    async def test_update_preserves_other_config_values(self, test_client: AsyncClient):
         """PUT should not affect other face-matching config when updating post-training settings."""
         # When: update with all fields including post-training settings
         update_payload = {
@@ -228,7 +323,7 @@ class TestPostTrainingSuggestionsConfig:
             "post_training_suggestions_mode": "top_n",
             "post_training_suggestions_top_n_count": 30,
         }
-        response = client.put("/api/v1/config/face-matching", json=update_payload)
+        response = await test_client.put("/api/v1/config/face-matching", json=update_payload)
 
         # Then: all fields set correctly
         assert response.status_code == 200

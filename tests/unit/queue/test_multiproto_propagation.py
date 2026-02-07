@@ -243,7 +243,7 @@ class TestMultiPrototypePropagation:
 
         # Mock Qdrant to return the candidate face
         mock_result = MagicMock()
-        mock_result.payload = {"face_id": str(candidate_face.id)}
+        mock_result.payload = {"face_instance_id": str(candidate_face.id)}
         mock_result.score = 0.85
         mock_qdrant.search_similar_faces = MagicMock(return_value=[mock_result])
 
@@ -286,9 +286,9 @@ class TestMultiPrototypePropagation:
 
         # Mock: all 3 prototypes find the same face with different scores
         mock_results = [
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.75)],  # proto1
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.92)],  # proto2 (highest)
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.80)],  # proto3
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.75)],  # proto1
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.92)],  # proto2 (highest)
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.80)],  # proto3
         ]
         mock_qdrant.search_similar_faces = MagicMock(side_effect=mock_results)
 
@@ -343,8 +343,8 @@ class TestMultiPrototypePropagation:
 
         # Mock: proto1 has higher score (0.88) than proto2 (0.72)
         mock_results = [
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.88)],  # proto1 (MAX)
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.72)],  # proto2
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.88)],  # proto1 (MAX)
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.72)],  # proto2
         ]
         mock_qdrant.search_similar_faces = MagicMock(side_effect=mock_results)
 
@@ -395,9 +395,9 @@ class TestMultiPrototypePropagation:
 
         # All prototypes find the candidate (order shouldn't matter)
         mock_results = [
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.75)],  # low
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.82)],  # high
-            [MagicMock(payload={"face_id": str(candidate_id)}, score=0.78)],  # mid
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.75)],  # low
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.82)],  # high
+            [MagicMock(payload={"face_instance_id": str(candidate_id)}, score=0.78)],  # mid
         ]
         mock_qdrant.search_similar_faces = MagicMock(side_effect=mock_results)
 
@@ -504,8 +504,8 @@ class TestMultiPrototypePropagation:
 
         # Mock Qdrant to return both faces
         mock_results = [
-            MagicMock(payload={"face_id": str(assigned_face.id)}, score=0.90),
-            MagicMock(payload={"face_id": str(unassigned_face_id)}, score=0.85),
+            MagicMock(payload={"face_instance_id": str(assigned_face.id)}, score=0.90),
+            MagicMock(payload={"face_instance_id": str(unassigned_face_id)}, score=0.85),
         ]
         mock_qdrant.search_similar_faces = MagicMock(return_value=mock_results)
 
@@ -549,7 +549,7 @@ class TestMultiPrototypePropagation:
 
         # Mock Qdrant to return all 10 faces
         mock_results = [
-            MagicMock(payload={"face_id": str(face.id)}, score=0.8 + i * 0.01)
+            MagicMock(payload={"face_instance_id": str(face.id)}, score=0.8 + i * 0.01)
             for i, face in enumerate(candidate_faces)
         ]
         mock_qdrant.search_similar_faces = MagicMock(return_value=mock_results)
@@ -589,8 +589,8 @@ class TestMultiPrototypePropagation:
 
         # Mock Qdrant to return both faces with different scores
         mock_results = [
-            MagicMock(payload={"face_id": str(high_conf_face.id)}, score=0.85),  # Above threshold
-            MagicMock(payload={"face_id": str(low_conf_face.id)}, score=0.65),  # Below threshold
+            MagicMock(payload={"face_instance_id": str(high_conf_face.id)}, score=0.85),  # Above threshold
+            MagicMock(payload={"face_instance_id": str(low_conf_face.id)}, score=0.65),  # Below threshold
         ]
         mock_qdrant.search_similar_faces = MagicMock(return_value=mock_results)
 
@@ -626,9 +626,9 @@ class TestMultiPrototypePropagation:
 
         # Mock Qdrant to return invalid payload
         mock_results = [
-            MagicMock(payload={"face_id": "not-a-uuid"}, score=0.85),
+            MagicMock(payload={"face_instance_id": "not-a-uuid"}, score=0.85),
             MagicMock(payload=None, score=0.80),  # No payload
-            MagicMock(payload={"other_field": "value"}, score=0.75),  # Missing face_id
+            MagicMock(payload={"other_field": "value"}, score=0.75),  # Missing face_instance_id
         ]
         mock_qdrant.search_similar_faces = MagicMock(return_value=mock_results)
 
@@ -670,10 +670,10 @@ class TestMultiPrototypePropagation:
         # Mock: proto1 finds both, proto2 finds only candidate1
         mock_results = [
             [
-                MagicMock(payload={"face_id": str(candidate1.id)}, score=0.85),
-                MagicMock(payload={"face_id": str(candidate2.id)}, score=0.80),
+                MagicMock(payload={"face_instance_id": str(candidate1.id)}, score=0.85),
+                MagicMock(payload={"face_instance_id": str(candidate2.id)}, score=0.80),
             ],
-            [MagicMock(payload={"face_id": str(candidate1.id)}, score=0.88)],
+            [MagicMock(payload={"face_instance_id": str(candidate1.id)}, score=0.88)],
         ]
         mock_qdrant.search_similar_faces = MagicMock(side_effect=mock_results)
 
