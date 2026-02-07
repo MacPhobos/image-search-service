@@ -19,8 +19,16 @@ format: ## Format code with ruff
 typecheck: ## Run mypy type checker
 	uv run mypy src/
 
-test: ## Run pytest tests
+test: ## Run pytest tests (fast SQLite tier only)
 	uv run pytest
+
+test-postgres: ## Run PostgreSQL integration tests (requires Docker)
+	@echo "Starting PostgreSQL integration tests (requires Docker)..."
+	uv run pytest tests/ -m "postgres" -v --tb=short
+
+test-all: ## Run all tests (SQLite + PostgreSQL)
+	@echo "Running all tests..."
+	uv run pytest tests/ -m "" -v --tb=short
 
 db-up: ## Start Postgres and Redis containers
 	docker compose -f docker-compose.dev.yml up -d

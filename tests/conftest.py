@@ -25,6 +25,19 @@ from image_search_service.services.embedding import get_embedding_service
 from image_search_service.vector.face_qdrant import get_face_qdrant_client
 from image_search_service.vector.qdrant import get_qdrant_client
 
+# Import PostgreSQL fixtures (only used when @pytest.mark.postgres tests run)
+# These imports make the fixtures available to tests marked with @pytest.mark.postgres
+from tests.conftest_postgres import (  # noqa: F401
+    fresh_pg_database,
+    pg_connection_url,
+    pg_engine,
+    pg_session,
+    pg_sync_connection_url,
+    pg_sync_engine,
+    pg_sync_session,
+    postgres_container,
+)
+
 # Use SQLite for tests (no external dependencies)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 TEST_SYNC_DATABASE_URL = "sqlite:///:memory:"
