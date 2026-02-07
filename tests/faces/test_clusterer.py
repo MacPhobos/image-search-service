@@ -16,21 +16,17 @@ class TestFaceClusterer:
         from image_search_service.faces.clusterer import FaceClusterer
 
         # Mock Qdrant to return only 2 faces
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get:
-            mock_client = MagicMock()
-            mock_client.client.scroll.return_value = ([], None)
-            mock_get.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.client.scroll.return_value = ([], None)
 
-            mock_session = MagicMock()
-            clusterer = FaceClusterer(mock_session, min_cluster_size=5)
-            result = clusterer.cluster_unlabeled_faces()
+        mock_session = MagicMock()
+        clusterer = FaceClusterer(mock_session, mock_client, min_cluster_size=5)
+        result = clusterer.cluster_unlabeled_faces()
 
         assert result["clusters_found"] == 0
         assert result["total_faces"] == 0
 
-    def test_hdbscan_clustering(self):
+    def test_hdbscan_clustering(self, mock_qdrant_client):
         """Test HDBSCAN clustering on synthetic embeddings."""
         from image_search_service.faces.clusterer import FaceClusterer
 
@@ -46,7 +42,7 @@ class TestFaceClusterer:
         embeddings_array = np.vstack([cluster1, cluster2])
 
         mock_session = MagicMock()
-        clusterer = FaceClusterer(mock_session, min_cluster_size=3, min_samples=2)
+        clusterer = FaceClusterer(mock_session, mock_qdrant_client, min_cluster_size=3, min_samples=2)
         labels = clusterer._run_hdbscan(embeddings_array)
 
         # Should find 2 clusters (labels 0 and 1, plus possibly -1 for noise)
@@ -56,7 +52,7 @@ class TestFaceClusterer:
         assert len(cluster_labels) == 2
 
     @pytest.mark.skip(reason="HDBSCAN noise detection is non-deterministic with synthetic data")
-    def test_hdbscan_clustering_noise(self):
+    def test_hdbscan_clustering_noise(self, mock_qdrant_client):
         """Test HDBSCAN identifies noise points when data is sufficiently scattered."""
         from image_search_service.faces.clusterer import FaceClusterer
 
@@ -79,7 +75,7 @@ class TestFaceClusterer:
         embeddings_array = np.vstack([tight_cluster, noise])
 
         mock_session = MagicMock()
-        clusterer = FaceClusterer(mock_session, min_cluster_size=3, min_samples=2)
+        clusterer = FaceClusterer(mock_session, mock_qdrant_client, min_cluster_size=3, min_samples=2)
         labels = clusterer._run_hdbscan(embeddings_array)
 
         # Should have at least one cluster (the tight cluster)
@@ -112,23 +108,19 @@ class TestFaceClusterer:
             for fid, emb in zip(all_face_ids, all_embeddings)
         ]
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get:
-            mock_client = MagicMock()
-            # Return records on first scroll, empty on second
-            mock_client.client.scroll.side_effect = [
-                (mock_records, None),
-            ]
-            mock_client.update_cluster_ids = MagicMock()
-            mock_get.return_value = mock_client
+        mock_client = MagicMock()
+        # Return records on first scroll, empty on second
+        mock_client.client.scroll.side_effect = [
+            (mock_records, None),
+        ]
+        mock_client.update_cluster_ids = MagicMock()
 
-            mock_session = MagicMock()
-            mock_session.execute = MagicMock()
-            mock_session.commit = MagicMock()
+        mock_session = MagicMock()
+        mock_session.execute = MagicMock()
+        mock_session.commit = MagicMock()
 
-            clusterer = FaceClusterer(mock_session, min_cluster_size=3, min_samples=2)
-            result = clusterer.cluster_unlabeled_faces()
+        clusterer = FaceClusterer(mock_session, mock_client, min_cluster_size=3, min_samples=2)
+        result = clusterer.cluster_unlabeled_faces()
 
         assert result["total_faces"] == 12
         # Should find at least 1 cluster (synthetic data is clear)
@@ -139,17 +131,13 @@ class TestFaceClusterer:
         """Test re-clustering when cluster is too small to split."""
         from image_search_service.faces.clusterer import FaceClusterer
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get:
-            mock_client = MagicMock()
-            # Return only 5 faces (less than min_cluster_size * 2)
-            mock_client.scroll_faces.return_value = ([], None)
-            mock_get.return_value = mock_client
+        mock_client = MagicMock()
+        # Return only 5 faces (less than min_cluster_size * 2)
+        mock_client.scroll_faces.return_value = ([], None)
 
-            mock_session = MagicMock()
-            clusterer = FaceClusterer(mock_session, min_cluster_size=5)
-            result = clusterer.recluster_within_cluster("test_cluster", min_cluster_size=3)
+        mock_session = MagicMock()
+        clusterer = FaceClusterer(mock_session, mock_client, min_cluster_size=5)
+        result = clusterer.recluster_within_cluster("test_cluster", min_cluster_size=3)
 
         assert result["status"] == "too_small"
 
@@ -172,33 +160,30 @@ class TestFaceClusterer:
             create_mock_record(fid, emb) for fid, emb in zip(face_ids, embeddings)
         ]
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get:
-            mock_client = MagicMock()
-            mock_client.client.scroll.return_value = (mock_records, None)
-            mock_client.update_cluster_ids = MagicMock()
-            mock_get.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.client.scroll.return_value = (mock_records, None)
+        mock_client.update_cluster_ids = MagicMock()
 
-            mock_session = MagicMock()
-            mock_session.execute = MagicMock()
-            mock_session.commit = MagicMock()
+        mock_session = MagicMock()
+        mock_session.execute = MagicMock()
+        mock_session.commit = MagicMock()
 
-            clusterer = FaceClusterer(mock_session, min_cluster_size=3, min_samples=2)
-            result = clusterer.cluster_unlabeled_faces()
+        clusterer = FaceClusterer(mock_session, mock_client, min_cluster_size=3, min_samples=2)
+        result = clusterer.cluster_unlabeled_faces()
 
         # Verify database update was called
         if result["clusters_found"] > 0:
             mock_session.execute.assert_called()
             mock_session.commit.assert_called_once()
 
-    def test_clusterer_initialization(self):
+    def test_clusterer_initialization(self, mock_qdrant_client):
         """Test FaceClusterer initialization with custom parameters."""
         from image_search_service.faces.clusterer import FaceClusterer
 
         mock_session = MagicMock()
         clusterer = FaceClusterer(
             mock_session,
+            mock_qdrant_client,
             min_cluster_size=10,
             min_samples=5,
             cluster_selection_epsilon=0.5,
@@ -210,12 +195,12 @@ class TestFaceClusterer:
         assert clusterer.cluster_selection_epsilon == 0.5
         assert clusterer.metric == "cosine"
 
-    def test_get_face_clusterer_factory(self):
+    def test_get_face_clusterer_factory(self, mock_qdrant_client):
         """Test factory function for FaceClusterer."""
         from image_search_service.faces.clusterer import get_face_clusterer
 
         mock_session = MagicMock()
-        clusterer = get_face_clusterer(mock_session, min_cluster_size=7, min_samples=4)
+        clusterer = get_face_clusterer(mock_session, mock_qdrant_client, min_cluster_size=7, min_samples=4)
 
         assert clusterer.min_cluster_size == 7
         assert clusterer.min_samples == 4
