@@ -191,6 +191,9 @@ class FaceQdrantClient:
             taken_at: Image taken timestamp
             is_prototype: Whether this face is a cluster prototype
         """
+        # Ensure collection exists before upserting
+        self.ensure_collection()
+
         payload: dict[str, Any] = {
             "asset_id": str(asset_id),
             "face_instance_id": str(face_instance_id),
@@ -247,6 +250,9 @@ class FaceQdrantClient:
                 - taken_at: Optional[datetime]
                 - is_prototype: bool
         """
+        # Ensure collection exists before upserting
+        self.ensure_collection()
+
         if not faces:
             logger.debug("No faces to upsert")
             return

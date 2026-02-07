@@ -206,6 +206,9 @@ class CentroidQdrantClient:
         Args:
             centroid_id: UUID of the centroid to delete
         """
+        # Ensure collection exists before deleting
+        self.ensure_collection()
+
         try:
             self.client.delete(
                 collection_name=self.collection_name,
@@ -226,6 +229,9 @@ class CentroidQdrantClient:
         Returns:
             512-dim embedding vector, or None if not found
         """
+        # Ensure collection exists before reading
+        self.ensure_collection()
+
         try:
             points = self.client.retrieve(
                 collection_name=self.collection_name,
@@ -353,6 +359,9 @@ class CentroidQdrantClient:
         Returns:
             Tuple of (records, next_offset)
         """
+        # Ensure collection exists before reading
+        self.ensure_collection()
+
         try:
             # Build filter conditions
             conditions = []

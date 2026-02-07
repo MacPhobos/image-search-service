@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     qdrant_centroid_collection: str = Field(
         default="person_centroids", alias="QDRANT_CENTROID_COLLECTION"
     )
+    qdrant_strict_startup: bool = Field(
+        default=True,
+        alias="QDRANT_STRICT_STARTUP",
+        description=(
+            "Exit on missing Qdrant collections at startup (default: true). "
+            "Set to false for development flexibility (service starts with warnings)."
+        ),
+    )
 
     @property
     def qdrant_host(self) -> str:

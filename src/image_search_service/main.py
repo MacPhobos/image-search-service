@@ -43,6 +43,75 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.warning(f"Failed to preload embedding model: {e}. Will load on first use.")
 
+    # Validate Qdrant collections exist at startup
+    logger.info("Validating Qdrant collections...")
+    try:
+        from image_search_service.vector.qdrant import validate_qdrant_collections
+
+        settings = get_settings()
+        missing_collections = validate_qdrant_collections()
+
+        if missing_collections:
+            error_message = (
+                f"\n{'='*80}\n"
+                f"FATAL: Missing {len(missing_collections)} required Qdrant collection(s):\n"
+                f"  - {chr(10).join('  - ' + name for name in missing_collections)}\n"
+                f"\n"
+                f"These collections are required for the service to function.\n"
+                f"\n"
+                f"To fix, run:\n"
+                f"  make bootstrap-qdrant\n"
+                f"\n"
+                f"Or manually create collections:\n"
+                f"  cd image-search-service\n"
+                f"  uv run python -m image_search_service.scripts.bootstrap_qdrant init\n"
+                f"\n"
+                f"To disable strict validation (NOT recommended for production):\n"
+                f"  export QDRANT_STRICT_STARTUP=false\n"
+                f"{'='*80}\n"
+            )
+
+            if settings.qdrant_strict_startup:
+                logger.critical(error_message)
+                logger.critical("Exiting due to missing collections (QDRANT_STRICT_STARTUP=true)")
+                import sys
+
+                sys.exit(1)
+            else:
+                logger.warning(error_message)
+                logger.warning(
+                    "Continuing startup despite missing collections (QDRANT_STRICT_STARTUP=false). "
+                    "Endpoints using these collections will fail at runtime."
+                )
+        else:
+            logger.info("✅ All required Qdrant collections validated")
+
+    except Exception as e:
+        settings = get_settings()
+        error_message = (
+            f"\n{'='*80}\n"
+            f"FATAL: Failed to validate Qdrant collections: {e}\n"
+            f"\n"
+            f"Possible causes:\n"
+            f"  - Qdrant service is not running\n"
+            f"  - Qdrant URL is incorrect (current: {settings.qdrant_url})\n"
+            f"  - Network connectivity issues\n"
+            f"\n"
+            f"To fix:\n"
+            f"  1. Ensure Qdrant is running: docker-compose up -d\n"
+            f"  2. Check Qdrant URL: curl {settings.qdrant_url}/health\n"
+            f"  3. Run: make bootstrap-qdrant\n"
+            f"{'='*80}\n"
+        )
+
+        if settings.qdrant_strict_startup:
+            logger.critical(error_message)
+            import sys
+
+            sys.exit(1)
+        else:
+            logger.warning(error_message)
+
     # Start file watcher if enabled
     watcher = WatcherManager.get_instance()
     watcher.start()

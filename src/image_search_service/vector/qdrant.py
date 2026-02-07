@@ -245,6 +245,73 @@ def ping() -> bool:
         return False
 
 
+def validate_qdrant_collections() -> list[str]:
+    """Validate that all required Qdrant collections exist.
+
+    Returns:
+        List of missing collection names (empty if all exist)
+
+    Required collections:
+    - image_assets (always)
+    - faces (always)
+    - person_centroids (always)
+    - image_assets_siglip (only if SigLIP enabled)
+    """
+    settings = get_settings()
+
+    logger.info("Validating Qdrant collections...")
+
+    try:
+        client = get_qdrant_client()
+
+        # Get existing collections
+        collections = client.get_collections().collections
+        existing_names = {c.name for c in collections}
+
+        # Define required collections
+        required_collections = [
+            settings.qdrant_collection,  # image_assets
+            settings.qdrant_face_collection,  # faces
+            settings.qdrant_centroid_collection,  # person_centroids
+        ]
+
+        # Conditionally require SigLIP collection
+        if settings.use_siglip:
+            required_collections.append(settings.siglip_collection)
+            logger.info(
+                f"SigLIP enabled (use_siglip={settings.use_siglip}), "
+                f"requiring collection '{settings.siglip_collection}'"
+            )
+
+        # Find missing collections
+        missing = [name for name in required_collections if name not in existing_names]
+
+        if missing:
+            logger.error(
+                f"Missing {len(missing)} required Qdrant collection(s): {', '.join(missing)}"
+            )
+        else:
+            logger.info(
+                f"✅ All {len(required_collections)} required collections exist: "
+                f"{', '.join(required_collections)}"
+            )
+
+        return missing
+
+    except Exception as e:
+        logger.error(f"Failed to validate Qdrant collections: {e}")
+        # Treat validation errors as fatal - return all required collections as "missing"
+        missing_on_error = [
+            settings.qdrant_collection,
+            settings.qdrant_face_collection,
+            settings.qdrant_centroid_collection,
+        ]
+        if settings.use_siglip:
+            missing_on_error.append(settings.siglip_collection)
+        # Filter out None values
+        return [c for c in missing_on_error if c is not None]
+
+
 def close_qdrant() -> None:
     """Close Qdrant client and cleanup resources."""
     global _client
