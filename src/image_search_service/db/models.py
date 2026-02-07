@@ -748,10 +748,10 @@ class FaceSuggestion(Base):
         nullable=False,
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False)  # Cosine similarity score
-    source_face_id: Mapped[uuid.UUID] = mapped_column(
+    source_face_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("face_instances.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     status: Mapped[str] = mapped_column(
         String(20), default=FaceSuggestionStatus.PENDING.value, nullable=False

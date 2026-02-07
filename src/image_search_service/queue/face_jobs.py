@@ -1213,12 +1213,15 @@ def cleanup_orphaned_suggestions_job() -> dict[str, Any]:
 
     try:
         # Find pending suggestions where source face assignment is invalid
-        # Join with FaceInstance to check current person assignment
+        # LEFT JOIN with FaceInstance to check current person assignment
+        # (source_face_id can be None for centroid-based suggestions)
         query = (
             select(FaceSuggestion)
-            .join(FaceInstance, FaceSuggestion.source_face_id == FaceInstance.id)
+            .outerjoin(FaceInstance, FaceSuggestion.source_face_id == FaceInstance.id)
             .where(
                 FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+                # Only check suggestions with source_face_id (skip centroid-based)
+                FaceSuggestion.source_face_id.isnot(None),
                 or_(
                     # Source face is no longer assigned to any person
                     FaceInstance.person_id.is_(None),
@@ -2087,7 +2090,7 @@ def find_more_centroid_suggestions_job(
             suggestion = FaceSuggestion(
                 face_instance_id=face_id_uuid,
                 suggested_person_id=person_uuid,
-                source_face_id=centroid.centroid_id,  # Track centroid as source
+                source_face_id=None,  # Centroid-based suggestions don't have a single source face
                 confidence=result.score,
                 status=FaceSuggestionStatus.PENDING.value,
             )

@@ -94,7 +94,7 @@ class FaceSuggestionResponse(CamelCaseModel):
     face_instance_id: str  # UUID as string
     suggested_person_id: str  # UUID as string
     confidence: float
-    source_face_id: str  # UUID as string
+    source_face_id: str | None  # UUID as string (None for centroid-based suggestions)
     status: str
     created_at: datetime
     reviewed_at: datetime | None
