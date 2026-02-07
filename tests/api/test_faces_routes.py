@@ -785,6 +785,7 @@ class TestUnassignFaceEndpoint:
 class TestPrototypeEndpoints:
     """Tests for person prototype endpoints."""
 
+    @pytest.mark.skip(reason="Endpoint removed - prototypes created via /prototypes/pin. See test_prototype_endpoints.py::test_pin_face_not_found")
     @pytest.mark.asyncio
     async def test_create_prototype_person_not_found(self, test_client):
         """Test creating prototype for non-existent person."""
@@ -798,6 +799,7 @@ class TestPrototypeEndpoints:
 
         assert response.status_code == 404
 
+    @pytest.mark.skip(reason="Endpoint behavior changed - returns empty list for non-existent person. See test_prototype_endpoints.py::test_list_empty")
     @pytest.mark.asyncio
     async def test_list_prototypes_person_not_found(self, test_client):
         """Test listing prototypes for non-existent person."""
