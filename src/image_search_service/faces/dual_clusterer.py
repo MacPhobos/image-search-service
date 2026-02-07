@@ -343,13 +343,16 @@ class DualModeClusterer:
 
     def _get_face_embedding(self, qdrant_point_id: uuid.UUID) -> npt.NDArray[np.float64] | None:
         """Get face embedding from Qdrant by point ID."""
-        from image_search_service.vector.face_qdrant import get_face_qdrant_client
+        from image_search_service.vector.face_qdrant import (
+            _get_face_collection_name,
+            get_face_qdrant_client,
+        )
 
         qdrant = get_face_qdrant_client()
 
         try:
             points = qdrant.client.retrieve(
-                collection_name="faces",
+                collection_name=_get_face_collection_name(),
                 ids=[str(qdrant_point_id)],
                 with_vectors=True,
             )
