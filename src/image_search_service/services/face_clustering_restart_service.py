@@ -256,10 +256,14 @@ class FaceClusteringRestartService(RestartServiceBase):
 
         # Run clustering synchronously using existing function
         # NOTE: We need to use sync session for the clusterer
+        from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
         sync_db = get_sync_session()
         try:
+            qdrant_client = get_face_qdrant_client()
             clusterer = get_face_clusterer(
                 db_session=sync_db,
+                qdrant_client=qdrant_client,
                 min_cluster_size=3,  # Minimum faces per cluster
             )
 

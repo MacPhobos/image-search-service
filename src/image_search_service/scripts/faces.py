@@ -203,11 +203,14 @@ def cluster_faces(
     else:
         from image_search_service.db.sync_operations import get_sync_session
         from image_search_service.faces.clusterer import get_face_clusterer
+        from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
         db_session = get_sync_session()
         try:
+            qdrant_client = get_face_qdrant_client()
             clusterer = get_face_clusterer(
                 db_session=db_session,
+                qdrant_client=qdrant_client,
                 min_cluster_size=min_cluster_size,
                 min_samples=min_samples,
             )

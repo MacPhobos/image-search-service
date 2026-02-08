@@ -120,11 +120,14 @@ def cluster_faces_job(
     logger.info(f"[{job_id}] Starting face clustering (max={max_faces})")
 
     from image_search_service.faces.clusterer import get_face_clusterer
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     db_session = get_sync_session()
     try:
+        qdrant_client = get_face_qdrant_client()
         clusterer = get_face_clusterer(
             db_session=db_session,
+            qdrant_client=qdrant_client,
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
         )
@@ -753,9 +756,12 @@ def detect_faces_for_session_job(
             logger.info(f"[{job_id}] Running clustering for unlabeled faces")
             try:
                 from image_search_service.faces.clusterer import get_face_clusterer
+                from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
+                qdrant_client = get_face_qdrant_client()
                 clusterer = get_face_clusterer(
                     db_session,
+                    qdrant_client=qdrant_client,
                     min_cluster_size=3,  # Minimum faces per cluster
                 )
 
