@@ -35,6 +35,11 @@ class ConfigService:
         # Centroid-based suggestions (faster alternative to prototype-based)
         "post_training_use_centroids": True,
         "centroid_min_faces_for_suggestions": 5,
+        # Unknown person discovery settings
+        "unknown_person_min_display_count": 5,
+        "unknown_person_default_threshold": 0.70,
+        "unknown_person_max_faces": 50000,
+        "unknown_person_chunk_size": 10000,
     }
 
     def __init__(self, db_session: AsyncSession):
@@ -54,7 +59,8 @@ class ConfigService:
         Returns:
             Float value from database or default
         """
-        return await self._get_value(key, float)
+        value = await self._get_value(key, float)
+        return float(value)
 
     async def get_int(self, key: str) -> int:
         """Get an integer configuration value.
@@ -65,7 +71,8 @@ class ConfigService:
         Returns:
             Integer value from database or default
         """
-        return await self._get_value(key, int)
+        value = await self._get_value(key, int)
+        return int(value)
 
     async def get_string(self, key: str) -> str:
         """Get a string configuration value.
@@ -76,7 +83,8 @@ class ConfigService:
         Returns:
             String value from database or default
         """
-        return await self._get_value(key, str)
+        value = await self._get_value(key, str)
+        return str(value)
 
     async def get_bool(self, key: str) -> bool:
         """Get a boolean configuration value.

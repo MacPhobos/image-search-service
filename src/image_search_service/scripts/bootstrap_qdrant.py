@@ -91,6 +91,7 @@ def ensure_faces_collection(client: QdrantClient) -> bool:
         ("person_id", PayloadSchemaType.KEYWORD),
         ("cluster_id", PayloadSchemaType.KEYWORD),
         ("is_prototype", PayloadSchemaType.BOOL),
+        ("is_assigned", PayloadSchemaType.BOOL),  # Fast filtering for unlabeled faces
         ("asset_id", PayloadSchemaType.KEYWORD),
         ("face_instance_id", PayloadSchemaType.KEYWORD),
     ]
@@ -429,6 +430,7 @@ def verify() -> None:
                     "person_id",
                     "cluster_id",
                     "is_prototype",
+                    "is_assigned",
                     "asset_id",
                     "face_instance_id",
                 ]

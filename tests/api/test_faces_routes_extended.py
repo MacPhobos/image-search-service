@@ -112,7 +112,7 @@ class TestClusterDualEndpoint:
     ):
         """POST /cluster/dual enqueues background job with default parameters."""
         # Patch Redis and Queue at their import location within the route function
-        with patch("redis.Redis") as mock_redis_cls, \
+        with patch("redis.Redis"), \
              patch("rq.Queue") as mock_queue_cls:
 
             # Setup mock queue

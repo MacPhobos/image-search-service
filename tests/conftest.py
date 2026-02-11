@@ -102,10 +102,6 @@ def clear_embedding_cache(monkeypatch):
     semantic_mock = SemanticMockEmbeddingService()
 
     # Monkeypatch EmbeddingService methods to use SemanticMockEmbeddingService
-    original_embed_text = EmbeddingService.embed_text
-    original_embed_image = EmbeddingService.embed_image
-    original_embed_images_batch = EmbeddingService.embed_images_batch
-    original_embedding_dim = EmbeddingService.embedding_dim
 
     def mock_embed_text(self, text: str) -> list[float]:
         """Use semantic mock instead of real CLIP."""

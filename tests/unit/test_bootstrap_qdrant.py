@@ -97,8 +97,8 @@ def test_ensure_faces_collection_creates_new(mock_qdrant_client: MagicMock) -> N
         assert call_args.kwargs["vectors_config"].size == 512
         assert call_args.kwargs["vectors_config"].distance == Distance.COSINE
 
-        # Should create 5 payload indexes
-        assert mock_qdrant_client.create_payload_index.call_count == 5
+        # Should create 6 payload indexes (person_id, cluster_id, is_prototype, is_assigned, asset_id, face_instance_id)
+        assert mock_qdrant_client.create_payload_index.call_count == 6
 
 
 def test_ensure_faces_collection_already_exists(mock_qdrant_client: MagicMock) -> None:

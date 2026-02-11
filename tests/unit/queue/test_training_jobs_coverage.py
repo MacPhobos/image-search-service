@@ -58,7 +58,7 @@ def training_job_fixtures(sync_db_session: Session, tmp_path: Path, monkeypatch)
     )
 
     # Mock Qdrant client (no-op)
-    mock_qdrant = MagicMock()
+    MagicMock()
     monkeypatch.setattr(
         "image_search_service.queue.training_jobs.ensure_collection",
         lambda dim: None,
@@ -524,7 +524,7 @@ def test_train_single_asset_evidence_metadata(training_job_fixtures, monkeypatch
         lambda *args, **kwargs: None,
     )
 
-    result = train_single_asset(job.id, asset.id, session_id=1)
+    train_single_asset(job.id, asset.id, session_id=1)
 
     # Check evidence metadata structure
     assert len(evidence_created) == 1

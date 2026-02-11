@@ -127,7 +127,7 @@ def _parse_migration_inserts(migration_file: Path) -> set[str]:
             if key in ("float", "int", "boolean", "string", "face_matching", "general"):
                 continue
             # Only include keys that start with our known prefixes
-            if key.startswith(("face_", "post_training_", "centroid_")):
+            if key.startswith(("face_", "post_training_", "centroid_", "unknown_person_")):
                 keys.add(key)
 
     return keys
@@ -367,7 +367,7 @@ def test_all_defaults_keys_are_documented_in_migration() -> None:
         # This works regardless of column ordering
 
         # Find all potential config keys in this file
-        key_pattern = re.compile(r"'((?:face_|post_training_|centroid_)[a-z_]+)'")
+        key_pattern = re.compile(r"'((?:face_|post_training_|centroid_|unknown_person_)[a-z_]+)'")
         keys_in_file = set(key_pattern.findall(content))
 
         for key in keys_in_file:

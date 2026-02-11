@@ -718,17 +718,21 @@ class TestClusterUnknownFaces:
         )
 
         # Need at least min_cluster_size faces to trigger clustering
+        point_ids = [uuid.uuid4() for _ in range(5)]
         unknown_faces = [
-            {"id": uuid.uuid4(), "qdrant_point_id": uuid.uuid4()}
-            for _ in range(5)
+            {"id": uuid.uuid4(), "qdrant_point_id": pid}
+            for pid in point_ids
         ]
 
-        # Mock _get_face_embedding to return valid embeddings
-        def mock_get_embedding(point_id):
-            emb = np.random.randn(512)
-            return emb / np.linalg.norm(emb)
+        # Mock _get_face_embeddings_batch to return valid embeddings
+        def mock_get_embeddings_batch(point_id_list, batch_size=100):
+            result = {}
+            for pid in point_id_list:
+                emb = np.random.randn(512)
+                result[pid] = emb / np.linalg.norm(emb)
+            return result
 
-        clusterer._get_face_embedding = mock_get_embedding  # type: ignore
+        clusterer._get_face_embeddings_batch = mock_get_embeddings_batch  # type: ignore
 
         with pytest.raises(ValueError, match="Unknown clustering method"):
             clusterer.cluster_unknown_faces(unknown_faces)

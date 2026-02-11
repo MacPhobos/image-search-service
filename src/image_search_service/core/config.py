@@ -136,6 +136,36 @@ class Settings(BaseSettings):
         description="Minimum number of faces required per cluster for displaying unknown faces",
     )
 
+    # Unknown person discovery settings
+    unknown_person_min_display_count: int = Field(
+        default=5,
+        ge=2,
+        le=50,
+        alias="UNKNOWN_PERSON_MIN_DISPLAY_COUNT",
+        description="Minimum faces per candidate group to display (Admin UI configurable)",
+    )
+    unknown_person_default_threshold: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        alias="UNKNOWN_PERSON_DEFAULT_THRESHOLD",
+        description="Default confidence threshold for unknown person groups",
+    )
+    unknown_person_max_faces: int = Field(
+        default=50000,
+        ge=100,
+        le=100000,
+        alias="UNKNOWN_PERSON_MAX_FACES",
+        description="Maximum unassigned faces to process during discovery",
+    )
+    unknown_person_chunk_size: int = Field(
+        default=10000,
+        ge=1000,
+        le=20000,
+        alias="UNKNOWN_PERSON_CHUNK_SIZE",
+        description="Chunk size for batched clustering at 50K+ scale",
+    )
+
     # Face suggestion settings
     face_suggestion_min_confidence: float = Field(
         default=0.7,

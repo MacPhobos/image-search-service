@@ -968,3 +968,36 @@ class IgnoredDirectory(Base):
 
     def __repr__(self) -> str:
         return f"<IgnoredDirectory(id={self.id}, path={self.path})>"
+
+
+class DismissedUnknownPersonGroup(Base):
+    """Tracks dismissed candidate person groups by membership hash.
+
+    Dismissed groups persist across re-clustering runs.
+    If the same set of faces clusters together again, the group stays dismissed.
+    Identity determined by membership_hash (SHA-256 of sorted face_instance_ids).
+    """
+
+    __tablename__ = "dismissed_unknown_person_groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    membership_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    cluster_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    face_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    marked_as_noise: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dismissed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    face_instance_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+
+    __table_args__ = (
+        # membership_hash index created automatically by unique=True constraint
+        Index("ix_dismissed_unknown_person_groups_cluster_id", "cluster_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<DismissedUnknownPersonGroup(id={self.id}, membership_hash={self.membership_hash}, "
+            f"face_count={self.face_count})>"
+        )

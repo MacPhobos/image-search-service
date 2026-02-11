@@ -527,7 +527,7 @@ def test_fine_tune_saves_checkpoint(trainer_with_mock_qdrant, tmp_path):
 
     checkpoint_path = tmp_path / "checkpoint.json"
 
-    result = trainer.fine_tune_for_person_clustering(
+    trainer.fine_tune_for_person_clustering(
         min_faces_per_person=5,
         checkpoint_path=str(checkpoint_path),
     )

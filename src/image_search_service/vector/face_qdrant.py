@@ -199,6 +199,7 @@ class FaceQdrantClient:
             "face_instance_id": str(face_instance_id),
             "detection_confidence": detection_confidence,
             "is_prototype": is_prototype,
+            "is_assigned": person_id is not None,  # Set based on person_id presence
         }
 
         # Add optional fields
@@ -266,6 +267,7 @@ class FaceQdrantClient:
                     "face_instance_id": str(face["face_instance_id"]),
                     "detection_confidence": face["detection_confidence"],
                     "is_prototype": face.get("is_prototype", False),
+                    "is_assigned": face.get("person_id") is not None,  # Set based on person_id
                 }
 
                 # Add optional fields
@@ -367,6 +369,8 @@ class FaceQdrantClient:
     ) -> None:
         """Bulk update person_id for multiple faces.
 
+        Also maintains is_assigned sentinel for fast filtering.
+
         Args:
             point_ids: List of face point IDs
             person_id: Person UUID to assign, or None to remove assignment
@@ -382,11 +386,18 @@ class FaceQdrantClient:
                     keys=["person_id"],
                     points=[str(point_id) for point_id in point_ids],
                 )
-                logger.info(f"Removed person_id from {len(point_ids)} faces")
-            else:
+                # Set is_assigned=False when clearing person_id
                 self.client.set_payload(
                     collection_name=_get_face_collection_name(),
-                    payload={"person_id": str(person_id)},
+                    payload={"is_assigned": False},
+                    points=[str(point_id) for point_id in point_ids],
+                )
+                logger.info(f"Removed person_id from {len(point_ids)} faces")
+            else:
+                # Set both person_id and is_assigned=True
+                self.client.set_payload(
+                    collection_name=_get_face_collection_name(),
+                    payload={"person_id": str(person_id), "is_assigned": True},
                     points=[str(point_id) for point_id in point_ids],
                 )
                 logger.info(f"Updated person_id to {person_id} for {len(point_ids)} faces")
@@ -583,6 +594,8 @@ class FaceQdrantClient:
     ) -> list[tuple[uuid.UUID, list[float]]]:
         """Get embeddings for faces without person_id for clustering.
 
+        Uses server-side IsEmptyCondition filtering for O(1) performance.
+
         Args:
             quality_threshold: Minimum quality_score (0.0-1.0)
             limit: Maximum number of faces to retrieve
@@ -590,16 +603,29 @@ class FaceQdrantClient:
         Returns:
             List of (face_instance_id, embedding) tuples
         """
+        from qdrant_client.models import IsEmptyCondition, PayloadField, Range
+
         try:
-            # Scroll with filter: person_id is None, quality >= threshold
-            # Note: Qdrant doesn't have a native "is null" filter, so we scroll
-            # all records and filter in Python
+            # Build server-side filter conditions
+            filter_conditions: list[Any] = [
+                IsEmptyCondition(is_empty=PayloadField(key="person_id")),
+            ]
+            if quality_threshold > 0.0:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="quality_score",
+                        range=Range(gte=quality_threshold),
+                    )
+                )
+
+            # Scroll with server-side filtering
             face_embeddings: list[tuple[uuid.UUID, list[float]]] = []
             offset = None
 
             while len(face_embeddings) < limit:
                 records, next_offset = self.client.scroll(
                     collection_name=_get_face_collection_name(),
+                    scroll_filter=Filter(must=filter_conditions),
                     limit=min(100, limit - len(face_embeddings)),
                     offset=offset,
                     with_vectors=True,
@@ -609,29 +635,27 @@ class FaceQdrantClient:
                 if not records:
                     break
 
-                # Filter faces without person_id and above quality threshold
+                # Extract face_instance_id and embedding from filtered results
                 for record in records:
                     if record.payload is None or record.vector is None:
                         continue
 
-                    # Check if person_id is missing (unlabeled)
-                    if "person_id" in record.payload:
-                        continue
-
-                    # Check quality threshold
-                    quality = record.payload.get("quality_score")
-                    if quality is not None and quality < quality_threshold:
-                        continue
-
-                    # Extract face_instance_id and embedding
                     face_instance_id_str = record.payload.get("face_instance_id")
                     if face_instance_id_str:
                         face_instance_id = uuid.UUID(face_instance_id_str)
                         # Handle both dict and list vector formats
+                        embedding: list[float]
                         if isinstance(record.vector, dict):
-                            embedding = list(record.vector.values())[0]  # Named vector case
+                            # Named vector case - extract first vector
+                            first_value = list(record.vector.values())[0]
+                            if isinstance(first_value, list):
+                                embedding = first_value  # type: ignore[assignment]
+                            else:
+                                continue  # Skip invalid vector format
+                        elif isinstance(record.vector, list):
+                            embedding = record.vector  # type: ignore[assignment]
                         else:
-                            embedding = record.vector
+                            continue  # Skip invalid vector format
 
                         face_embeddings.append((face_instance_id, embedding))
 
@@ -649,6 +673,94 @@ class FaceQdrantClient:
 
         except Exception as e:
             logger.error(f"Failed to get unlabeled faces with embeddings: {e}")
+            raise
+
+    def ensure_is_assigned_index(self) -> None:
+        """Create payload index on is_assigned field for fast filtering.
+
+        This enables server-side filtering using is_assigned boolean instead
+        of IsEmptyCondition, improving query performance.
+        """
+        try:
+            self.client.create_payload_index(
+                collection_name=_get_face_collection_name(),
+                field_name="is_assigned",
+                field_schema=PayloadSchemaType.BOOL,
+            )
+            logger.info("Created payload index on 'is_assigned'")
+        except Exception as e:
+            # Index may already exist, which is fine
+            logger.debug(f"Could not create is_assigned index (may already exist): {e}")
+
+    def backfill_is_assigned(self, batch_size: int = 100) -> int:
+        """Backfill is_assigned boolean for all face points.
+
+        Sets is_assigned=True for points with person_id present,
+        is_assigned=False for points without person_id.
+
+        Args:
+            batch_size: Number of points to process per batch
+
+        Returns:
+            Number of points updated
+        """
+        try:
+            updated = 0
+            offset = None
+
+            while True:
+                records, next_offset = self.client.scroll(
+                    collection_name=_get_face_collection_name(),
+                    limit=batch_size,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+                if not records:
+                    break
+
+                # Separate assigned and unassigned faces
+                assigned_ids = [
+                    record.id
+                    for record in records
+                    if record.payload is not None and bool(record.payload.get("person_id"))
+                ]
+                unassigned_ids = [
+                    record.id
+                    for record in records
+                    if record.payload is not None and not bool(record.payload.get("person_id"))
+                ]
+
+                # Update assigned faces
+                if assigned_ids:
+                    self.client.set_payload(
+                        collection_name=_get_face_collection_name(),
+                        payload={"is_assigned": True},
+                        points=assigned_ids,
+                    )
+                    updated += len(assigned_ids)
+
+                # Update unassigned faces
+                if unassigned_ids:
+                    self.client.set_payload(
+                        collection_name=_get_face_collection_name(),
+                        payload={"is_assigned": False},
+                        points=unassigned_ids,
+                    )
+                    updated += len(unassigned_ids)
+
+                # Check if we've scrolled through all points
+                if next_offset is None:
+                    break
+
+                offset = next_offset
+
+            logger.info(f"Backfilled is_assigned for {updated} face points")
+            return updated
+
+        except Exception as e:
+            logger.error(f"Failed to backfill is_assigned: {e}")
             raise
 
     def delete_by_asset(self, asset_id: uuid.UUID) -> int:

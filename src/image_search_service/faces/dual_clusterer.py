@@ -143,16 +143,23 @@ class DualModeClusterer:
             logger.info("No labeled faces for supervised assignment")
             return [], unlabeled_faces
 
-        # Build person centroids from labeled faces
-        person_embeddings = defaultdict(list)
+        # Build person centroids from labeled faces using batch retrieval
+        labeled_point_ids = [face["qdrant_point_id"] for face in labeled_faces]
+        labeled_embeddings = self._get_face_embeddings_batch(labeled_point_ids)
 
+        if not labeled_embeddings:
+            logger.warning("Could not retrieve embeddings for labeled faces")
+            return [], unlabeled_faces
+
+        # Group embeddings by person_id
+        person_embeddings = defaultdict(list)
         for face in labeled_faces:
-            embedding = self._get_face_embedding(face["qdrant_point_id"])
+            embedding = labeled_embeddings.get(face["qdrant_point_id"])
             if embedding is not None:
                 person_embeddings[face["person_id"]].append(embedding)
 
         if not person_embeddings:
-            logger.warning("Could not retrieve embeddings for labeled faces")
+            logger.warning("No valid embeddings found for labeled faces")
             return [], unlabeled_faces
 
         # Calculate centroid for each person
@@ -165,12 +172,16 @@ class DualModeClusterer:
 
         logger.info(f"Computed centroids for {len(person_centroids)} people")
 
+        # Batch retrieve embeddings for unlabeled faces
+        unlabeled_point_ids = [face["qdrant_point_id"] for face in unlabeled_faces]
+        unlabeled_embeddings = self._get_face_embeddings_batch(unlabeled_point_ids)
+
         assigned = []
         still_unknown = []
 
         # Match each unlabeled face to nearest person
         for face in unlabeled_faces:
-            embedding = self._get_face_embedding(face["qdrant_point_id"])
+            embedding = unlabeled_embeddings.get(face["qdrant_point_id"])
             if embedding is None:
                 still_unknown.append(face)
                 continue
@@ -222,12 +233,16 @@ class DualModeClusterer:
         if not unknown_faces:
             return {}
 
-        # Get embeddings
+        # Batch retrieve embeddings
+        unknown_point_ids = [face["qdrant_point_id"] for face in unknown_faces]
+        embeddings_map = self._get_face_embeddings_batch(unknown_point_ids)
+
+        # Build parallel lists for clustering
         embeddings = []
         face_ids = []
 
         for face in unknown_faces:
-            embedding = self._get_face_embedding(face["qdrant_point_id"])
+            embedding = embeddings_map.get(face["qdrant_point_id"])
             if embedding is not None:
                 embeddings.append(embedding)
                 face_ids.append(face["id"])
@@ -342,7 +357,11 @@ class DualModeClusterer:
         logger.info("Saved dual-mode clustering results")
 
     def _get_face_embedding(self, qdrant_point_id: uuid.UUID) -> npt.NDArray[np.float64] | None:
-        """Get face embedding from Qdrant by point ID."""
+        """Get face embedding from Qdrant by point ID.
+
+        Note: For retrieving multiple embeddings, use _get_face_embeddings_batch() instead
+        for better performance.
+        """
         from image_search_service.vector.face_qdrant import (
             _get_face_collection_name,
             get_face_qdrant_client,
@@ -367,6 +386,82 @@ class DualModeClusterer:
         except Exception as e:
             logger.error(f"Error retrieving embedding for {qdrant_point_id}: {e}")
             return None
+
+    def _get_face_embeddings_batch(
+        self, qdrant_point_ids: list[uuid.UUID], batch_size: int = 100
+    ) -> dict[uuid.UUID, npt.NDArray[np.float64]]:
+        """Get face embeddings from Qdrant in batches.
+
+        Args:
+            qdrant_point_ids: List of Qdrant point IDs to retrieve
+            batch_size: Number of points to retrieve per batch (default: 100)
+
+        Returns:
+            Dict mapping point_id to embedding array. Missing IDs are not included.
+        """
+        from image_search_service.vector.face_qdrant import (
+            _get_face_collection_name,
+            get_face_qdrant_client,
+        )
+
+        if not qdrant_point_ids:
+            return {}
+
+        qdrant = get_face_qdrant_client()
+        collection_name = _get_face_collection_name()
+
+        # Convert UUIDs to strings for Qdrant
+        str_ids = [str(pid) for pid in qdrant_point_ids]
+
+        # Retrieve in batches
+        all_points = []
+        for i in range(0, len(str_ids), batch_size):
+            batch_ids = str_ids[i : i + batch_size]
+
+            try:
+                batch_points = qdrant.client.retrieve(
+                    collection_name=collection_name,
+                    ids=batch_ids,
+                    with_vectors=True,
+                )
+                all_points.extend(batch_points)
+            except Exception as e:
+                logger.error(
+                    f"Error retrieving batch {i//batch_size + 1} "
+                    f"(IDs {i}-{i+len(batch_ids)}): {e}"
+                )
+                # Continue with next batch despite error
+                continue
+
+        # Build result dict: point_id -> embedding
+        result: dict[uuid.UUID, npt.NDArray[np.float64]] = {}
+
+        for point in all_points:
+            if not point.vector:
+                continue
+
+            # Convert string ID back to UUID
+            try:
+                point_uuid = uuid.UUID(str(point.id))
+            except (ValueError, AttributeError):
+                logger.warning(f"Invalid point ID format: {point.id}")
+                continue
+
+            # Handle both dict and list vector formats
+            vector = point.vector
+            if isinstance(vector, dict):
+                embedding = np.array(list(vector.values())[0])
+            else:
+                embedding = np.array(vector)
+
+            result[point_uuid] = embedding
+
+        logger.info(
+            f"Retrieved {len(result)}/{len(qdrant_point_ids)} embeddings "
+            f"in {(len(str_ids) + batch_size - 1) // batch_size} batches"
+        )
+
+        return result
 
     def _cluster_hdbscan(self, embeddings: npt.NDArray[np.float64]) -> npt.NDArray[np.int64]:
         """Cluster using HDBSCAN with cosine distance."""

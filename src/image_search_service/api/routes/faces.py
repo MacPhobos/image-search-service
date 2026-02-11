@@ -2,12 +2,17 @@
 
 import logging
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Integer, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session as SyncSession
+
+if TYPE_CHECKING:
+    from image_search_service.faces.clusterer import FaceClusterer
+    from image_search_service.vector.face_qdrant import FaceQdrantClient
 
 from image_search_service.api.face_schemas import (
     AssignFaceRequest,
@@ -70,7 +75,6 @@ from image_search_service.db.models import (
     Person,
     PersonPrototype,
     PersonStatus,
-    PrototypeRole,
 )
 from image_search_service.db.session import get_db, get_sync_db
 from image_search_service.vector.face_qdrant import get_face_qdrant_client
@@ -86,7 +90,7 @@ router = APIRouter(prefix="/faces", tags=["Faces"])
 def get_face_clusterer_dep(
     sync_db: SyncSession = Depends(get_sync_db),
     min_cluster_size: int = 5,
-) -> "FaceClusterer":  # type: ignore
+) -> "FaceClusterer":
     """Dependency for getting a configured FaceClusterer instance.
 
     Args:
@@ -374,11 +378,7 @@ async def label_cluster(
     db: AsyncSession = Depends(get_db),
 ) -> LabelClusterResponse:
     """Label a cluster with a person name, creating the person if needed."""
-    from redis import Redis
-    from rq import Queue
-
-    from image_search_service.core.config import get_settings
-    from image_search_service.queue.face_jobs import propagate_person_label_job
+    from image_search_service.services.cluster_labeling_service import ClusterLabelingService
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     # Get faces in cluster
@@ -389,80 +389,29 @@ async def label_cluster(
     if not faces:
         raise HTTPException(status_code=404, detail=f"Cluster {cluster_id} not found")
 
-    # Find or create person by name (case-insensitive)
-    person_query = select(Person).where(func.lower(Person.name) == request.name.lower())
-    person_result = await db.execute(person_query)
-    person = person_result.scalar_one_or_none()
+    # Extract face IDs
+    face_ids = [face.id for face in faces]
 
-    if not person:
-        person = Person(name=request.name)
-        db.add(person)
-        await db.flush()
-        logger.info(f"Created new person: {person.name} ({person.id})")
-
-    # Assign person to all faces in cluster
-    face_ids = []
-    qdrant_point_ids = []
-
-    for face in faces:
-        face.person_id = person.id
-        face_ids.append(face.id)
-        qdrant_point_ids.append(face.qdrant_point_id)
-
-    # Update Qdrant payloads
+    # Use service to label cluster
     qdrant = get_face_qdrant_client()
-    qdrant.update_person_ids(qdrant_point_ids, person.id)
+    service = ClusterLabelingService(db, qdrant)
 
-    # Create prototypes (top 3 quality faces as exemplars)
-    sorted_faces = sorted(faces, key=lambda f: f.quality_score or 0, reverse=True)
-    prototypes_created = 0
-
-    for face in sorted_faces[:3]:
-        prototype = PersonPrototype(
-            person_id=person.id,
-            face_instance_id=face.id,
-            qdrant_point_id=face.qdrant_point_id,
-            role=PrototypeRole.EXEMPLAR,
+    try:
+        result_dict = await service.label_cluster_as_person(
+            face_ids=face_ids,
+            person_name=request.name,
+            exclude_face_ids=None,  # Full cluster acceptance (no exclusions)
+            trigger_find_more=True,
+            trigger_reclustering=False,
         )
-        db.add(prototype)
-        prototypes_created += 1
-
-        # Mark as prototype in Qdrant
-        qdrant.update_payload(face.qdrant_point_id, {"is_prototype": True})
-
-    await db.commit()
-
-    logger.info(f"Labeled cluster {cluster_id} as person {person.name} ({len(faces)} faces)")
-
-    # Trigger propagation job using the best quality face as source
-    if sorted_faces:
-        best_face = sorted_faces[0]
-        try:
-            settings = get_settings()
-            redis_conn = Redis.from_url(settings.redis_url)
-            queue = Queue("default", connection=redis_conn)
-
-            queue.enqueue(
-                propagate_person_label_job,
-                source_face_id=str(best_face.id),
-                person_id=str(person.id),
-                min_confidence=0.7,
-                max_suggestions=50,
-                job_timeout="10m",
-            )
-            logger.info(
-                f"Queued propagation job for face {best_face.id} → person {person.id} "
-                f"(cluster {cluster_id})"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to enqueue propagation job: {e}")
-            # Don't fail the request if job queueing fails
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     return LabelClusterResponse(
-        person_id=person.id,
-        person_name=person.name,
-        faces_labeled=len(faces),
-        prototypes_created=prototypes_created,
+        person_id=result_dict["person_id"],
+        person_name=result_dict["person_name"],
+        faces_labeled=result_dict["faces_assigned"],
+        prototypes_created=result_dict["prototypes_created"],
     )
 
 
@@ -472,7 +421,7 @@ async def split_cluster(
     request: SplitClusterRequest,
     db: AsyncSession = Depends(get_db),
     sync_db: SyncSession = Depends(get_sync_db),
-    qdrant_client: "FaceQdrantClient" = Depends(get_face_qdrant_client),  # type: ignore
+    qdrant_client: "FaceQdrantClient" = Depends(get_face_qdrant_client),
 ) -> SplitClusterResponse:
     """Split a cluster into smaller sub-clusters using tighter HDBSCAN params."""
     from image_search_service.faces.clusterer import get_face_clusterer
@@ -1599,7 +1548,7 @@ async def trigger_clustering(
     request: TriggerClusteringRequest,
     db: AsyncSession = Depends(get_db),
     sync_db: SyncSession = Depends(get_sync_db),
-    qdrant_client: "FaceQdrantClient" = Depends(get_face_qdrant_client),  # type: ignore
+    qdrant_client: "FaceQdrantClient" = Depends(get_face_qdrant_client),
 ) -> ClusteringResultResponse:
     """Trigger face clustering on unlabeled faces."""
     from image_search_service.faces.clusterer import get_face_clusterer
