@@ -226,15 +226,14 @@ async def list_clusters(
     rows = result.all()
 
     # Initialize clustering service for confidence calculation
-    clustering_service = None
-    if min_confidence is not None:
-        from image_search_service.services.face_clustering_service import (
-            FaceClusteringService,
-        )
-        from image_search_service.vector.face_qdrant import get_face_qdrant_client
+    # ALWAYS initialize to populate cluster_confidence in response
+    from image_search_service.services.face_clustering_service import (
+        FaceClusteringService,
+    )
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
-        qdrant = get_face_qdrant_client()
-        clustering_service = FaceClusteringService(db, qdrant)
+    qdrant = get_face_qdrant_client()
+    clustering_service = FaceClusteringService(db, qdrant)
 
     items = []
     for row in rows:
@@ -274,36 +273,35 @@ async def list_clusters(
             # PostgreSQL returns array of UUIDs
             face_ids_list = list(row.face_ids) if row.face_ids else []
 
-        # Calculate cluster confidence if filtering requested
+        # Calculate cluster confidence (always calculated now)
         cluster_confidence = None
-        if clustering_service is not None:
-            try:
-                # Get Qdrant point IDs for this cluster's faces
-                qdrant_point_ids_query = select(FaceInstance.qdrant_point_id).where(
-                    FaceInstance.cluster_id == row.cluster_id
-                )
-                qdrant_result = await db.execute(qdrant_point_ids_query)
-                qdrant_point_ids = [r[0] for r in qdrant_result.all()]
+        try:
+            # Get Qdrant point IDs for this cluster's faces
+            qdrant_point_ids_query = select(FaceInstance.qdrant_point_id).where(
+                FaceInstance.cluster_id == row.cluster_id
+            )
+            qdrant_result = await db.execute(qdrant_point_ids_query)
+            qdrant_point_ids = [r[0] for r in qdrant_result.all()]
 
-                if qdrant_point_ids:
-                    cluster_confidence = await clustering_service.calculate_cluster_confidence(
-                        cluster_id=row.cluster_id,
-                        qdrant_point_ids=qdrant_point_ids,
+            if qdrant_point_ids:
+                cluster_confidence = await clustering_service.calculate_cluster_confidence(
+                    cluster_id=row.cluster_id,
+                    qdrant_point_ids=qdrant_point_ids,
+                )
+
+                # Filter out clusters below confidence threshold (only when filtering enabled)
+                if min_confidence is not None and cluster_confidence < min_confidence:
+                    logger.debug(
+                        f"Filtered out cluster {row.cluster_id} "
+                        f"(confidence {cluster_confidence:.3f} < {min_confidence})"
                     )
-
-                    # Filter out clusters below confidence threshold
-                    if min_confidence is not None and cluster_confidence < min_confidence:
-                        logger.debug(
-                            f"Filtered out cluster {row.cluster_id} "
-                            f"(confidence {cluster_confidence:.3f} < {min_confidence})"
-                        )
-                        continue
-            except Exception as e:
-                logger.warning(
-                    f"Failed to calculate confidence for cluster {row.cluster_id}: {e}"
-                )
-                # Don't filter out clusters with calculation errors
-                cluster_confidence = None
+                    continue
+        except Exception as e:
+            logger.warning(
+                f"Failed to calculate confidence for cluster {row.cluster_id}: {e}"
+            )
+            # Don't filter out clusters with calculation errors
+            cluster_confidence = None
 
         # Select representative face (highest quality)
         representative_face_id = None

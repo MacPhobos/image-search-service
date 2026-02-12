@@ -197,3 +197,38 @@ class UnknownPersonsStatsResponse(CamelCaseModel):
     avg_group_confidence: float
     total_dismissed_groups: int
     last_discovery_at: datetime | None = None
+
+
+# ============ Merge Schemas ============
+
+
+class MergeSuggestion(CamelCaseModel):
+    """Suggestion to merge two candidate groups based on centroid similarity."""
+
+    group_a_id: str
+    group_b_id: str
+    similarity: float = Field(ge=0.0, le=1.0, description="Cosine similarity between centroids")
+    group_a_face_count: int
+    group_b_face_count: int
+
+
+class MergeSuggestionsResponse(CamelCaseModel):
+    """Response containing merge suggestions."""
+
+    suggestions: list[MergeSuggestion]
+    total_groups_compared: int
+
+
+class MergeGroupsRequest(CamelCaseModel):
+    """Request to merge two candidate groups."""
+
+    group_a_id: str = Field(description="Target group to merge into")
+    group_b_id: str = Field(description="Source group to merge from")
+
+
+class MergeGroupsResponse(CamelCaseModel):
+    """Response from merging two groups."""
+
+    merged_group_id: str = Field(description="Resulting group ID (group_a_id)")
+    total_faces: int = Field(description="Total faces in merged group")
+    faces_moved: int = Field(description="Number of faces moved from group_b")

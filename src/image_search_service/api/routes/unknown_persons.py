@@ -18,6 +18,10 @@ from image_search_service.api.unknown_person_schemas import (
     DismissUnknownPersonRequest,
     DismissUnknownPersonResponse,
     FaceInGroupResponse,
+    MergeGroupsRequest,
+    MergeGroupsResponse,
+    MergeSuggestion,
+    MergeSuggestionsResponse,
     UnknownPersonCandidateDetail,
     UnknownPersonCandidateGroup,
     UnknownPersonCandidatesResponse,
@@ -465,7 +469,254 @@ async def get_unknown_person_candidates(
     )
 
 
-# ============ Endpoint 4: GET /candidates/{group_id} ============
+# ============ Endpoint 4: GET /candidates/merge-suggestions ============
+# NOTE: This MUST come BEFORE /candidates/{group_id} to avoid route conflicts
+
+
+@router.get("/candidates/merge-suggestions", response_model=MergeSuggestionsResponse)
+async def get_merge_suggestions(
+    max_suggestions: int = Query(10, ge=1, le=50, description="Max merge suggestions to return"),
+    min_similarity: float = Query(
+        0.60, ge=0.0, le=1.0, description="Min centroid similarity threshold"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> MergeSuggestionsResponse:
+    """Get suggestions for merging similar candidate groups.
+
+    Computes pairwise centroid similarity between all active candidate groups
+    and returns pairs with similarity above threshold.
+
+    Algorithm:
+    1. Query all active (non-dismissed) candidate groups
+    2. For each group, compute centroid (average embedding) from Qdrant
+    3. Compute pairwise cosine similarities between all centroids
+    4. Return top N pairs above similarity threshold, sorted by similarity desc
+
+    Args:
+        max_suggestions: Maximum number of suggestions to return
+        min_similarity: Minimum centroid similarity to suggest merge
+        db: Database session
+
+    Returns:
+        List of merge suggestions with similarity scores
+    """
+    # Get all active candidate groups (cluster_id, face_count)
+    groups_query = (
+        select(
+            FaceInstance.cluster_id,
+            func.count(FaceInstance.id).label("face_count"),
+        )
+        .where(
+            and_(
+                FaceInstance.person_id.is_(None),
+                FaceInstance.cluster_id.isnot(None),
+                FaceInstance.cluster_id != "-1",
+                FaceInstance.cluster_id.like("unknown_%"),
+            )
+        )
+        .group_by(FaceInstance.cluster_id)
+    )
+    groups_result = await db.execute(groups_query)
+    groups = groups_result.all()
+
+    if len(groups) < 2:
+        return MergeSuggestionsResponse(suggestions=[], total_groups_compared=len(groups))
+
+    # Initialize Qdrant client
+    qdrant_client = get_face_qdrant_client()
+
+    # Compute centroid for each group
+    import numpy as np
+    from numpy.typing import NDArray
+
+    group_centroids: dict[str, tuple[NDArray[np.float64], int]] = {}  # cluster_id -> (centroid, face_count)  # noqa: E501
+
+    for row in groups:
+        cluster_id = row.cluster_id
+        face_count = row.face_count
+
+        # Fetch Qdrant point IDs for this cluster
+        point_ids_query = select(FaceInstance.qdrant_point_id).where(
+            and_(
+                FaceInstance.cluster_id == cluster_id,
+                FaceInstance.person_id.is_(None),
+            )
+        )
+        point_ids_result = await db.execute(point_ids_query)
+        point_ids = [r[0] for r in point_ids_result.all()]
+
+        if not point_ids:
+            logger.warning(f"No Qdrant points found for cluster {cluster_id}")
+            continue
+
+        # Retrieve embeddings from Qdrant
+        embeddings = []
+        for point_id in point_ids:
+            try:
+                embedding = qdrant_client.get_embedding_by_point_id(point_id)
+                if embedding is not None:
+                    embeddings.append(np.array(embedding))
+            except Exception as e:
+                logger.warning(f"Failed to retrieve embedding for point {point_id}: {e}")
+
+        if not embeddings:
+            logger.warning(f"No embeddings retrieved for cluster {cluster_id}")
+            continue
+
+        # Compute centroid (mean of all embeddings)
+        centroid = np.mean(embeddings, axis=0)
+        group_centroids[cluster_id] = (centroid, face_count)
+
+    # Compute pairwise similarities
+    from sklearn.metrics.pairwise import cosine_similarity  # type: ignore[import-untyped]
+
+    cluster_ids = list(group_centroids.keys())
+    suggestions: list[MergeSuggestion] = []
+
+    for i in range(len(cluster_ids)):
+        for j in range(i + 1, len(cluster_ids)):
+            cluster_a = cluster_ids[i]
+            cluster_b = cluster_ids[j]
+
+            centroid_a, count_a = group_centroids[cluster_a]
+            centroid_b, count_b = group_centroids[cluster_b]
+
+            # Compute cosine similarity
+            # Clamp to [0.0, 1.0] to handle floating-point precision issues
+            similarity = float(
+                cosine_similarity(centroid_a.reshape(1, -1), centroid_b.reshape(1, -1))[0][0]
+            )
+            similarity = max(0.0, min(1.0, similarity))
+
+            if similarity >= min_similarity:
+                suggestions.append(
+                    MergeSuggestion(
+                        group_a_id=cluster_a,
+                        group_b_id=cluster_b,
+                        similarity=similarity,
+                        group_a_face_count=count_a,
+                        group_b_face_count=count_b,
+                    )
+                )
+
+    # Sort by similarity descending
+    suggestions.sort(key=lambda s: s.similarity, reverse=True)
+
+    # Limit to max_suggestions
+    suggestions = suggestions[:max_suggestions]
+
+    logger.info(
+        f"Found {len(suggestions)} merge suggestions from {len(group_centroids)} groups "
+        f"(threshold: {min_similarity})"
+    )
+
+    return MergeSuggestionsResponse(
+        suggestions=suggestions,
+        total_groups_compared=len(group_centroids),
+    )
+
+
+# ============ Endpoint 5: POST /candidates/merge ============
+# NOTE: This MUST come BEFORE /candidates/{group_id} to avoid route conflicts
+
+
+@router.post("/candidates/merge", response_model=MergeGroupsResponse)
+async def merge_candidate_groups(
+    request: MergeGroupsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MergeGroupsResponse:
+    """Merge two candidate groups by moving all faces from group_b to group_a.
+
+    Workflow:
+    1. Validate both groups exist and have unassigned faces
+    2. Get cluster_ids for both groups (groups are identified by cluster_id)
+    3. Move all faces from group_b's cluster to group_a's cluster
+    4. Return merged group metadata
+
+    Args:
+        request: Group IDs to merge (group_a is target, group_b is source)
+        db: Database session
+
+    Returns:
+        Merged group metadata (merged_group_id, total_faces, faces_moved)
+
+    Raises:
+        HTTPException: 404 if either group not found, 400 if groups are the same
+    """
+    group_a_id = request.group_a_id
+    group_b_id = request.group_b_id
+
+    # Validate groups are different
+    if group_a_id == group_b_id:
+        raise HTTPException(status_code=400, detail="Cannot merge a group with itself")
+
+    # Verify group_a exists and has faces
+    group_a_query = (
+        select(func.count(FaceInstance.id))
+        .where(
+            and_(
+                FaceInstance.cluster_id == group_a_id,
+                FaceInstance.person_id.is_(None),
+            )
+        )
+    )
+    group_a_result = await db.execute(group_a_query)
+    group_a_count = group_a_result.scalar_one()
+
+    if group_a_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Group {group_a_id} not found or has no unassigned faces"
+        )
+
+    # Verify group_b exists and has faces
+    group_b_query = (
+        select(func.count(FaceInstance.id))
+        .where(
+            and_(
+                FaceInstance.cluster_id == group_b_id,
+                FaceInstance.person_id.is_(None),
+            )
+        )
+    )
+    group_b_result = await db.execute(group_b_query)
+    group_b_count = group_b_result.scalar_one()
+
+    if group_b_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Group {group_b_id} not found or has no unassigned faces"
+        )
+
+    # Move all faces from group_b to group_a
+    await db.execute(
+        update(FaceInstance)
+        .where(
+            and_(
+                FaceInstance.cluster_id == group_b_id,
+                FaceInstance.person_id.is_(None),
+            )
+        )
+        .values(cluster_id=group_a_id)
+    )
+
+    await db.commit()
+
+    total_faces = group_a_count + group_b_count
+
+    logger.info(
+        f"Merged groups: {group_b_id} ({group_b_count} faces) -> {group_a_id} "
+        f"(total: {total_faces} faces)"
+    )
+
+    return MergeGroupsResponse(
+        merged_group_id=group_a_id,
+        total_faces=total_faces,
+        faces_moved=group_b_count,
+    )
+
+
+# ============ Endpoint 6: GET /candidates/{group_id} ============
 
 
 @router.get("/candidates/{group_id}", response_model=UnknownPersonCandidateDetail)
@@ -533,7 +784,7 @@ async def get_unknown_person_candidate_detail(
     )
 
 
-# ============ Endpoint 5: POST /candidates/{group_id}/accept ============
+# ============ Endpoint 7: POST /candidates/{group_id}/accept ============
 
 
 @router.post("/candidates/{group_id}/accept", response_model=AcceptUnknownPersonResponse)
@@ -641,7 +892,7 @@ async def accept_unknown_person_candidate(
     )
 
 
-# ============ Endpoint 6: POST /candidates/{group_id}/dismiss ============
+# ============ Endpoint 8: POST /candidates/{group_id}/dismiss ============
 
 
 @router.post("/candidates/{group_id}/dismiss", response_model=DismissUnknownPersonResponse)
@@ -761,3 +1012,5 @@ def _build_face_response(face: FaceInstance) -> FaceInGroupResponse:
         bbox_h=face.bbox_h,
         thumbnail_url=thumbnail_url,
     )
+
+
