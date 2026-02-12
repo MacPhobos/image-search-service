@@ -1,9 +1,13 @@
 """Face clustering confidence calculation and filtering service."""
 
+from __future__ import annotations
+
 import logging
+from typing import Any
 from uuid import UUID
 
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity  # type: ignore[import-untyped]
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,7 +125,7 @@ class FaceClusteringService:
 
         return confidence
 
-    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+    def _cosine_similarity(self, vec1: np.ndarray[Any, Any], vec2: np.ndarray[Any, Any]) -> float:
         """Calculate cosine similarity between two vectors.
 
         Args:
@@ -200,3 +204,74 @@ class FaceClusteringService:
         )
 
         return best_face.id
+
+
+def compute_cluster_confidence_from_embeddings(
+    embeddings: np.ndarray[Any, Any],
+    sample_size: int = 20,
+) -> float:
+    """Compute average pairwise cosine similarity for a set of embeddings.
+
+    Samples max `sample_size` embeddings if the cluster is larger.
+    This is the cluster's "cohesion score" used to filter groups by
+    the threshold slider.
+
+    Args:
+        embeddings: N x D numpy array of face embeddings
+        sample_size: Maximum number of embeddings to sample for performance
+
+    Returns:
+        Float between 0.0 and 1.0 representing cluster cohesion
+
+    Example:
+        >>> import numpy as np
+        >>> # Perfect cluster (identical embeddings)
+        >>> embeddings = np.array([[1, 0, 0], [1, 0, 0]])
+        >>> confidence = compute_cluster_confidence_from_embeddings(embeddings)
+        >>> assert confidence == 1.0
+        >>>
+        >>> # Orthogonal vectors (low cohesion)
+        >>> embeddings = np.array([[1, 0], [0, 1]])
+        >>> confidence = compute_cluster_confidence_from_embeddings(embeddings)
+        >>> assert confidence < 0.1
+    """
+    # Handle edge cases
+    n = len(embeddings)
+
+    if n < 2:
+        # Single embedding or empty = perfect confidence
+        return 1.0
+
+    # Sample if cluster too large for performance
+    if n > sample_size:
+        import random
+
+        indices = random.sample(range(n), sample_size)
+        embeddings = embeddings[indices]
+        n = sample_size
+
+        logger.debug(
+            f"Sampled {sample_size} embeddings from {len(embeddings)} for confidence calculation"
+        )
+
+    # Compute pairwise cosine similarity matrix
+    # sklearn's cosine_similarity returns matrix where [i, j] = cosine(vec_i, vec_j)
+    similarity_matrix = cosine_similarity(embeddings)
+
+    # Extract upper triangle (excluding diagonal)
+    # This gives us all unique pairwise similarities without self-comparisons
+    upper_triangle_indices = np.triu_indices(n, k=1)
+    pairwise_similarities = similarity_matrix[upper_triangle_indices]
+
+    # Return mean of all pairwise similarities
+    confidence = float(np.mean(pairwise_similarities))
+
+    # Ensure output is in valid range (floating point errors can cause slight overflow)
+    confidence = max(0.0, min(1.0, confidence))
+
+    logger.debug(
+        f"Computed cluster confidence: {confidence:.3f} "
+        f"(from {len(pairwise_similarities)} pairwise comparisons of {n} embeddings)"
+    )
+
+    return confidence

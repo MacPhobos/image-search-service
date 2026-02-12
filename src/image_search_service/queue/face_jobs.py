@@ -22,15 +22,19 @@ On macOS, these subprocesses are created via spawn() (not fork()), requiring:
    ✓ detect_faces_for_session_job() - Sync operations
    ✓ propagate_person_label_job() - Sync operations
    ✓ expire_old_suggestions_job() - Sync operations
+   ✓ discover_unknown_persons_job() - Sync operations
 
 See worker.py for complete macOS fork-safety architecture.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import numpy as np
 from rq import get_current_job
 from sqlalchemy import select
 
@@ -2131,5 +2135,361 @@ def find_more_centroid_suggestions_job(
         logger.exception(f"[{job_id}] Error in centroid-based find-more job: {e}")
         update_progress("failed", 0, 0, str(e))
         return {"status": "error", "message": str(e)}
+    finally:
+        db_session.close()
+
+
+def discover_unknown_persons_job(
+    clustering_method: str = "hdbscan",
+    min_cluster_size: int = 5,
+    min_quality: float = 0.3,
+    max_faces: int = 50000,
+    min_cluster_confidence: float = 0.70,
+    eps: float = 0.5,
+) -> dict[str, Any]:
+    """Discover unknown person groups by clustering unassigned faces.
+
+    This job:
+    1. Retrieves all unassigned face embeddings from Qdrant
+    2. Runs HDBSCAN clustering to find natural groupings
+    3. Computes confidence scores for each cluster
+    4. Filters clusters by confidence threshold
+    5. Updates FaceInstance.cluster_id in database
+    6. Caches cluster metadata in Redis
+
+    FORK-SAFETY (macOS): Uses sync database and sync Qdrant client.
+
+    Args:
+        clustering_method: Algorithm to use (currently only "hdbscan" supported)
+        min_cluster_size: Minimum faces per cluster (HDBSCAN parameter)
+        min_quality: Minimum quality_score to include faces (0.0-1.0)
+        max_faces: Maximum faces to cluster (memory ceiling)
+        min_cluster_confidence: Minimum average pairwise similarity to keep cluster
+        eps: Not used for HDBSCAN (reserved for DBSCAN)
+
+    Returns:
+        dict with: status, total_faces, clusters_found, noise_count,
+        qualifying_groups, filtered_low_confidence
+
+    Raises:
+        ValueError: If max_faces exceeded or invalid parameters
+    """
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    logger.info(
+        f"[{job_id}] Starting unknown person discovery: "
+        f"method={clustering_method}, min_size={min_cluster_size}, "
+        f"min_quality={min_quality}, max_faces={max_faces}, "
+        f"min_confidence={min_cluster_confidence}"
+    )
+
+    # Validate parameters
+    if clustering_method != "hdbscan":
+        return {
+            "status": "error",
+            "message": f"Unsupported clustering method: {clustering_method}",
+        }
+
+    # Import dependencies
+    import uuid as uuid_lib
+
+    try:
+        import hdbscan
+    except ImportError:
+        logger.error("hdbscan not installed, cannot perform clustering")
+        return {
+            "status": "error",
+            "message": "hdbscan package not installed",
+        }
+
+    from image_search_service.queue.worker import get_redis
+    from image_search_service.services.face_clustering_service import (
+        compute_cluster_confidence_from_embeddings,
+    )
+    from image_search_service.services.unknown_person_service import compute_membership_hash
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    db_session = get_sync_session()
+
+    try:
+        # Helper function to update progress
+        def update_progress(phase: str, current: int = 0, total: int = 0, message: str = "") -> None:
+            """Update job progress in Redis for real-time UI updates."""
+            try:
+                redis_client = get_redis()
+                progress_key = f"job:{job_id}:progress"
+
+                progress_data = {
+                    "phase": phase,
+                    "current": current,
+                    "total": total,
+                    "message": message,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                redis_client.set(progress_key, json.dumps(progress_data), ex=3600)
+                logger.debug(f"[{job_id}] Progress: {phase} - {message}")
+            except Exception as e:
+                logger.warning(f"[{job_id}] Failed to update progress: {e}")
+
+        # PHASE 1: Retrieve unassigned face embeddings
+        update_progress("retrieval", 0, 100, "Retrieving unassigned face embeddings...")
+
+        qdrant_client = get_face_qdrant_client()
+        faces_with_embeddings = qdrant_client.get_unlabeled_faces_with_embeddings(
+            quality_threshold=min_quality,
+            limit=max_faces,
+        )
+
+        total_faces = len(faces_with_embeddings)
+        logger.info(f"[{job_id}] Retrieved {total_faces} unassigned faces for clustering")
+
+        if total_faces < min_cluster_size:
+            logger.warning(
+                f"[{job_id}] Only {total_faces} faces available, "
+                f"less than min_cluster_size={min_cluster_size}"
+            )
+            return {
+                "status": "completed",
+                "total_faces": total_faces,
+                "clusters_found": 0,
+                "noise_count": 0,
+                "qualifying_groups": 0,
+                "message": f"Insufficient faces ({total_faces} < {min_cluster_size})",
+            }
+
+        update_progress("retrieval", 100, 100, f"Retrieved {total_faces} faces")
+
+        # PHASE 2: Memory ceiling check
+        update_progress("memory_check", 0, 100, "Checking memory requirements...")
+
+        # HDBSCAN needs O(N²) memory for distance matrix
+        MAX_CLUSTERING_MEMORY_GB = 4
+        estimated_memory_gb = (total_faces**2 * 8) / (1024**3)
+
+        if estimated_memory_gb > MAX_CLUSTERING_MEMORY_GB:
+            error_msg = (
+                f"Memory ceiling exceeded: {estimated_memory_gb:.2f} GB required "
+                f"(max: {MAX_CLUSTERING_MEMORY_GB} GB). "
+                f"Reduce max_faces (currently {total_faces}) or use sampling."
+            )
+            logger.error(f"[{job_id}] {error_msg}")
+            update_progress("failed", 0, 0, error_msg)
+            return {"status": "error", "message": error_msg}
+
+        logger.info(
+            f"[{job_id}] Memory check passed: {estimated_memory_gb:.2f} GB "
+            f"(max: {MAX_CLUSTERING_MEMORY_GB} GB)"
+        )
+        update_progress("memory_check", 100, 100, "Memory check passed")
+
+        # PHASE 3: Build embedding matrix
+        update_progress("embedding", 0, 100, "Building embedding matrix...")
+
+        face_ids = [face_id for face_id, _ in faces_with_embeddings]
+        embeddings = np.array([embedding for _, embedding in faces_with_embeddings], dtype=np.float32)
+
+        logger.info(f"[{job_id}] Built embedding matrix: {embeddings.shape}")
+        update_progress("embedding", 100, 100, f"Matrix shape: {embeddings.shape}")
+
+        # PHASE 4: Run HDBSCAN clustering
+        update_progress("clustering", 0, 100, "Running HDBSCAN clustering...")
+
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=min_cluster_size,
+            min_samples=3,  # More conservative than min_cluster_size
+            metric="euclidean",  # Standard for face embeddings
+            cluster_selection_method="eom",  # Excess of mass (more stable)
+            core_dist_n_jobs=1,  # Single thread (RQ worker context)
+        )
+
+        logger.info(f"[{job_id}] Starting HDBSCAN clustering...")
+        labels = clusterer.fit_predict(embeddings)
+        logger.info(f"[{job_id}] HDBSCAN clustering complete")
+
+        update_progress("clustering", 100, 100, "Clustering complete")
+
+        # PHASE 5: Compute cluster metadata
+        update_progress("metadata", 0, 100, "Computing cluster metadata...")
+
+        unique_labels = set(labels)
+        noise_count = int(np.sum(labels == -1))  # -1 = noise in HDBSCAN
+
+        logger.info(
+            f"[{job_id}] Found {len(unique_labels) - 1} clusters "
+            f"(excluding noise: {noise_count} faces)"
+        )
+
+        # Compute confidence and membership hash for each cluster
+        cluster_metadata: dict[str, dict[str, Any]] = {}
+        qualifying_groups = 0
+        filtered_low_confidence = 0
+        actual_clusters_found = len(unique_labels) - (1 if -1 in unique_labels else 0)
+
+        for label in unique_labels:
+            if label == -1:
+                continue  # Skip noise
+
+            # Get face indices for this cluster
+            cluster_mask = labels == label
+            cluster_indices = np.where(cluster_mask)[0]
+            cluster_embeddings = embeddings[cluster_indices]
+
+            # Compute confidence
+            confidence = compute_cluster_confidence_from_embeddings(
+                cluster_embeddings,
+                sample_size=20,
+            )
+
+            # Get face IDs for this cluster
+            cluster_face_ids = [face_ids[i] for i in cluster_indices]
+            face_count = len(cluster_face_ids)
+
+            # Namespace cluster_id to avoid collision with dual_clusterer
+            cluster_id = f"unknown_{label}"
+
+            # Compute membership hash
+            membership_hash = compute_membership_hash(cluster_face_ids)
+
+            # Filter by confidence and size
+            if confidence >= min_cluster_confidence and face_count >= min_cluster_size:
+                cluster_metadata[cluster_id] = {
+                    "cluster_id": cluster_id,
+                    "face_count": face_count,
+                    "confidence": confidence,
+                    "membership_hash": membership_hash,
+                    "face_ids": [str(fid) for fid in cluster_face_ids],
+                }
+                qualifying_groups += 1
+                logger.info(
+                    f"[{job_id}] Cluster {cluster_id}: "
+                    f"{face_count} faces, confidence={confidence:.3f} ✓"
+                )
+            else:
+                filtered_low_confidence += 1
+                logger.debug(
+                    f"[{job_id}] Cluster {cluster_id}: "
+                    f"{face_count} faces, confidence={confidence:.3f} "
+                    f"(filtered: confidence < {min_cluster_confidence})"
+                )
+
+        update_progress(
+            "metadata",
+            100,
+            100,
+            f"Found {qualifying_groups} qualifying groups (filtered {filtered_low_confidence})",
+        )
+
+        # PHASE 6: Update FaceInstance.cluster_id in database
+        update_progress("persistence", 0, 100, "Updating database...")
+
+        # Build mapping: face_id -> cluster_id
+        face_to_cluster: dict[str, str] = {}
+
+        for label, face_id in zip(labels, face_ids):
+            if label == -1:
+                # Noise faces get special marker
+                face_to_cluster[str(face_id)] = "-1"
+            else:
+                cluster_id = f"unknown_{label}"
+                # Only update if cluster qualified (passed confidence filter)
+                if cluster_id in cluster_metadata:
+                    face_to_cluster[str(face_id)] = cluster_id
+
+        # Batch update FaceInstance records
+        updated_count = 0
+        for face_id_str, cluster_id in face_to_cluster.items():
+            try:
+                face_uuid = uuid_lib.UUID(face_id_str)
+                stmt = (
+                    select(FaceInstance)
+                    .where(FaceInstance.id == face_uuid)
+                )
+                face = db_session.execute(stmt).scalar_one_or_none()
+
+                if face:
+                    face.cluster_id = cluster_id
+                    updated_count += 1
+
+            except Exception as e:
+                logger.warning(f"[{job_id}] Failed to update face {face_id_str}: {e}")
+                continue
+
+        db_session.commit()
+        logger.info(f"[{job_id}] Updated cluster_id for {updated_count} faces")
+
+        update_progress("persistence", 100, 100, f"Updated {updated_count} faces")
+
+        # PHASE 7: Cache metadata in Redis
+        update_progress("caching", 0, 100, "Caching cluster metadata...")
+
+        redis_client = get_redis()
+
+        # Cache last discovery metadata
+        discovery_metadata = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "total_faces": total_faces,
+            "clusters_found": actual_clusters_found,
+            "qualifying_groups": qualifying_groups,
+            "noise_count": noise_count,
+            "params": {
+                "clustering_method": clustering_method,
+                "min_cluster_size": min_cluster_size,
+                "min_quality": min_quality,
+                "min_cluster_confidence": min_cluster_confidence,
+            },
+        }
+        redis_client.set(
+            "unknown_persons:last_discovery",
+            json.dumps(discovery_metadata),
+            ex=86400,  # 24h TTL
+        )
+
+        # Cache individual cluster metadata
+        for cluster_id, metadata in cluster_metadata.items():
+            redis_client.set(
+                f"unknown_persons:cluster:{cluster_id}",
+                json.dumps(metadata),
+                ex=86400,  # 24h TTL
+            )
+
+        logger.info(
+            f"[{job_id}] Cached metadata for {len(cluster_metadata)} clusters in Redis"
+        )
+
+        update_progress("caching", 100, 100, "Metadata cached")
+
+        # PHASE 8: Report completion
+        update_progress(
+            "complete",
+            100,
+            100,
+            f"Discovery complete: {qualifying_groups} groups found",
+        )
+
+        result = {
+            "status": "completed",
+            "total_faces": total_faces,
+            "clusters_found": actual_clusters_found,
+            "noise_count": noise_count,
+            "qualifying_groups": qualifying_groups,
+            "filtered_low_confidence": filtered_low_confidence,
+            "updated_faces": updated_count,
+        }
+
+        logger.info(
+            f"[{job_id}] Unknown person discovery complete: "
+            f"{total_faces} faces, {qualifying_groups} qualifying groups, "
+            f"{noise_count} noise"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Fatal error in unknown person discovery: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+        }
     finally:
         db_session.close()

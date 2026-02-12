@@ -595,6 +595,7 @@ class FaceQdrantClient:
         """Get embeddings for faces without person_id for clustering.
 
         Uses server-side IsEmptyCondition filtering for O(1) performance.
+        This method is sync-safe and can be called from RQ workers.
 
         Args:
             quality_threshold: Minimum quality_score (0.0-1.0)
