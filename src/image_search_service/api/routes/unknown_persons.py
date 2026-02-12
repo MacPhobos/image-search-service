@@ -1033,12 +1033,12 @@ def _build_face_response(face: FaceInstance) -> FaceInGroupResponse:
     Returns:
         FaceInGroupResponse schema for API
     """
-    # TODO: Generate thumbnail_url if needed (not implemented yet)
-    thumbnail_url = None
-
     # Handle both FaceInstance.asset_id (int) and face.asset.id (int)
     # asset_id is the foreign key field
     asset_id = face.asset_id if hasattr(face, "asset_id") else face.asset.id
+
+    # Generate thumbnail URL using the same pattern as other components
+    thumbnail_url = f"/api/v1/images/{asset_id}/thumbnail" if asset_id else None
 
     return FaceInGroupResponse(
         face_instance_id=face.id,
