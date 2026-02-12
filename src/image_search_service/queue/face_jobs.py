@@ -2146,6 +2146,7 @@ def discover_unknown_persons_job(
     max_faces: int = 50000,
     min_cluster_confidence: float = 0.70,
     eps: float = 0.5,
+    progress_key: str | None = None,
 ) -> dict[str, Any]:
     """Discover unknown person groups by clustering unassigned faces.
 
@@ -2186,6 +2187,21 @@ def discover_unknown_persons_job(
 
     # Validate parameters
     if clustering_method != "hdbscan":
+        # Write error to progress if key provided (before worker setup)
+        if progress_key:
+            try:
+                from image_search_service.queue.worker import get_redis
+                redis_client = get_redis()
+                progress_data = {
+                    "phase": "failed",
+                    "current": 0,
+                    "total": 100,
+                    "message": f"Unsupported clustering method: {clustering_method}",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                redis_client.set(progress_key, json.dumps(progress_data), ex=3600)
+            except Exception as e:
+                logger.warning(f"[{job_id}] Failed to update progress on validation error: {e}")
         return {
             "status": "error",
             "message": f"Unsupported clustering method: {clustering_method}",
@@ -2198,6 +2214,21 @@ def discover_unknown_persons_job(
         import hdbscan
     except ImportError:
         logger.error("hdbscan not installed, cannot perform clustering")
+        # Write error to progress if key provided (before worker setup)
+        if progress_key:
+            try:
+                from image_search_service.queue.worker import get_redis
+                redis_client = get_redis()
+                progress_data = {
+                    "phase": "failed",
+                    "current": 0,
+                    "total": 100,
+                    "message": "hdbscan package not installed",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                redis_client.set(progress_key, json.dumps(progress_data), ex=3600)
+            except Exception as e:
+                logger.warning(f"[{job_id}] Failed to update progress on import error: {e}")
         return {
             "status": "error",
             "message": "hdbscan package not installed",
@@ -2214,11 +2245,15 @@ def discover_unknown_persons_job(
 
     try:
         # Helper function to update progress
-        def update_progress(phase: str, current: int = 0, total: int = 0, message: str = "") -> None:
+        def update_progress(
+            phase: str, current: int = 0, total: int = 0, message: str = ""
+        ) -> None:
             """Update job progress in Redis for real-time UI updates."""
+            if not progress_key:
+                logger.warning(f"[{job_id}] No progress_key provided, skipping progress update")
+                return
             try:
                 redis_client = get_redis()
-                progress_key = f"job:{job_id}:progress"
 
                 progress_data = {
                     "phase": phase,
@@ -2249,6 +2284,12 @@ def discover_unknown_persons_job(
                 f"[{job_id}] Only {total_faces} faces available, "
                 f"less than min_cluster_size={min_cluster_size}"
             )
+            update_progress(
+                "completed",
+                100,
+                100,
+                f"Insufficient faces ({total_faces} < {min_cluster_size})",
+            )
             return {
                 "status": "completed",
                 "total_faces": total_faces,
@@ -2264,13 +2305,13 @@ def discover_unknown_persons_job(
         update_progress("memory_check", 0, 100, "Checking memory requirements...")
 
         # HDBSCAN needs O(N²) memory for distance matrix
-        MAX_CLUSTERING_MEMORY_GB = 4
+        max_clustering_memory_gb = 4
         estimated_memory_gb = (total_faces**2 * 8) / (1024**3)
 
-        if estimated_memory_gb > MAX_CLUSTERING_MEMORY_GB:
+        if estimated_memory_gb > max_clustering_memory_gb:
             error_msg = (
                 f"Memory ceiling exceeded: {estimated_memory_gb:.2f} GB required "
-                f"(max: {MAX_CLUSTERING_MEMORY_GB} GB). "
+                f"(max: {max_clustering_memory_gb} GB). "
                 f"Reduce max_faces (currently {total_faces}) or use sampling."
             )
             logger.error(f"[{job_id}] {error_msg}")
@@ -2279,7 +2320,7 @@ def discover_unknown_persons_job(
 
         logger.info(
             f"[{job_id}] Memory check passed: {estimated_memory_gb:.2f} GB "
-            f"(max: {MAX_CLUSTERING_MEMORY_GB} GB)"
+            f"(max: {max_clustering_memory_gb} GB)"
         )
         update_progress("memory_check", 100, 100, "Memory check passed")
 
@@ -2287,7 +2328,9 @@ def discover_unknown_persons_job(
         update_progress("embedding", 0, 100, "Building embedding matrix...")
 
         face_ids = [face_id for face_id, _ in faces_with_embeddings]
-        embeddings = np.array([embedding for _, embedding in faces_with_embeddings], dtype=np.float32)
+        embeddings = np.array(
+            [embedding for _, embedding in faces_with_embeddings], dtype=np.float32
+        )
 
         logger.info(f"[{job_id}] Built embedding matrix: {embeddings.shape}")
         update_progress("embedding", 100, 100, f"Matrix shape: {embeddings.shape}")
@@ -2461,7 +2504,7 @@ def discover_unknown_persons_job(
 
         # PHASE 8: Report completion
         update_progress(
-            "complete",
+            "completed",
             100,
             100,
             f"Discovery complete: {qualifying_groups} groups found",

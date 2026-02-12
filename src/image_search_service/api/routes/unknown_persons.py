@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -171,28 +172,14 @@ async def discover_unknown_persons(
         Job ID and progress tracking key for monitoring
     """
     try:
-        # Import job function (will be implemented by other agent)
+        # Import job function
         from image_search_service.queue.face_jobs import discover_unknown_persons_job
 
-        # Get queue
-        queue = get_queue("default")
+        # Pre-generate job UUID BEFORE enqueuing (ensures progress_key consistency)
+        job_uuid = str(uuid.uuid4())
+        progress_key = f"job:{job_uuid}:progress"
 
-        # Enqueue job
-        job = queue.enqueue(
-            discover_unknown_persons_job,
-            clustering_method=request.clustering_method,
-            min_cluster_size=request.min_cluster_size,
-            min_quality=request.min_quality,
-            max_faces=request.max_faces,
-            min_cluster_confidence=request.min_cluster_confidence,
-            eps=request.eps,
-            job_timeout="30m",
-        )
-
-        job_id = str(job.id) if job.id is not None else "unknown"
-        progress_key = f"job:{job_id}:progress"
-
-        # Pre-seed Redis progress key so frontend polling doesn't 404
+        # Pre-seed Redis progress key so SSE subscription doesn't 404
         redis_conn = get_redis()
         initial_progress = {
             "phase": "queued",
@@ -202,10 +189,27 @@ async def discover_unknown_persons(
         }
         redis_conn.set(progress_key, json.dumps(initial_progress), ex=3600)  # 1 hour TTL
 
-        logger.info(f"Enqueued unknown persons discovery job: {job_id}")
+        # Get queue
+        queue = get_queue("default")
+
+        # Enqueue job with pre-generated job_id and progress_key
+        queue.enqueue(
+            discover_unknown_persons_job,
+            clustering_method=request.clustering_method,
+            min_cluster_size=request.min_cluster_size,
+            min_quality=request.min_quality,
+            max_faces=request.max_faces,
+            min_cluster_confidence=request.min_cluster_confidence,
+            eps=request.eps,
+            progress_key=progress_key,
+            job_id=job_uuid,
+            job_timeout="30m",
+        )
+
+        logger.info(f"Enqueued unknown persons discovery job: {job_uuid}")
 
         return DiscoverJobResponse(
-            job_id=job_id,
+            job_id=job_uuid,
             status="queued",
             progress_key=progress_key,
             params=request.model_dump(by_alias=True),  # Return camelCase keys
@@ -579,7 +583,7 @@ async def get_merge_suggestions(
         group_centroids[cluster_id] = (centroid, face_count)
 
     # Compute pairwise similarities
-    from sklearn.metrics.pairwise import cosine_similarity  # type: ignore[import-untyped]
+    from sklearn.metrics.pairwise import cosine_similarity
 
     cluster_ids = list(group_centroids.keys())
     suggestions: list[MergeSuggestion] = []
