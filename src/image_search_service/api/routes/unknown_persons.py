@@ -121,7 +121,13 @@ async def get_unknown_persons_stats(
         redis_conn = get_redis()
         last_discovery_ts = redis_conn.get("unknown_persons:last_discovery")
         if last_discovery_ts and isinstance(last_discovery_ts, bytes):
-            last_discovery_at = datetime.fromisoformat(last_discovery_ts.decode("utf-8"))
+            # Worker stores JSON object with timestamp field
+            parsed_data = json.loads(last_discovery_ts.decode("utf-8"))
+            if isinstance(parsed_data, dict) and "timestamp" in parsed_data:
+                last_discovery_at = datetime.fromisoformat(parsed_data["timestamp"])
+            elif isinstance(parsed_data, str):
+                # Backward compat: plain ISO string
+                last_discovery_at = datetime.fromisoformat(parsed_data)
     except Exception as e:
         logger.warning(f"Failed to get last discovery timestamp from Redis: {e}")
 
@@ -324,7 +330,13 @@ async def get_unknown_person_candidates(
         try:
             cached_conf = redis_conn.get(f"unknown_persons:cluster:{cluster_id}")
             if cached_conf and isinstance(cached_conf, bytes):
-                cluster_confidence = float(cached_conf.decode("utf-8"))
+                # Worker stores JSON object with confidence field
+                parsed_data = json.loads(cached_conf.decode("utf-8"))
+                if isinstance(parsed_data, dict):
+                    cluster_confidence = float(parsed_data.get("confidence", 0.0))
+                else:
+                    # Backward compat: plain float value
+                    cluster_confidence = float(parsed_data)
             else:
                 cluster_confidence = 0.0
         except Exception:
@@ -465,7 +477,13 @@ async def get_unknown_person_candidates(
     try:
         last_discovery_ts = redis_conn.get("unknown_persons:last_discovery")
         if last_discovery_ts and isinstance(last_discovery_ts, bytes):
-            last_discovery_at = datetime.fromisoformat(last_discovery_ts.decode("utf-8"))
+            # Worker stores JSON object with timestamp field
+            parsed_data = json.loads(last_discovery_ts.decode("utf-8"))
+            if isinstance(parsed_data, dict) and "timestamp" in parsed_data:
+                last_discovery_at = datetime.fromisoformat(parsed_data["timestamp"])
+            elif isinstance(parsed_data, str):
+                # Backward compat: plain ISO string
+                last_discovery_at = datetime.fromisoformat(parsed_data)
     except Exception as e:
         logger.warning(f"Failed to get last discovery timestamp: {e}")
 
@@ -778,7 +796,13 @@ async def get_unknown_person_candidate_detail(
     try:
         cached_conf = redis_conn.get(f"unknown_persons:cluster:{group_id}")
         if cached_conf and isinstance(cached_conf, bytes):
-            cluster_confidence = float(cached_conf.decode("utf-8"))
+            # Worker stores JSON object with confidence field
+            parsed_data = json.loads(cached_conf.decode("utf-8"))
+            if isinstance(parsed_data, dict):
+                cluster_confidence = float(parsed_data.get("confidence", 0.0))
+            else:
+                # Backward compat: plain float value
+                cluster_confidence = float(parsed_data)
     except Exception as e:
         logger.warning(f"Failed to get cluster confidence for {group_id}: {e}")
 
