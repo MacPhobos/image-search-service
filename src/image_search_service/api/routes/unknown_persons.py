@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -190,6 +191,16 @@ async def discover_unknown_persons(
 
         job_id = str(job.id) if job.id is not None else "unknown"
         progress_key = f"job:{job_id}:progress"
+
+        # Pre-seed Redis progress key so frontend polling doesn't 404
+        redis_conn = get_redis()
+        initial_progress = {
+            "phase": "queued",
+            "current": 0,
+            "total": 100,
+            "message": "Job queued, waiting for worker...",
+        }
+        redis_conn.set(progress_key, json.dumps(initial_progress), ex=3600)  # 1 hour TTL
 
         logger.info(f"Enqueued unknown persons discovery job: {job_id}")
 
