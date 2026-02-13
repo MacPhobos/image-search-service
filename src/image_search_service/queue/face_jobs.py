@@ -2488,6 +2488,18 @@ def discover_unknown_persons_job(
             ex=86400,  # 24h TTL
         )
 
+        # Store discovery params so the read path knows what threshold was used
+        redis_client.set(
+            "unknown_persons:discovery_params",
+            json.dumps({
+                "min_cluster_confidence": min_cluster_confidence,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "total_clusters": actual_clusters_found,
+                "total_faces": total_faces,
+            }),
+            ex=86400,  # 24h TTL, same as cluster metadata
+        )
+
         # Cache individual cluster metadata
         for cluster_id, metadata in cluster_metadata.items():
             redis_client.set(

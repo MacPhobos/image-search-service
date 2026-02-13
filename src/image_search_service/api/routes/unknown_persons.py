@@ -283,6 +283,17 @@ async def get_unknown_person_candidates(
     """
     settings = get_settings()
 
+    # Read discovery params from Redis to get the threshold used during discovery
+    redis_conn = get_redis()
+    discovery_params_raw = redis_conn.get("unknown_persons:discovery_params")
+    discovery_min_confidence = 0.50  # safe fallback
+    if discovery_params_raw and isinstance(discovery_params_raw, bytes):
+        try:
+            discovery_params = json.loads(discovery_params_raw.decode("utf-8"))
+            discovery_min_confidence = float(discovery_params.get("min_cluster_confidence", 0.50))
+        except Exception:
+            pass
+
     # Effective thresholds (request params override admin defaults)
     effective_min_conf = (
         min_confidence if min_confidence is not None else settings.unknown_person_default_threshold
@@ -318,7 +329,12 @@ async def get_unknown_person_candidates(
     raw_groups = group_result.all()
 
     # Build groups with confidence and dismissal filtering
-    redis_conn = get_redis()
+    # Track filter transparency counters
+    filtered_by_confidence = 0
+    filtered_by_size = 0
+    filtered_by_dismissed = 0
+    total_before_filtering = len(raw_groups)
+
     candidate_groups_data: list[dict[str, Any]] = []
 
     for row in raw_groups:
@@ -344,8 +360,10 @@ async def get_unknown_person_candidates(
 
         # Apply size and confidence filters
         if face_count < effective_min_size:
+            filtered_by_size += 1
             continue
         if cluster_confidence < effective_min_conf:
+            filtered_by_confidence += 1
             continue
 
         # Check dismissal status BEFORE adding to candidates
@@ -370,6 +388,7 @@ async def get_unknown_person_candidates(
 
         # Skip if dismissed and not including dismissed
         if is_dismissed_flag and not include_dismissed:
+            filtered_by_dismissed += 1
             continue
 
         candidate_groups_data.append(
@@ -499,6 +518,11 @@ async def get_unknown_person_candidates(
         last_discovery_at=last_discovery_at,
         min_group_size_setting=effective_min_size,
         min_confidence_setting=effective_min_conf,
+        discovery_min_confidence=discovery_min_confidence,
+        filtered_by_confidence=filtered_by_confidence,
+        filtered_by_size=filtered_by_size,
+        filtered_by_dismissed=filtered_by_dismissed,
+        total_before_filtering=total_before_filtering,
     )
 
 

@@ -151,6 +151,11 @@ class UnknownPersonCandidatesResponse(CamelCaseModel):
     last_discovery_at: datetime | None = None
     min_group_size_setting: int
     min_confidence_setting: float
+    discovery_min_confidence: float = Field(default=0.50)
+    filtered_by_confidence: int = Field(default=0)
+    filtered_by_size: int = Field(default=0)
+    filtered_by_dismissed: int = Field(default=0)
+    total_before_filtering: int = Field(default=0)
 
 
 class UnknownPersonCandidateDetail(CamelCaseModel):
