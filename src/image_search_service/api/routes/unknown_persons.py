@@ -911,13 +911,19 @@ async def accept_unknown_person_candidate(
     try:
         result = await labeling_service.label_cluster_as_person(
             face_ids=face_ids,
-            person_name=request.name,
+            person_name=request.name,  # None when person_id is provided
+            person_id=request.person_id,  # None when name is provided
             exclude_face_ids=request.face_ids_to_exclude or [],
             trigger_find_more=True,  # ALWAYS trigger find-more
             trigger_reclustering=False,  # We'll handle this separately
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        # Return 404 for person not found
+        if "not found" in error_msg.lower():
+            raise HTTPException(status_code=404, detail=error_msg)
+        # Return 400 for other validation errors (e.g., inactive person, all faces excluded)
+        raise HTTPException(status_code=400, detail=error_msg)
 
     # Trigger re-clustering if requested
     reclustering_job_id = None
@@ -952,6 +958,7 @@ async def accept_unknown_person_candidate(
         prototypes_created=result["prototypes_created"],
         find_more_job_id=result.get("find_more_job_id"),
         reclustering_job_id=reclustering_job_id,
+        assignment_event_id=result.get("assignment_event_id"),
     )
 
 

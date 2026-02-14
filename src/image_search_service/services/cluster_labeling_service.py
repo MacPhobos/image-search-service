@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.db.models import (
+    FaceAssignmentEvent,
     FaceInstance,
     Person,
     PersonPrototype,
@@ -45,12 +46,13 @@ class ClusterLabelingService:
     async def label_cluster_as_person(
         self,
         face_ids: list[uuid.UUID],
-        person_name: str,
+        person_name: str | None = None,
+        person_id: uuid.UUID | None = None,
         exclude_face_ids: list[uuid.UUID] | None = None,
         trigger_find_more: bool = True,
         trigger_reclustering: bool = False,
     ) -> dict[str, Any]:
-        """Create a Person from a set of face IDs.
+        """Create a Person from a set of face IDs or assign to existing person.
 
         This is the core logic extracted from the POST /faces/clusters/{cluster_id}/label
         endpoint. It handles the entire workflow of converting a cluster (or partial cluster)
@@ -59,15 +61,19 @@ class ClusterLabelingService:
         Workflow:
         1. Validate that all provided face IDs exist
         2. Apply exclusions (partial acceptance support)
-        3. Find or create Person by name (case-insensitive)
+        3. Find/create Person by name OR look up existing Person by ID
         4. Assign person_id to accepted faces
-        5. Create prototypes (top 3 quality faces as EXEMPLAR role)
+        5. Create prototypes (top 3 quality faces as EXEMPLAR role, if person has none)
         6. Sync to Qdrant (person_id, is_assigned=True, is_prototype)
-        7. Optionally enqueue find-more job for propagation
+        7. Create FaceAssignmentEvent audit record
+        8. Optionally enqueue find-more job for propagation
 
         Args:
             face_ids: All face IDs in the group to potentially label.
             person_name: Name for the person (new or existing).
+                Mutually exclusive with person_id.
+            person_id: ID of existing person to assign faces to.
+                Mutually exclusive with person_name.
             exclude_face_ids: Face IDs to exclude from labeling (partial acceptance).
             trigger_find_more: Whether to enqueue find-more job for propagation.
             trigger_reclustering: Whether to enqueue re-clustering job (not used yet).
@@ -80,10 +86,18 @@ class ClusterLabelingService:
                 - faces_excluded: Count of faces excluded
                 - prototypes_created: Count of prototype records created
                 - find_more_job_id: Optional job ID if triggered
+                - assignment_event_id: UUID of the audit event created
 
         Raises:
-            ValueError: If no valid faces remain after exclusions
+            ValueError: If no valid faces remain after exclusions, or if person_id not found,
+                       or if person status is not 'active'
         """
+        # 0. Validate: exactly one of person_name or person_id must be provided
+        if not person_name and not person_id:
+            raise ValueError("Either person_name or person_id must be provided")
+        if person_name and person_id:
+            raise ValueError("Provide either person_name or person_id, not both")
+
         # 1. Fetch face instances
         query = select(FaceInstance).where(FaceInstance.id.in_(face_ids))
         result = await self.db.execute(query)
@@ -102,23 +116,41 @@ class ClusterLabelingService:
                 "All faces excluded - at least one face must be assigned to create a person"
             )
 
-        logger.info(
-            f"Labeling {len(faces_to_assign)} faces as '{person_name}' "
-            f"(excluding {len(faces_excluded)} faces)"
-        )
-
-        # 3. Find or create person by name (case-insensitive)
-        person_query = select(Person).where(func.lower(Person.name) == person_name.lower())
-        person_result = await self.db.execute(person_query)
-        person = person_result.scalar_one_or_none()
-
-        if not person:
-            person = Person(name=person_name)
-            self.db.add(person)
-            await self.db.flush()
-            logger.info(f"Created new person: {person.name} ({person.id})")
+        # 3. Find/create person by name OR look up existing person by ID
+        if person_id:
+            # Look up existing person by ID
+            person = await self.db.get(Person, person_id)
+            if person is None:
+                raise ValueError(f"Person with id {person_id} not found")
+            # Validate person status
+            if person.status != "active":
+                raise ValueError(
+                    f"Cannot assign faces to person '{person.name}' (id={person_id}): "
+                    f"status is '{person.status}', must be 'active'. "
+                    f"Merged or hidden persons cannot receive new face assignments."
+                )
+            logger.info(
+                f"Assigning {len(faces_to_assign)} faces to existing person: "
+                f"{person.name} (id={person.id})"
+            )
         else:
-            logger.info(f"Using existing person: {person.name} ({person.id})")
+            # Find-or-create by name (existing behavior)
+            assert person_name is not None  # Guaranteed by validation above
+            logger.info(
+                f"Labeling {len(faces_to_assign)} faces as '{person_name}' "
+                f"(excluding {len(faces_excluded)} faces)"
+            )
+            person_query = select(Person).where(func.lower(Person.name) == person_name.lower())
+            person_result = await self.db.execute(person_query)
+            person = person_result.scalar_one_or_none()
+
+            if not person:
+                person = Person(name=person_name)
+                self.db.add(person)
+                await self.db.flush()
+                logger.info(f"Created new person: {person.name} ({person.id})")
+            else:
+                logger.info(f"Using existing person: {person.name} ({person.id})")
 
         # 4. Assign person_id to faces
         face_ids_assigned = []
@@ -133,22 +165,52 @@ class ClusterLabelingService:
         # NOTE: is_assigned is automatically set in update_person_ids via upsert logic
         self.qdrant.update_person_ids(qdrant_point_ids_assigned, person.id)
 
-        # 6. Create prototypes (top 3 quality faces as exemplars)
+        # 6. Create prototypes (top 3 quality faces as exemplars, if person has none)
         sorted_faces = sorted(faces_to_assign, key=lambda f: f.quality_score or 0, reverse=True)
         prototypes_created = 0
 
-        for face in sorted_faces[:3]:
-            prototype = PersonPrototype(
-                person_id=person.id,
-                face_instance_id=face.id,
-                qdrant_point_id=face.qdrant_point_id,
-                role=PrototypeRole.EXEMPLAR,
-            )
-            self.db.add(prototype)
-            prototypes_created += 1
+        # Check if person already has prototypes
+        existing_proto_query = select(func.count()).where(
+            PersonPrototype.person_id == person.id
+        )
+        existing_proto_count = await self.db.scalar(existing_proto_query) or 0
 
-            # Mark as prototype in Qdrant
-            self.qdrant.update_payload(face.qdrant_point_id, {"is_prototype": True})
+        if existing_proto_count == 0:
+            # New person (or person with no prototypes) -- create EXEMPLAR prototypes
+            for face in sorted_faces[:3]:
+                prototype = PersonPrototype(
+                    person_id=person.id,
+                    face_instance_id=face.id,
+                    qdrant_point_id=face.qdrant_point_id,
+                    role=PrototypeRole.EXEMPLAR,
+                )
+                self.db.add(prototype)
+                prototypes_created += 1
+
+                # Mark as prototype in Qdrant
+                self.qdrant.update_payload(face.qdrant_point_id, {"is_prototype": True})
+
+            logger.info(
+                f"Created {prototypes_created} exemplar prototypes for {person.name}"
+            )
+        else:
+            logger.info(
+                f"Person {person.name} already has {existing_proto_count} prototypes, "
+                f"skipping prototype creation"
+            )
+
+        # 7. Create audit event for undo capability
+        event = FaceAssignmentEvent(
+            operation="ASSIGN_TO_PERSON",
+            from_person_id=None,  # Faces were unassigned
+            to_person_id=person.id,
+            affected_photo_ids=list(set(f.asset_id for f in faces_to_assign)),
+            affected_face_instance_ids=[str(fid) for fid in face_ids_assigned],
+            face_count=len(face_ids_assigned),
+            photo_count=len(set(f.asset_id for f in faces_to_assign)),
+            note=f"Cluster labeling: assigned {len(face_ids_assigned)} faces to {person.name}",
+        )
+        self.db.add(event)
 
         await self.db.commit()
 
@@ -157,7 +219,7 @@ class ClusterLabelingService:
             f"(created {prototypes_created} prototypes)"
         )
 
-        # 7. Trigger find-more job (optional)
+        # 8. Trigger find-more job (optional)
         find_more_job_id = None
         if trigger_find_more and sorted_faces:
             find_more_job_id = await self._enqueue_find_more_job(
@@ -172,6 +234,7 @@ class ClusterLabelingService:
             "faces_excluded": len(faces_excluded),
             "prototypes_created": prototypes_created,
             "find_more_job_id": find_more_job_id,
+            "assignment_event_id": event.id,
         }
 
     async def _enqueue_find_more_job(

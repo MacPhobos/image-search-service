@@ -1,7 +1,7 @@
 # Image Search API Contract
 
-> **Version**: 1.18.0
-> **Last Updated**: 2026-02-11
+> **Version**: 1.19.0
+> **Last Updated**: 2026-02-13
 > **Status**: FROZEN - Changes require version bump and UI sync
 
 This document defines the API contract between `image-search-service` (backend) and `image-search-ui` (frontend).
@@ -1491,6 +1491,110 @@ GET /api/v1/faces/clusters?page=2&page_size=50
 
 ---
 
+#### LabelClusterRequest Schema
+
+```typescript
+interface LabelClusterRequest {
+	name?: string; // Person name (conditional, non-empty). Required if personId not provided.
+	personId?: string; // UUID of existing person (conditional). Required if name not provided.
+}
+```
+
+**Validation**: Exactly one of `name` or `personId` must be provided. Sending both or neither returns 422.
+
+#### LabelClusterResponse Schema
+
+```typescript
+interface LabelClusterResponse {
+	clusterId: string; // Cluster identifier
+	personId: string; // UUID of created or existing person
+	personName: string; // Name of the person
+	facesAssigned: number; // Number of faces assigned to person
+	assignmentEventId: string | null; // UUID of assignment event (for undo capability)
+}
+```
+
+---
+
+#### `POST /api/v1/faces/clusters/{cluster_id}/label`
+
+Label a cluster by creating a new Person OR assigning faces to an existing Person.
+
+**Path Parameters**
+
+| Parameter    | Type   | Description         |
+| ------------ | ------ | ------------------- |
+| `cluster_id` | string | Cluster identifier  |
+
+**Request Body**
+
+Option 1: Create new person
+```json
+{
+	"name": "Alice Smith"
+}
+```
+
+Option 2: Assign to existing person
+```json
+{
+	"personId": "770e8400-e29b-41d4-a716-446655440002"
+}
+```
+
+**Request Body Fields**:
+- `name` (conditional): Person name (1-255 chars, non-empty). Required if `personId` not provided.
+- `personId` (conditional): UUID of existing person to assign faces to. Required if `name` not provided.
+
+**Validation**: Exactly one of `name` or `personId` must be provided. Sending both or neither returns 422.
+
+**Response** `200 OK`
+
+```json
+{
+	"clusterId": "clu_abc123",
+	"personId": "770e8400-e29b-41d4-a716-446655440002",
+	"personName": "Alice Smith",
+	"facesAssigned": 8,
+	"assignmentEventId": "550e8400-e29b-41d4-a716-446655440003"
+}
+```
+
+**Response** `404 Not Found` - Cluster not found
+
+```json
+{
+	"error": {
+		"code": "CLUSTER_NOT_FOUND",
+		"message": "Cluster 'clu_abc123' not found"
+	}
+}
+```
+
+**Response** `404 Not Found` - Person not found (when using personId)
+
+```json
+{
+	"error": {
+		"code": "PERSON_NOT_FOUND",
+		"message": "Person with ID '770e8400-...' not found"
+	}
+}
+```
+
+**Response** `422 Unprocessable Entity` - Validation error
+
+```json
+{
+	"error": {
+		"code": "VALIDATION_ERROR",
+		"message": "Exactly one of 'name' or 'personId' must be provided"
+	}
+}
+```
+
+---
+
 ### Face Centroids
 
 Face centroid management for person identity representation. Centroids are computed average embeddings of a person's labeled faces, used for efficient similarity matching and face suggestion generation. Supports both global centroids (all faces) and cluster-based centroids (subdivided by temporal/quality groups).
@@ -2209,23 +2313,27 @@ interface CandidatesListResponse {
 
 ```typescript
 interface AcceptCandidateRequest {
-	name: string; // Person name (required, non-empty)
+	name?: string; // Person name (conditional, non-empty). Required if personId not provided.
+	personId?: string; // UUID of existing person (conditional). Required if name not provided.
 	faceIdsToExclude?: string[]; // Face UUIDs to leave unassigned (partial acceptance)
 	triggerReclustering?: boolean; // Re-run discovery after acceptance (default: true)
 }
 ```
 
+**Validation**: Exactly one of `name` or `personId` must be provided. Sending both or neither returns 422.
+
 #### AcceptCandidateResponse Schema
 
 ```typescript
 interface AcceptCandidateResponse {
-	personId: string; // UUID of created person
-	personName: string; // Name of created person
+	personId: string; // UUID of created or existing person
+	personName: string; // Name of the person
 	facesAssigned: number; // Number of faces assigned to person
 	facesExcluded: number; // Number of faces excluded (remained unassigned)
-	prototypesCreated: number; // Number of prototypes created for person
+	prototypesCreated: number; // Number of prototypes created (0 for existing person with prototypes)
 	findMoreJobId: string | null; // Job ID for "Find More" job (if triggered)
 	reclusteringJobId: string | null; // Job ID for reclustering (if triggered)
+	assignmentEventId: string | null; // UUID of assignment event (for undo capability)
 }
 ```
 
@@ -2246,6 +2354,18 @@ interface DismissCandidateResponse {
 	membershipHash: string; // Hash of face IDs
 	facesAffected: number; // Number of faces in dismissed group
 	markedAsNoise: boolean; // Whether faces were marked as noise
+}
+```
+
+#### UndoAssignmentResponse Schema
+
+```typescript
+interface UndoAssignmentResponse {
+	eventId: string; // UUID of the original assignment event that was undone
+	facesUnassigned: number; // Number of faces reverted to unassigned state
+	personId: string; // UUID of person faces were removed from
+	personName: string; // Name of the person
+	undoEventId: string; // UUID of the new undo audit event
 }
 ```
 
@@ -2424,7 +2544,7 @@ View detailed candidate group with all face instances.
 
 #### `POST /api/v1/faces/unknown-persons/candidates/{group_id}/accept`
 
-Create a new Person from a candidate group and assign faces.
+Create a new Person from a candidate group OR assign faces to an existing Person.
 
 **Path Parameters**
 
@@ -2434,6 +2554,7 @@ Create a new Person from a candidate group and assign faces.
 
 **Request Body**
 
+Option 1: Create new person
 ```json
 {
 	"name": "John Doe",
@@ -2442,9 +2563,22 @@ Create a new Person from a candidate group and assign faces.
 }
 ```
 
-- `name` (required): Person name (non-empty string)
+Option 2: Assign to existing person
+```json
+{
+	"personId": "770e8400-e29b-41d4-a716-446655440002",
+	"faceIdsToExclude": ["550e8400-e29b-41d4-a716-446655440000"],
+	"triggerReclustering": true
+}
+```
+
+**Request Body Fields**:
+- `name` (conditional): Person name (non-empty string). Required if `personId` not provided.
+- `personId` (conditional): UUID of existing person to assign faces to. Required if `name` not provided.
 - `faceIdsToExclude` (optional): Face UUIDs to leave unassigned for partial acceptance
 - `triggerReclustering` (optional, default: true): Re-run discovery after acceptance
+
+**Validation**: Exactly one of `name` or `personId` must be provided. Sending both or neither returns 422.
 
 **Response** `200 OK`
 
@@ -2456,7 +2590,8 @@ Create a new Person from a candidate group and assign faces.
 	"facesExcluded": 2,
 	"prototypesCreated": 3,
 	"findMoreJobId": "job-uuid-123",
-	"reclusteringJobId": "job-uuid-456"
+	"reclusteringJobId": "job-uuid-456",
+	"assignmentEventId": "550e8400-e29b-41d4-a716-446655440003"
 }
 ```
 
@@ -2546,6 +2681,96 @@ Dismiss a candidate group and optionally mark faces as noise.
 	"error": {
 		"code": "GROUP_ALREADY_DISMISSED",
 		"message": "Candidate group 'unknown_0' has already been dismissed"
+	}
+}
+```
+
+---
+
+#### `POST /api/v1/faces/assignment-events/{event_id}/undo`
+
+Undo a face assignment event, reverting affected faces to unassigned state.
+
+**Path Parameters**
+
+| Parameter  | Type         | Description                     |
+| ---------- | ------------ | ------------------------------- |
+| `event_id` | string (UUID) | The assignment event ID to undo |
+
+**Request Body**
+
+None required.
+
+**Response** `200 OK`
+
+```json
+{
+	"eventId": "550e8400-e29b-41d4-a716-446655440003",
+	"facesUnassigned": 13,
+	"personId": "770e8400-e29b-41d4-a716-446655440002",
+	"personName": "John Doe",
+	"undoEventId": "660e8400-e29b-41d4-a716-446655440004"
+}
+```
+
+**Response Fields**:
+- `eventId`: The original assignment event that was undone
+- `facesUnassigned`: Number of faces reverted to unassigned state
+- `personId`: Person ID the faces were removed from
+- `personName`: Name of the person
+- `undoEventId`: ID of the new audit event recording this undo operation
+
+**Response** `404 Not Found` - Event not found
+
+```json
+{
+	"error": {
+		"code": "EVENT_NOT_FOUND",
+		"message": "Assignment event '550e8400-...' not found"
+	}
+}
+```
+
+**Response** `400 Bad Request` - Wrong operation type
+
+```json
+{
+	"error": {
+		"code": "INVALID_OPERATION_TYPE",
+		"message": "Only ASSIGN_TO_PERSON events can be undone"
+	}
+}
+```
+
+**Response** `400 Bad Request` - Event too old
+
+```json
+{
+	"error": {
+		"code": "EVENT_TOO_OLD",
+		"message": "Cannot undo events older than 1 hour"
+	}
+}
+```
+
+**Response** `400 Bad Request` - No faces to undo
+
+```json
+{
+	"error": {
+		"code": "NO_FACES_TO_UNDO",
+		"message": "No face IDs recorded in event or all faces already reassigned"
+	}
+}
+```
+
+**Response** `409 Conflict` - Event already undone
+
+```json
+{
+	"error": {
+		"code": "EVENT_ALREADY_UNDONE",
+		"message": "Assignment event has already been undone"
 	}
 }
 ```
@@ -3287,6 +3512,12 @@ All errors return JSON with consistent structure.
 | `FACE_PERSON_MISMATCH`       | 400         | Face does not belong to person       |
 | `INSUFFICIENT_FACES`         | 422         | Insufficient labeled faces for operation |
 | `CENTROIDS_NOT_AVAILABLE`    | 422         | No centroids available for person    |
+| `CLUSTER_NOT_FOUND`          | 404         | Cluster ID does not exist            |
+| `EVENT_NOT_FOUND`            | 404         | Assignment event ID does not exist   |
+| `EVENT_ALREADY_UNDONE`       | 409         | Assignment event already undone      |
+| `EVENT_TOO_OLD`              | 400         | Event older than undo time limit     |
+| `INVALID_OPERATION_TYPE`     | 400         | Operation type cannot be undone      |
+| `NO_FACES_TO_UNDO`           | 400         | No faces available to undo           |
 | `RATE_LIMITED`               | 429         | Too many requests                    |
 | `INTERNAL_ERROR`             | 500         | Server error                         |
 
@@ -3380,6 +3611,7 @@ All endpoints except:
 
 | Version | Date       | Changes                                                                                      |
 | ------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 1.19.0  | 2026-02-13 | Added "Merge Group Into Existing Person" feature. Updated POST /api/v1/faces/unknown-persons/candidates/{group_id}/accept to support assigning faces to existing person via new optional `personId` field (mutually exclusive with `name`). Added `assignmentEventId` to AcceptCandidateResponse for undo capability. Added POST /api/v1/faces/clusters/{cluster_id}/label endpoint for labeling clusters with conditional `name` or `personId` fields. Added POST /api/v1/faces/assignment-events/{event_id}/undo endpoint to revert face assignments within 1 hour. Added LabelClusterRequest, LabelClusterResponse, and UndoAssignmentResponse schemas. Added error codes: CLUSTER_NOT_FOUND, EVENT_NOT_FOUND, EVENT_ALREADY_UNDONE, EVENT_TOO_OLD, INVALID_OPERATION_TYPE, NO_FACES_TO_UNDO. Updated AcceptCandidateRequest schema to make `name` conditional and add `personId` as conditional field. |
 | 1.18.0  | 2026-01-16 | Added POST /api/v1/faces/suggestions/persons/{person_id}/find-more-centroid endpoint for centroid-based Find More job submission. Uses person's pre-computed centroid for faster and more consistent face matching than dynamic prototype sampling. Request body includes minSimilarity (0.5-0.95, default 0.65), maxResults (1-500, default 200), and unassignedOnly (boolean, default true) fields. Response follows same FindMoreJobResponse schema as prototype-based find-more. Returns 422 error if person has no centroid computed. |
 | 1.17.0  | 2026-01-16 | Added Face Centroids section with 4 new endpoints: POST /api/v1/faces/centroids/persons/{person_id}/compute (compute/recompute centroids with optional clustering), GET /api/v1/faces/centroids/persons/{person_id} (retrieve existing centroids), POST /api/v1/faces/centroids/persons/{person_id}/suggestions (get face suggestions using centroid similarity), DELETE /api/v1/faces/centroids/persons/{person_id} (delete all centroids for person). Added Centroid, PersonCentroidsResponse, CentroidSuggestion, and CentroidSuggestionsResponse schemas. Added INSUFFICIENT_FACES and CENTROIDS_NOT_AVAILABLE error codes (HTTP 422). Centroids provide efficient face suggestion generation by computing average embeddings of labeled faces, supporting both global (all faces) and cluster-based (subdivided) representations. |
 | 1.16.0  | 2026-01-14 | Added optional `minConfidence` field to POST /api/v1/faces/suggestions/persons/{person_id}/find-more endpoint. Allows customizing similarity threshold (0.3-1.0) for finding suggestions. Uses system default (0.70) when not provided. |

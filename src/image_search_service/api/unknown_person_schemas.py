@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def to_camel(string: str) -> str:
@@ -67,12 +67,21 @@ class DiscoverUnknownPersonsRequest(CamelCaseModel):
 
 
 class AcceptUnknownPersonRequest(CamelCaseModel):
-    """Request to accept an unknown person group as a labeled person."""
+    """Request to accept an unknown person candidate group.
 
-    name: str = Field(
+    Provide EITHER `name` (to create a new person or find by name)
+    OR `person_id` (to assign faces to an existing person).
+    """
+
+    name: str | None = Field(
+        default=None,
         min_length=1,
         max_length=255,
-        description="Name for the new person",
+        description="Name for the new person (mutually exclusive with person_id)",
+    )
+    person_id: UUID | None = Field(
+        default=None,
+        description="ID of an existing person to assign faces to (mutually exclusive with name)",
     )
     face_ids_to_exclude: list[UUID] | None = Field(
         default=None,
@@ -82,6 +91,15 @@ class AcceptUnknownPersonRequest(CamelCaseModel):
         default=True,
         description="Trigger re-clustering after acceptance to update remaining unknowns",
     )
+
+    @model_validator(mode="after")
+    def validate_name_or_person_id(self) -> AcceptUnknownPersonRequest:
+        """Ensure exactly one of name or person_id is provided."""
+        if not self.name and not self.person_id:
+            raise ValueError("Either name or personId must be provided")
+        if self.name and self.person_id:
+            raise ValueError("Provide either name or personId, not both")
+        return self
 
 
 class DismissUnknownPersonRequest(CamelCaseModel):
@@ -179,6 +197,10 @@ class AcceptUnknownPersonResponse(CamelCaseModel):
     prototypes_created: int
     find_more_job_id: str | None = None
     reclustering_job_id: str | None = None
+    assignment_event_id: UUID | None = Field(
+        default=None,
+        description="ID of the FaceAssignmentEvent for undo capability",
+    )
 
 
 class DismissUnknownPersonResponse(CamelCaseModel):

@@ -1,7 +1,7 @@
 """Face detection and recognition API routes."""
 
 import logging
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -62,6 +62,7 @@ from image_search_service.api.face_schemas import (
     TrainMatchingResponse,
     TriggerClusteringRequest,
     UnassignFaceResponse,
+    UndoAssignmentResponse,
     UnifiedPeopleListResponse,
     UpdatePersonRequest,
     UpdatePersonResponse,
@@ -397,13 +398,19 @@ async def label_cluster(
     try:
         result_dict = await service.label_cluster_as_person(
             face_ids=face_ids,
-            person_name=request.name,
+            person_name=request.name,  # None when person_id is provided
+            person_id=request.person_id,  # None when name is provided
             exclude_face_ids=None,  # Full cluster acceptance (no exclusions)
             trigger_find_more=True,
             trigger_reclustering=False,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        # Return 404 for person not found
+        if "not found" in error_msg.lower():
+            raise HTTPException(status_code=404, detail=error_msg)
+        # Return 400 for other validation errors
+        raise HTTPException(status_code=400, detail=error_msg)
 
     return LabelClusterResponse(
         person_id=result_dict["person_id"],
@@ -1846,6 +1853,160 @@ async def unassign_face_from_person(
         await db.rollback()
         logger.error(f"Failed to unassign face {face_id} from person {previous_person_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to unassign face: {str(e)}")
+
+
+@router.post(
+    "/assignment-events/{event_id}/undo",
+    response_model=UndoAssignmentResponse,
+    summary="Undo a face assignment event",
+)
+async def undo_assignment_event(
+    event_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> UndoAssignmentResponse:
+    """Undo a face assignment event, reverting affected faces to unassigned state.
+
+    Only ASSIGN_TO_PERSON events can be undone. Events older than 1 hour
+    or already undone cannot be reversed.
+
+    Args:
+        event_id: ID of the assignment event to undo
+        db: Database session
+
+    Returns:
+        Details about the undo operation
+
+    Raises:
+        HTTPException: 404 if event not found, 400 if cannot undo, 409 if already undone
+    """
+    import uuid
+    from datetime import datetime, timedelta
+
+    from image_search_service.db.models import (
+        FaceAssignmentEvent,
+        FaceSuggestion,
+        FaceSuggestionStatus,
+    )
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    # 1. Look up the event
+    event = await db.get(FaceAssignmentEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail=f"Assignment event {event_id} not found")
+
+    # 2. Validate event type
+    if event.operation != "ASSIGN_TO_PERSON":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot undo operation type '{event.operation}'. "
+                   f"Only ASSIGN_TO_PERSON events can be undone.",
+        )
+
+    # 3. Check if already undone (look for a reversal event referencing this one)
+    existing_undo = await db.execute(
+        select(FaceAssignmentEvent).where(
+            FaceAssignmentEvent.note.contains(str(event_id)),
+            FaceAssignmentEvent.operation == "UNASSIGN_FROM_PERSON",
+        )
+    )
+    if existing_undo.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="This assignment has already been undone.",
+        )
+
+    # 4. Time window check (1 hour)
+    if event.created_at < datetime.now(UTC) - timedelta(hours=1):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot undo assignments older than 1 hour. "
+                   "Use bulk-remove from person detail view instead.",
+        )
+
+    # 5. Look up affected faces
+    face_ids = [uuid.UUID(fid) for fid in (event.affected_face_instance_ids or [])]
+    if not face_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="No face IDs recorded in this event.",
+        )
+
+    face_query = select(FaceInstance).where(FaceInstance.id.in_(face_ids))
+    result = await db.execute(face_query)
+    faces = list(result.scalars().all())
+
+    # 6. Filter to only faces still assigned to the target person
+    target_person_id = event.to_person_id
+    if not target_person_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Event has no target person ID.",
+        )
+
+    revertable_faces = [f for f in faces if f.person_id == target_person_id]
+
+    if not revertable_faces:
+        raise HTTPException(
+            status_code=400,
+            detail="All affected faces have been reassigned since this event. Nothing to undo.",
+        )
+
+    # 7. Unassign faces
+    revertable_face_ids = [f.id for f in revertable_faces]
+    for face in revertable_faces:
+        face.person_id = None
+
+    # 8. Update Qdrant payloads
+    qdrant = get_face_qdrant_client()
+    point_ids = [f.qdrant_point_id for f in revertable_faces if f.qdrant_point_id]
+    if point_ids:
+        qdrant.update_person_ids(point_ids, None)
+
+    # 9. Look up person name for response
+    person = await db.get(Person, target_person_id)
+    person_name = person.name if person else "Unknown"
+
+    # 10. Expire any pending suggestions for these faces
+    suggestion_query = (
+        select(FaceSuggestion)
+        .where(
+            FaceSuggestion.face_instance_id.in_(revertable_face_ids),
+            FaceSuggestion.status == FaceSuggestionStatus.PENDING,
+        )
+    )
+    suggestion_result = await db.execute(suggestion_query)
+    for suggestion in suggestion_result.scalars().all():
+        suggestion.status = FaceSuggestionStatus.EXPIRED
+
+    # 11. Create undo audit event
+    undo_event = FaceAssignmentEvent(
+        operation="UNASSIGN_FROM_PERSON",
+        from_person_id=target_person_id,
+        to_person_id=None,
+        affected_photo_ids=[f.asset_id for f in revertable_faces],
+        affected_face_instance_ids=[str(fid) for fid in revertable_face_ids],
+        face_count=len(revertable_face_ids),
+        photo_count=len(set(f.asset_id for f in revertable_faces)),
+        note=f"Undo of event {event_id}: reverted {len(revertable_face_ids)} faces "
+             f"from {person_name}",
+    )
+    db.add(undo_event)
+
+    # 12. Commit
+    await db.commit()
+
+    logger.info(
+        f"Undid assignment event {event_id}: "
+        f"reverted {len(revertable_face_ids)} faces from {person_name}"
+    )
+
+    return UndoAssignmentResponse(
+        event_id=event_id,
+        faces_unassigned=len(revertable_face_ids),
+        person_id=target_person_id,
+        person_name=person_name,
+        undo_event_id=undo_event.id,
+    )
 
 
 @router.get("/faces/{face_id}/suggestions", response_model=FaceSuggestionsResponse)

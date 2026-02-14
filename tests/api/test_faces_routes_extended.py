@@ -312,9 +312,10 @@ class TestMergePersons:
         mock_qdrant_client = MagicMock()
         mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
+        qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
         with patch("redis.Redis"), \
              patch("rq.Queue"), \
-             patch("image_search_service.vector.face_qdrant.get_face_qdrant_client", return_value=mock_qdrant_client):
+             patch(qdrant_patch, return_value=mock_qdrant_client):
 
             response = await test_client.post(
                 f"/api/v1/faces/persons/{person_a.id}/merge",
@@ -425,7 +426,8 @@ class TestBulkFaceOperations:
         mock_qdrant_client = MagicMock()
         mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
-        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client", return_value=mock_qdrant_client):
+        qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        with patch(qdrant_patch, return_value=mock_qdrant_client):
             response = await test_client.post(
                 f"/api/v1/faces/persons/{person_a.id}/photos/bulk-remove",
                 json={"photoIds": [test_asset.id]}
@@ -500,7 +502,8 @@ class TestBulkFaceOperations:
             mock_qdrant_client = MagicMock()
             mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
-            with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client", return_value=mock_qdrant_client):
+            qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+            with patch(qdrant_patch, return_value=mock_qdrant_client):
                 response = await test_client.post(
                     f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
                     json={
@@ -553,7 +556,8 @@ class TestBulkFaceOperations:
             mock_qdrant_client = MagicMock()
             mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
-            with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client", return_value=mock_qdrant_client):
+            qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+            with patch(qdrant_patch, return_value=mock_qdrant_client):
                 response = await test_client.post(
                     f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
                     json={
@@ -617,7 +621,8 @@ class TestUnassignFace:
         mock_qdrant_client = MagicMock()
         mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
-        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client", return_value=mock_qdrant_client):
+        qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        with patch(qdrant_patch, return_value=mock_qdrant_client):
             response = await test_client.delete(
                 f"/api/v1/faces/faces/{face_with_person.id}/person"
             )
@@ -670,8 +675,10 @@ class TestDetectSingleAsset:
     ):
         """POST /detect/{asset_id} detects faces in single asset."""
         # Mock face service and sync session context manager
-        with patch("image_search_service.db.sync_operations.get_sync_session") as mock_sync_session_func, \
-             patch("image_search_service.faces.service.get_face_service") as mock_service_func:
+        sync_patch = "image_search_service.db.sync_operations.get_sync_session"
+        service_patch = "image_search_service.faces.service.get_face_service"
+        with patch(sync_patch) as mock_sync_session_func, \
+             patch(service_patch) as mock_service_func:
 
             # Setup mock face instances
             mock_face1 = MagicMock()

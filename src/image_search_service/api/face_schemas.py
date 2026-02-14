@@ -137,9 +137,31 @@ class PersonListResponse(CamelCaseModel):
 
 
 class LabelClusterRequest(CamelCaseModel):
-    """Request to label a cluster with a person name."""
+    """Request to label a cluster with a person name or assign to existing person.
 
-    name: str = Field(min_length=1, max_length=255)
+    Provide EITHER `name` (to create/find person by name)
+    OR `person_id` (to assign to an existing person).
+    """
+
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="Person name (mutually exclusive with person_id)",
+    )
+    person_id: UUID | None = Field(
+        default=None,
+        description="Existing person ID (mutually exclusive with name)",
+    )
+
+    @model_validator(mode="after")
+    def validate_name_or_person_id(self) -> "LabelClusterRequest":
+        """Ensure exactly one of name or person_id is provided."""
+        if not self.name and not self.person_id:
+            raise ValueError("Either name or personId must be provided")
+        if self.name and self.person_id:
+            raise ValueError("Provide either name or personId, not both")
+        return self
 
 
 class LabelClusterResponse(CamelCaseModel):
@@ -149,6 +171,16 @@ class LabelClusterResponse(CamelCaseModel):
     person_name: str
     faces_labeled: int
     prototypes_created: int
+
+
+class UndoAssignmentResponse(CamelCaseModel):
+    """Response from undoing a face assignment event."""
+
+    event_id: UUID = Field(description="The original event that was undone")
+    faces_unassigned: int = Field(description="Number of faces reverted")
+    person_id: UUID = Field(description="Person ID faces were removed from")
+    person_name: str = Field(description="Person name")
+    undo_event_id: UUID = Field(description="ID of the new undo audit event")
 
 
 class MergePersonsRequest(CamelCaseModel):
