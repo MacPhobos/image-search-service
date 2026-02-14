@@ -236,7 +236,7 @@ async def get_unknown_person_candidates(
         default=50, ge=1, le=200, description="Groups per page", alias="groupsPerPage"
     ),
     faces_per_group: int = Query(
-        default=6, ge=1, le=50, description="Sample faces per group", alias="facesPerGroup"
+        default=6, ge=1, le=100, description="Sample faces per group", alias="facesPerGroup"
     ),
     min_confidence: float | None = Query(
         default=None,
