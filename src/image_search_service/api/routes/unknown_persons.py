@@ -606,15 +606,11 @@ async def get_merge_suggestions(
             logger.warning(f"No Qdrant points found for cluster {cluster_id}")
             continue
 
-        # Retrieve embeddings from Qdrant
-        embeddings = []
-        for point_id in point_ids:
-            try:
-                embedding = qdrant_client.get_embedding_by_point_id(point_id)
-                if embedding is not None:
-                    embeddings.append(np.array(embedding))
-            except Exception as e:
-                logger.warning(f"Failed to retrieve embedding for point {point_id}: {e}")
+        # Batch retrieve embeddings from Qdrant
+        embeddings_map = qdrant_client.get_embeddings_batch(point_ids)
+
+        # Convert to numpy arrays
+        embeddings = [np.array(emb) for emb in embeddings_map.values()]
 
         if not embeddings:
             logger.warning(f"No embeddings retrieved for cluster {cluster_id}")

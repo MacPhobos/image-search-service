@@ -129,12 +129,19 @@ async def test_merge_suggestions_returns_similar_groups(
         embedding_a = np.random.rand(512).tolist()
         embedding_b = (np.array(embedding_a) + 0.01).tolist()  # Very similar
 
-        def mock_get_embedding(point_id: uuid4) -> list[float]:  # type: ignore[valid-type]
-            # Return similar embeddings for all points
-            group_a_ids = [str(f.qdrant_point_id) for f in group_a_faces]
-            return embedding_a if str(point_id) in group_a_ids else embedding_b
+        # Build embeddings maps for each cluster (called separately per cluster)
+        # The endpoint calls get_embeddings_batch() once per cluster
+        def get_embeddings_for_cluster(point_ids):
+            result = {}
+            group_a_ids = {f.qdrant_point_id for f in group_a_faces}
+            for pid in point_ids:
+                if pid in group_a_ids:
+                    result[pid] = embedding_a
+                else:
+                    result[pid] = embedding_b
+            return result
 
-        mock_qdrant.get_embedding_by_point_id.side_effect = mock_get_embedding
+        mock_qdrant.get_embeddings_batch.side_effect = get_embeddings_for_cluster
 
         response = await test_client.get(
             "/api/v1/faces/unknown-persons/candidates/merge-suggestions"
@@ -182,11 +189,18 @@ async def test_merge_suggestions_respects_min_similarity_threshold(
         embedding_a = np.zeros(512).tolist()
         embedding_b = np.ones(512).tolist()
 
-        def mock_get_embedding(point_id: uuid4) -> list[float]:  # type: ignore[valid-type]
-            group_a_ids = [str(f.qdrant_point_id) for f in group_a_faces]
-            return embedding_a if str(point_id) in group_a_ids else embedding_b
+        # Build embeddings maps for each cluster (called separately per cluster)
+        def get_embeddings_for_cluster(point_ids):
+            result = {}
+            group_a_ids = {f.qdrant_point_id for f in group_a_faces}
+            for pid in point_ids:
+                if pid in group_a_ids:
+                    result[pid] = embedding_a
+                else:
+                    result[pid] = embedding_b
+            return result
 
-        mock_qdrant.get_embedding_by_point_id.side_effect = mock_get_embedding
+        mock_qdrant.get_embeddings_batch.side_effect = get_embeddings_for_cluster
 
         response = await test_client.get(
             "/api/v1/faces/unknown-persons/candidates/merge-suggestions"

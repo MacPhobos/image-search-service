@@ -399,67 +399,20 @@ class DualModeClusterer:
         Returns:
             Dict mapping point_id to embedding array. Missing IDs are not included.
         """
-        from image_search_service.vector.face_qdrant import (
-            _get_face_collection_name,
-            get_face_qdrant_client,
-        )
+        from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
         if not qdrant_point_ids:
             return {}
 
         qdrant = get_face_qdrant_client()
-        collection_name = _get_face_collection_name()
 
-        # Convert UUIDs to strings for Qdrant
-        str_ids = [str(pid) for pid in qdrant_point_ids]
+        # Use centralized batch retrieval method
+        embeddings_map = qdrant.get_embeddings_batch(qdrant_point_ids, batch_size=batch_size)
 
-        # Retrieve in batches
-        all_points = []
-        for i in range(0, len(str_ids), batch_size):
-            batch_ids = str_ids[i : i + batch_size]
-
-            try:
-                batch_points = qdrant.client.retrieve(
-                    collection_name=collection_name,
-                    ids=batch_ids,
-                    with_vectors=True,
-                )
-                all_points.extend(batch_points)
-            except Exception as e:
-                logger.error(
-                    f"Error retrieving batch {i//batch_size + 1} "
-                    f"(IDs {i}-{i+len(batch_ids)}): {e}"
-                )
-                # Continue with next batch despite error
-                continue
-
-        # Build result dict: point_id -> embedding
+        # Convert list[float] to numpy arrays
         result: dict[uuid.UUID, npt.NDArray[np.float64]] = {}
-
-        for point in all_points:
-            if not point.vector:
-                continue
-
-            # Convert string ID back to UUID
-            try:
-                point_uuid = uuid.UUID(str(point.id))
-            except (ValueError, AttributeError):
-                logger.warning(f"Invalid point ID format: {point.id}")
-                continue
-
-            # Handle both dict and list vector formats
-            vector = point.vector
-            if isinstance(vector, dict):
-                embedding = np.array(list(vector.values())[0])
-            else:
-                embedding = np.array(vector)
-
-            result[point_uuid] = embedding
-
-        logger.info(
-            f"Retrieved {len(result)}/{len(qdrant_point_ids)} embeddings "
-            f"in {(len(str_ids) + batch_size - 1) // batch_size} batches"
-        )
+        for point_id, embedding in embeddings_map.items():
+            result[point_id] = np.array(embedding, dtype=np.float64)
 
         return result
 

@@ -87,18 +87,11 @@ class FaceClusteringService:
                 f"for confidence calculation"
             )
 
-        # Retrieve embeddings from Qdrant
-        embeddings = []
-        for point_id in qdrant_point_ids:
-            try:
-                embedding = self.qdrant.get_embedding_by_point_id(point_id)
-                if embedding is not None:
-                    embeddings.append(np.array(embedding))
-            except Exception as e:
-                logger.warning(
-                    f"Failed to retrieve embedding for point {point_id} in cluster {cluster_id}: {e}"  # noqa: E501
-                )
-                continue
+        # Batch retrieve embeddings from Qdrant
+        embeddings_map = self.qdrant.get_embeddings_batch(qdrant_point_ids)
+
+        # Convert to numpy arrays
+        embeddings = [np.array(emb) for emb in embeddings_map.values()]
 
         if len(embeddings) < 2:
             # Not enough embeddings to calculate similarity

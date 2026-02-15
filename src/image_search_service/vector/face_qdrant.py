@@ -492,6 +492,8 @@ class FaceQdrantClient:
     def get_embedding_by_point_id(self, point_id: uuid.UUID) -> list[float] | None:
         """Retrieve the embedding vector for a specific face point.
 
+        For retrieving multiple embeddings, use get_embeddings_batch() to reduce HTTP requests.
+
         Args:
             point_id: Face point ID (qdrant_point_id from FaceInstance)
 
@@ -520,12 +522,18 @@ class FaceQdrantClient:
                 first_value = next(iter(vector.values()))
                 # Ensure it's a list[float], not a SparseVector or nested list
                 if isinstance(first_value, list) and all(isinstance(x, float) for x in first_value):
-                    return first_value
+                    # Type narrowing: runtime verified it's list[float]
+                    from typing import cast
+
+                    return cast(list[float], first_value)
                 return None
             elif isinstance(vector, list):
                 # Direct list case - verify it's list[float]
                 if all(isinstance(x, float) for x in vector):
-                    return vector
+                    # Type narrowing: runtime verified it's list[float]
+                    from typing import cast
+
+                    return cast(list[float], vector)
                 return None
             else:
                 # Unsupported vector type
@@ -534,6 +542,104 @@ class FaceQdrantClient:
         except Exception as e:
             logger.error(f"Failed to retrieve embedding for point {point_id}: {e}")
             return None
+
+    def get_embeddings_batch(
+        self,
+        point_ids: list[uuid.UUID],
+        batch_size: int = 100,
+    ) -> dict[uuid.UUID, list[float]]:
+        """Retrieve embeddings for multiple face points in batched Qdrant calls.
+
+        For retrieving a single embedding, use get_embedding_by_point_id() instead.
+
+        Args:
+            point_ids: List of Qdrant point UUIDs to retrieve
+            batch_size: Number of points per Qdrant request (default: 100)
+
+        Returns:
+            Dict mapping point_id -> embedding vector. Missing/invalid IDs excluded.
+        """
+        if not point_ids:
+            return {}
+
+        collection_name = _get_face_collection_name()
+
+        # Convert UUIDs to strings for Qdrant
+        str_ids = [str(pid) for pid in point_ids]
+
+        # Retrieve in batches
+        all_points = []
+        for i in range(0, len(str_ids), batch_size):
+            batch_ids = str_ids[i : i + batch_size]
+
+            try:
+                batch_points = self.client.retrieve(
+                    collection_name=collection_name,
+                    ids=batch_ids,
+                    with_payload=False,
+                    with_vectors=True,
+                )
+                all_points.extend(batch_points)
+            except Exception as e:
+                logger.error(
+                    f"Error retrieving batch {i//batch_size + 1} "
+                    f"(IDs {i}-{i+len(batch_ids)}): {e}"
+                )
+                # Continue with next batch despite error
+                continue
+
+        # Build result dict: point_id -> embedding
+        result: dict[uuid.UUID, list[float]] = {}
+
+        for point in all_points:
+            # Handle both dict and list vector formats
+            vector = point.vector
+            if vector is None:
+                logger.warning(f"Face point {point.id} has no vector")
+                continue
+
+            # Convert string ID back to UUID
+            try:
+                point_uuid = uuid.UUID(str(point.id))
+            except (ValueError, AttributeError):
+                logger.warning(f"Invalid point ID format: {point.id}")
+                continue
+
+            # Extract embedding with same logic as get_embedding_by_point_id
+            embedding: list[float] | None = None
+
+            if isinstance(vector, dict):
+                # Named vector case - get the first vector
+                first_value = next(iter(vector.values()))
+                # Ensure it's a list[float], not a SparseVector or nested list
+                if isinstance(first_value, list) and all(
+                    isinstance(x, float) for x in first_value
+                ):
+                    # Type narrowing: runtime verified it's list[float]
+                    from typing import cast
+
+                    embedding = cast(list[float], first_value)
+            elif isinstance(vector, list):
+                # Direct list case - verify it's list[float]
+                if all(isinstance(x, float) for x in vector):
+                    # Type narrowing: runtime verified it's list[float]
+                    from typing import cast
+
+                    embedding = cast(list[float], vector)
+
+            if embedding is not None:
+                result[point_uuid] = embedding
+            else:
+                logger.warning(
+                    f"Face point {point_uuid} has unsupported vector format: {type(vector)}"
+                )
+
+        logger.info(
+            f"Retrieved {len(result)}/{len(point_ids)} embeddings "
+            f"in {(len(str_ids) + batch_size - 1) // batch_size} batches"
+        )
+
+        return result
 
     def scroll_faces(
         self,

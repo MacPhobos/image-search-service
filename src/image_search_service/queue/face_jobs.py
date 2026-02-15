@@ -15,7 +15,6 @@ On macOS, these subprocesses are created via spawn() (not fork()), requiring:
    ✗ No gRPC async operations
 
 3. Verified job functions:
-   ✓ detect_faces_job() - Sync operations
    ✓ cluster_faces_job() - Sync operations
    ✓ assign_faces_job() - Sync operations
    ✓ compute_centroids_job() - Sync operations
@@ -47,54 +46,6 @@ from image_search_service.db.models import (
 from image_search_service.db.sync_operations import get_sync_session
 
 logger = logging.getLogger(__name__)
-
-
-def detect_faces_job(
-    asset_ids: list[str],
-    min_confidence: float = 0.5,
-    min_face_size: int = 20,
-) -> dict[str, Any]:
-    """RQ job to detect and embed faces for a batch of assets.
-
-    FORK-SAFETY (macOS): Disable proxy detection immediately to prevent
-    urllib from forking in multi-threaded work-horse context.
-
-    Args:
-        asset_ids: List of asset ID strings to process
-        min_confidence: Minimum detection confidence
-        min_face_size: Minimum face size in pixels
-
-    Returns:
-        Summary dict with processing statistics
-    """
-    job = get_current_job()
-    job_id = job.id if job else "no-job"
-
-    # Convert string asset IDs to integers
-    asset_id_ints = [int(aid) for aid in asset_ids]
-
-    logger.info(f"[{job_id}] Starting face detection for {len(asset_id_ints)} assets")
-
-    from image_search_service.faces.service import get_face_service
-
-    db_session = get_sync_session()
-    try:
-        service = get_face_service(db_session)
-        result = service.process_assets_batch(
-            asset_ids=asset_id_ints,
-            min_confidence=min_confidence,
-            min_face_size=min_face_size,
-        )
-
-        logger.info(
-            f"[{job_id}] Face detection complete: "
-            f"{result['processed']} assets, {result['total_faces']} faces, "
-            f"{result['errors']} errors"
-        )
-
-        return result
-    finally:
-        db_session.close()
 
 
 def cluster_faces_job(
@@ -397,32 +348,6 @@ def train_person_matching_job(
         return result
     finally:
         db_session.close()
-
-
-def recluster_after_training_job(
-    person_threshold: float = 0.7,
-    unknown_method: str = "hdbscan",
-) -> dict[str, Any]:
-    """RQ job to recluster faces after training.
-
-    Runs clustering with potentially improved embeddings.
-
-    Args:
-        person_threshold: Minimum similarity for assignment to person
-        unknown_method: Clustering method for unknown faces
-
-    Returns:
-        Result dict with clustering statistics
-    """
-    job = get_current_job()
-    job_id = job.id if job else "no-job"
-
-    logger.info(f"[{job_id}] Starting post-training reclustering")
-
-    return cluster_dual_job(
-        person_threshold=person_threshold,
-        unknown_method=unknown_method,
-    )
 
 
 def detect_faces_for_session_job(
@@ -1199,76 +1124,6 @@ def expire_old_suggestions_job(
         db_session.close()
 
 
-def cleanup_orphaned_suggestions_job() -> dict[str, Any]:
-    """Clean up orphaned FaceSuggestion records where source face assignments changed.
-
-    Finds and expires all pending suggestions where:
-    - source_face.person_id is NULL (face was unassigned), OR
-    - source_face.person_id != suggestion.suggested_person_id (face moved to different person)
-
-    This job should be run periodically to fix any orphaned suggestions that
-    weren't cleaned up during face assignment changes.
-
-    Returns:
-        Dictionary with job results
-    """
-    from sqlalchemy import and_, or_
-
-    job = get_current_job()
-    job_id = job.id if job else "no-job"
-
-    logger.info(f"[{job_id}] Starting cleanup of orphaned face suggestions")
-
-    db_session = get_sync_session()
-
-    try:
-        # Find pending suggestions where source face assignment is invalid
-        # LEFT JOIN with FaceInstance to check current person assignment
-        # (source_face_id can be None for centroid-based suggestions)
-        query = (
-            select(FaceSuggestion)
-            .outerjoin(FaceInstance, FaceSuggestion.source_face_id == FaceInstance.id)
-            .where(
-                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
-                # Only check suggestions with source_face_id (skip centroid-based)
-                FaceSuggestion.source_face_id.isnot(None),
-                or_(
-                    # Source face is no longer assigned to any person
-                    FaceInstance.person_id.is_(None),
-                    # Source face moved to a different person
-                    and_(
-                        FaceInstance.person_id.isnot(None),
-                        FaceInstance.person_id != FaceSuggestion.suggested_person_id,
-                    ),
-                ),
-            )
-        )
-
-        result = db_session.execute(query)
-        orphaned_suggestions = result.scalars().all()
-
-        expired_count = 0
-        for suggestion in orphaned_suggestions:
-            suggestion.status = FaceSuggestionStatus.EXPIRED.value
-            suggestion.reviewed_at = datetime.now(UTC)
-            expired_count += 1
-
-        db_session.commit()
-
-        logger.info(f"[{job_id}] Expired {expired_count} orphaned suggestions")
-
-        return {
-            "status": "completed",
-            "expired_count": expired_count,
-        }
-
-    except Exception as e:
-        logger.exception(f"[{job_id}] Error cleaning up orphaned suggestions: {e}")
-        return {"status": "error", "message": str(e)}
-    finally:
-        db_session.close()
-
-
 def find_more_suggestions_job(
     person_id: str,
     prototype_count: int = 50,
@@ -1632,14 +1487,27 @@ def propagate_person_label_multiproto_job(
 
         # 3. Get prototype embeddings from Qdrant
         qdrant = get_face_qdrant_client()
+
+        # First, collect all face instances and point IDs
+        face_instances = {}  # proto.face_instance_id -> face
+        point_ids = []
+
+        for proto in prototypes:
+            face = db_session.get(FaceInstance, proto.face_instance_id)
+            if face and face.qdrant_point_id:
+                face_instances[proto.face_instance_id] = face
+                point_ids.append(face.qdrant_point_id)
+
+        # Batch retrieve embeddings
+        embeddings_map = qdrant.get_embeddings_batch(point_ids)
+
+        # Build prototype embeddings dict
         prototype_embeddings: dict[str, dict[str, Any]] = {}
 
         for proto in prototypes:
-            # Get face instance for quality score
-            face = db_session.get(FaceInstance, proto.face_instance_id)
-
+            face = face_instances.get(proto.face_instance_id)
             if face and face.qdrant_point_id:
-                embedding = qdrant.get_embedding_by_point_id(face.qdrant_point_id)
+                embedding = embeddings_map.get(face.qdrant_point_id)
                 if embedding:
                     prototype_embeddings[str(proto.face_instance_id)] = {
                         "embedding": embedding,
@@ -1934,12 +1802,20 @@ def find_more_centroid_suggestions_job(
 
             # Retrieve embeddings from Qdrant
             face_qdrant = get_face_qdrant_client()
+
+            # Collect all Qdrant point IDs
+            point_ids = [face.qdrant_point_id for face in faces if face.qdrant_point_id]
+
+            # Batch retrieve embeddings
+            embeddings_map = face_qdrant.get_embeddings_batch(point_ids)
+
+            # Build result lists, maintaining order
             embeddings = []
             face_ids = []
 
             for face in faces:
                 if face.qdrant_point_id:
-                    embedding = face_qdrant.get_embedding_by_point_id(face.qdrant_point_id)
+                    embedding = embeddings_map.get(face.qdrant_point_id)
                     if embedding:
                         embeddings.append(embedding)
                         face_ids.append(face.id)

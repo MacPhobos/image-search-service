@@ -198,12 +198,18 @@ async def get_person_face_embeddings(
         logger.warning(f"No face instances found for person {person_id}")
         return [], []
 
-    # Retrieve embeddings from Qdrant
+    # Collect all Qdrant point IDs
+    point_ids = [face.qdrant_point_id for face in faces]
+
+    # Batch retrieve embeddings from Qdrant
+    embeddings_map = qdrant.get_embeddings_batch(point_ids)
+
+    # Build result lists, maintaining order
     face_ids = []
     embeddings = []
 
     for face in faces:
-        embedding = qdrant.get_embedding_by_point_id(face.qdrant_point_id)
+        embedding = embeddings_map.get(face.qdrant_point_id)
         if embedding is not None:
             face_ids.append(face.id)
             embeddings.append(embedding)

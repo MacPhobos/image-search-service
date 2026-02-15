@@ -54,7 +54,11 @@ class TestCalculateClusterConfidence:
         embedding = [0.5] * 512  # Same embedding
         qdrant_point_ids = [uuid.uuid4(), uuid.uuid4()]
 
-        mock_qdrant.get_embedding_by_point_id.side_effect = [embedding, embedding]
+        # Mock batch retrieval - returns dict[UUID, list[float]]
+        mock_qdrant.get_embeddings_batch.return_value = {
+            qdrant_point_ids[0]: embedding,
+            qdrant_point_ids[1]: embedding,
+        }
 
         # When: calculate confidence
         confidence = await clustering_service.calculate_cluster_confidence(
@@ -76,7 +80,11 @@ class TestCalculateClusterConfidence:
         embedding2 = [0.0] + [1.0] + [0.0] * 510  # [0, 1, 0, ...]
         qdrant_point_ids = [uuid.uuid4(), uuid.uuid4()]
 
-        mock_qdrant.get_embedding_by_point_id.side_effect = [embedding1, embedding2]
+        # Mock batch retrieval
+        mock_qdrant.get_embeddings_batch.return_value = {
+            qdrant_point_ids[0]: embedding1,
+            qdrant_point_ids[1]: embedding2,
+        }
 
         # When: calculate confidence
         confidence = await clustering_service.calculate_cluster_confidence(
@@ -100,15 +108,16 @@ class TestCalculateClusterConfidence:
         base_vector /= np.linalg.norm(base_vector)  # Normalize
 
         # Create 3 similar embeddings with very small perturbations
-        embeddings = []
-        for i in range(3):
+        qdrant_point_ids = [uuid.uuid4() for _ in range(3)]
+        embeddings_map = {}
+        for point_id in qdrant_point_ids:
             # Use tiny perturbation (0.01) for high similarity
             perturbed = base_vector + np.random.randn(512) * 0.01
             perturbed /= np.linalg.norm(perturbed)  # Re-normalize
-            embeddings.append(perturbed.tolist())
+            embeddings_map[point_id] = perturbed.tolist()
 
-        qdrant_point_ids = [uuid.uuid4() for _ in range(3)]
-        mock_qdrant.get_embedding_by_point_id.side_effect = embeddings
+        # Mock batch retrieval - returns dict[UUID, list[float]]
+        mock_qdrant.get_embeddings_batch.return_value = embeddings_map
 
         # When: calculate confidence
         confidence = await clustering_service.calculate_cluster_confidence(
@@ -128,14 +137,15 @@ class TestCalculateClusterConfidence:
         cluster_id = "test_cluster"
 
         # Create 3 random embeddings (low similarity)
-        embeddings = []
-        for i in range(3):
+        qdrant_point_ids = [uuid.uuid4() for _ in range(3)]
+        embeddings_map = {}
+        for point_id in qdrant_point_ids:
             vec = np.random.rand(512)
             vec /= np.linalg.norm(vec)  # Normalize
-            embeddings.append(vec.tolist())
+            embeddings_map[point_id] = vec.tolist()
 
-        qdrant_point_ids = [uuid.uuid4() for _ in range(3)]
-        mock_qdrant.get_embedding_by_point_id.side_effect = embeddings
+        # Mock batch retrieval
+        mock_qdrant.get_embeddings_batch.return_value = embeddings_map
 
         # When: calculate confidence
         confidence = await clustering_service.calculate_cluster_confidence(
@@ -157,9 +167,14 @@ class TestCalculateClusterConfidence:
         # Create 50 similar embeddings
         base_vector = np.random.rand(512)
         base_vector /= np.linalg.norm(base_vector)
-        embeddings = [base_vector.tolist() for _ in range(50)]
+        all_embeddings_map = {pid: base_vector.tolist() for pid in qdrant_point_ids}
 
-        mock_qdrant.get_embedding_by_point_id.side_effect = embeddings
+        # Mock batch retrieval - will be called with sampled subset
+        # Need to return only the requested embeddings (subset of all_embeddings_map)
+        def get_embeddings_subset(point_ids):
+            return {pid: all_embeddings_map[pid] for pid in point_ids if pid in all_embeddings_map}
+
+        mock_qdrant.get_embeddings_batch.side_effect = get_embeddings_subset
 
         # When: calculate confidence with sampling
         confidence = await clustering_service.calculate_cluster_confidence(
@@ -168,8 +183,11 @@ class TestCalculateClusterConfidence:
             max_faces_for_calculation=20,
         )
 
-        # Then: only 20 embeddings were retrieved (sampled)
-        assert mock_qdrant.get_embedding_by_point_id.call_count == 20
+        # Then: batch retrieval was called once with sampled IDs
+        assert mock_qdrant.get_embeddings_batch.call_count == 1
+        # Verify the call was made with a sampled subset (20 IDs)
+        call_args = mock_qdrant.get_embeddings_batch.call_args[0][0]
+        assert len(call_args) == 20
         assert 0.0 <= confidence <= 1.0
 
     @pytest.mark.asyncio
@@ -179,7 +197,8 @@ class TestCalculateClusterConfidence:
         cluster_id = "test_cluster"
         qdrant_point_ids = [uuid.uuid4(), uuid.uuid4()]
 
-        mock_qdrant.get_embedding_by_point_id.return_value = None
+        # Mock batch retrieval returns empty map (no embeddings found)
+        mock_qdrant.get_embeddings_batch.return_value = {}
 
         # When: calculate confidence
         confidence = await clustering_service.calculate_cluster_confidence(
