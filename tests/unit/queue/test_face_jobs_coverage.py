@@ -3,15 +3,11 @@
 Tests cover the highest-priority untested functions:
 - cluster_dual_job (P1)
 - expire_old_suggestions_job (P1)
-- cleanup_orphaned_suggestions_job (P1)
 - compute_centroids_job (P2)
 - train_person_matching_job (P2)
 - backfill_faces_job (P2)
 - detect_faces_for_session_job (P3 - partial coverage)
 - propagate_person_label_multiproto_job (P3 - additional tests)
-
-Module: image_search_service.queue.face_jobs (~2127 lines, 656 missed statements)
-Target: 40%+ coverage increase (21% → 60%+)
 """
 
 import json
@@ -35,7 +31,6 @@ from image_search_service.db.models import (
 )
 from image_search_service.queue.face_jobs import (
     backfill_faces_job,
-    cleanup_orphaned_suggestions_job,
     cluster_dual_job,
     compute_centroids_job,
     detect_faces_for_session_job,
@@ -470,117 +465,6 @@ class TestExpireOldSuggestionsJob:
         assert result["status"] == "completed"
         assert result["expired_count"] == 1
         mock_config.get_int.assert_called_once_with("face_suggestion_expiry_days")
-
-
-# ============ P1: cleanup_orphaned_suggestions_job Tests ============
-
-
-class TestCleanupOrphanedSuggestionsJob:
-    """Tests for cleanup_orphaned_suggestions_job function (P1 priority)."""
-
-    def test_cleanup_orphaned_no_person(
-        self,
-        sync_db_session,
-        mock_job,
-        mock_get_sync_session,
-        create_suggestion,
-        create_face_instance,
-        create_person,
-    ):
-        """Test cleanup when source face person_id is NULL."""
-        person = create_person()
-        source_face = create_face_instance(person_id=None)  # Unassigned source
-        suggestion = create_suggestion(
-            suggested_person_id=person.id, source_face_id=source_face.id, status="pending"
-        )
-        suggestion_id = suggestion.id
-
-        with (
-            patch(
-                "image_search_service.queue.face_jobs.get_sync_session",
-                return_value=mock_get_sync_session(),
-            ),
-            patch("image_search_service.queue.face_jobs.get_current_job", return_value=mock_job),
-        ):
-            result = cleanup_orphaned_suggestions_job()
-
-        assert result["status"] == "completed"
-        assert result["expired_count"] == 1
-
-        # Verify suggestion was expired (query fresh from DB)
-        updated_suggestion = sync_db_session.get(FaceSuggestion, suggestion_id)
-        assert updated_suggestion is not None
-        assert updated_suggestion.status == FaceSuggestionStatus.EXPIRED.value
-        assert updated_suggestion.reviewed_at is not None
-
-    def test_cleanup_orphaned_different_person(
-        self,
-        sync_db_session,
-        mock_job,
-        mock_get_sync_session,
-        create_suggestion,
-        create_face_instance,
-        create_person,
-    ):
-        """Test cleanup when source face moved to different person."""
-        person_a = create_person(name="Person A")
-        person_b = create_person(name="Person B")
-
-        # Source face assigned to person_b
-        source_face = create_face_instance(person_id=person_b.id)
-
-        # Suggestion says target should be person_a (mismatch!)
-        suggestion = create_suggestion(
-            suggested_person_id=person_a.id, source_face_id=source_face.id, status="pending"
-        )
-        suggestion_id = suggestion.id
-
-        with (
-            patch(
-                "image_search_service.queue.face_jobs.get_sync_session",
-                return_value=mock_get_sync_session(),
-            ),
-            patch("image_search_service.queue.face_jobs.get_current_job", return_value=mock_job),
-        ):
-            result = cleanup_orphaned_suggestions_job()
-
-        assert result["status"] == "completed"
-        assert result["expired_count"] == 1
-
-        # Query fresh from DB
-        updated_suggestion = sync_db_session.get(FaceSuggestion, suggestion_id)
-        assert updated_suggestion is not None
-        assert updated_suggestion.status == FaceSuggestionStatus.EXPIRED.value
-
-    def test_cleanup_no_orphaned(
-        self,
-        sync_db_session,
-        mock_job,
-        mock_get_sync_session,
-        create_suggestion,
-        create_face_instance,
-        create_person,
-    ):
-        """Test cleanup when all suggestions are valid."""
-        person = create_person()
-        source_face = create_face_instance(person_id=person.id)
-
-        # Valid suggestion: source_face.person_id == suggested_person_id
-        create_suggestion(
-            suggested_person_id=person.id, source_face_id=source_face.id, status="pending"
-        )
-
-        with (
-            patch(
-                "image_search_service.queue.face_jobs.get_sync_session",
-                return_value=mock_get_sync_session(),
-            ),
-            patch("image_search_service.queue.face_jobs.get_current_job", return_value=mock_job),
-        ):
-            result = cleanup_orphaned_suggestions_job()
-
-        assert result["status"] == "completed"
-        assert result["expired_count"] == 0
 
 
 # ============ P2: compute_centroids_job Tests ============

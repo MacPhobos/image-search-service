@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures."""
 
 import hashlib
+import uuid
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
@@ -45,28 +46,22 @@ TEST_SYNC_DATABASE_URL = "sqlite:///:memory:"
 
 
 @pytest.fixture(autouse=True)
-def clear_settings_cache():
-    """Clear settings cache before and after each test to prevent production settings leaking.
+def test_settings(monkeypatch):
+    """Clear settings cache and override with test-safe collection names.
 
-    CRITICAL: This prevents tests from using cached production collection names,
-    which could cause deletion of live Qdrant data.
+    CRITICAL: This fixture serves two safety purposes:
+    1. Clears the settings LRU cache to prevent production settings from leaking between tests
+    2. Sets test-safe Qdrant collection names to prevent accidental deletion of live data
+
+    This MUST remain function-scoped and autouse. Every test must get fresh settings
+    with test-safe collection names. Removing or session-scoping this fixture risks
+    production data deletion.
+
+    Replaces the former clear_settings_cache + use_test_settings fixtures.
     """
     from image_search_service.core.config import get_settings
 
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
-@pytest.fixture(autouse=True)
-def use_test_settings(monkeypatch):
-    """Override settings with test-safe collection names.
-
-    CRITICAL: This ensures tests never use production collection names
-    like "image_assets" or "faces", preventing accidental data deletion.
-    """
-    from image_search_service.core.config import get_settings
-
+    # Clear any cached settings from previous test
     get_settings.cache_clear()
 
     # Set environment variables for test collection names
@@ -76,7 +71,19 @@ def use_test_settings(monkeypatch):
     # Clear cache again so new env vars are picked up
     get_settings.cache_clear()
     yield
+    # Clear cache after test so no test-specific settings leak
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def use_test_settings(test_settings):
+    """Backward-compatible alias for test_settings.
+
+    Two test files reference this fixture by name:
+    - tests/faces/test_dual_clusterer.py
+    - tests/unit/test_dual_clusterer_batch.py
+    """
+    pass
 
 
 @pytest.fixture(autouse=True)
@@ -131,7 +138,7 @@ def clear_embedding_cache(monkeypatch):
     # Restore original methods (monkeypatch handles this automatically)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def validate_embedding_dimensions():
     """Validate that test embedding dimensions match expected values.
 
@@ -142,7 +149,8 @@ def validate_embedding_dimensions():
     - Image search (CLIP/SigLIP): 768
     - Face recognition (InsightFace/ArcFace): 512
 
-    This runs at import time before any tests execute to fail fast.
+    Session-scoped: only runs once per session (or once per xdist worker).
+    These are compile-time constants that cannot change between tests.
     """
     # Pre-test validation - check class constant
     assert MockEmbeddingService.EMBEDDING_DIM == 768, (
@@ -660,3 +668,66 @@ def mock_queue() -> dict[str, Any]:
 
     queue = MockQueue()
     return {"queue": queue, "jobs": jobs}
+
+
+# ============ Shared DB model fixtures ============
+# Consolidated from ~10 duplicate definitions across test files.
+# Local fixtures in individual test files override these when they
+# need variant behavior (different names, dimensions, etc.).
+
+
+@pytest.fixture
+async def mock_image_asset(db_session):
+    """Create a standard mock ImageAsset in the database."""
+    from image_search_service.db.models import ImageAsset, TrainingStatus
+
+    asset = ImageAsset(
+        path="/test/images/photo.jpg",
+        training_status=TrainingStatus.PENDING.value,
+        width=640,
+        height=480,
+        file_size=102400,
+        mime_type="image/jpeg",
+    )
+    db_session.add(asset)
+    await db_session.commit()
+    await db_session.refresh(asset)
+    return asset
+
+
+@pytest.fixture
+async def mock_person(db_session):
+    """Create a standard mock Person in the database."""
+    from image_search_service.db.models import Person, PersonStatus
+
+    person = Person(
+        id=uuid.uuid4(),
+        name="Test Person",
+        status=PersonStatus.ACTIVE.value,
+    )
+    db_session.add(person)
+    await db_session.commit()
+    await db_session.refresh(person)
+    return person
+
+
+@pytest.fixture
+async def mock_face_instance(db_session, mock_image_asset):
+    """Create a standard mock FaceInstance in the database (unassigned)."""
+    from image_search_service.db.models import FaceInstance
+
+    face = FaceInstance(
+        id=uuid.uuid4(),
+        asset_id=mock_image_asset.id,
+        bbox_x=100,
+        bbox_y=150,
+        bbox_w=80,
+        bbox_h=80,
+        detection_confidence=0.95,
+        quality_score=0.75,
+        qdrant_point_id=uuid.uuid4(),
+    )
+    db_session.add(face)
+    await db_session.commit()
+    await db_session.refresh(face)
+    return face

@@ -262,22 +262,3 @@ class FindMoreJobResponse(CamelCaseModel):
     progress_key: str  # Redis key for progress
 
 
-class JobProgress(CamelCaseModel):
-    """Progress update for any background job (SSE payload)."""
-
-    phase: str
-    current: int
-    total: int
-    message: str
-    timestamp: str  # ISO format
-
-
-class JobResult(CamelCaseModel):
-    """Final result when job completes."""
-
-    status: str  # "completed" or "failed"
-    suggestions_created: int | None = None
-    prototypes_used: int | None = None
-    candidates_found: int | None = None
-    duplicates_skipped: int | None = None
-    error: str | None = None

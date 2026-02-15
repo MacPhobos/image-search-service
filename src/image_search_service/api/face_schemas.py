@@ -31,16 +31,6 @@ class BoundingBox(CamelCaseModel):
     height: int
 
 
-class Landmarks(CamelCaseModel):
-    """5-point facial landmarks."""
-
-    left_eye: list[float]
-    right_eye: list[float]
-    nose: list[float]
-    mouth_left: list[float]
-    mouth_right: list[float]
-
-
 class FaceInstanceResponse(CamelCaseModel):
     """Response schema for a face instance."""
 

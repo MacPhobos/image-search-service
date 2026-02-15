@@ -19,8 +19,6 @@ import platform
 from functools import lru_cache
 from typing import Any
 
-import torch
-
 
 def _initialize_mps_workarounds() -> None:
     """Initialize MPS workarounds for known PyTorch bugs on macOS.
@@ -38,6 +36,8 @@ def _initialize_mps_workarounds() -> None:
 
     See: https://github.com/pytorch/pytorch/issues (MPS memory accounting)
     """
+    import torch
+
     if not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
         return
 
@@ -47,8 +47,15 @@ def _initialize_mps_workarounds() -> None:
     os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 
 
-# Initialize MPS workarounds at module import time (before any GPU operations)
-_initialize_mps_workarounds()
+_mps_initialized = False
+
+
+def _ensure_mps_workarounds() -> None:
+    """Initialize MPS workarounds once, on first torch usage."""
+    global _mps_initialized
+    if not _mps_initialized:
+        _initialize_mps_workarounds()
+        _mps_initialized = True
 
 
 @lru_cache(maxsize=1)
@@ -68,6 +75,10 @@ def get_device() -> str:
     Raises:
         ValueError: If DEVICE env var specifies invalid device
     """
+    import torch
+
+    _ensure_mps_workarounds()
+
     # Priority 1: Explicit device override
     if device := os.getenv("DEVICE"):
         if device.lower() != "auto":
@@ -97,6 +108,8 @@ def _validate_device(device: str) -> None:
     Raises:
         ValueError: If device string is invalid or device not available
     """
+    import torch
+
     valid_prefixes = ("cuda", "mps", "cpu")
     if not any(device.startswith(prefix) for prefix in valid_prefixes):
         raise ValueError(f"Invalid DEVICE '{device}'. Must be 'cuda', 'cuda:N', 'mps', or 'cpu'")
@@ -140,6 +153,10 @@ def get_device_info() -> dict[str, Any]:
         - mps_built: Whether PyTorch was built with MPS support
         - mps_available: Whether MPS is available for use
     """
+    import torch
+
+    _ensure_mps_workarounds()
+
     info: dict[str, Any] = {
         "platform": platform.system(),
         "machine": platform.machine(),

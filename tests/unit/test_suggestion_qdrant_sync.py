@@ -21,20 +21,7 @@ from image_search_service.db.models import (
 )
 
 # ============ Fixtures ============
-
-
-@pytest.fixture
-async def mock_person(db_session):
-    """Create a mock Person in the database (async)."""
-    person = Person(
-        id=uuid.uuid4(),
-        name="Test Person",
-        status=PersonStatus.ACTIVE.value,
-    )
-    db_session.add(person)
-    await db_session.commit()
-    await db_session.refresh(person)
-    return person
+# mock_person from root conftest.py
 
 
 @pytest.fixture
@@ -53,7 +40,7 @@ async def mock_person2(db_session):
 
 @pytest.fixture
 async def mock_image_asset(db_session):
-    """Create a mock ImageAsset in the database (async)."""
+    """Override root conftest: uses random path to avoid collisions in parallel tests."""
     asset = ImageAsset(
         path=f"/test/images/photo_{uuid.uuid4().hex[:8]}.jpg",
         training_status=TrainingStatus.PENDING.value,
@@ -68,25 +55,7 @@ async def mock_image_asset(db_session):
     return asset
 
 
-@pytest.fixture
-async def mock_face_instance(db_session, mock_image_asset):
-    """Create a mock FaceInstance in the database (async)."""
-    face = FaceInstance(
-        id=uuid.uuid4(),
-        asset_id=mock_image_asset.id,
-        person_id=None,  # Unassigned
-        bbox_x=100,
-        bbox_y=150,
-        bbox_w=80,
-        bbox_h=80,
-        detection_confidence=0.95,
-        quality_score=0.75,
-        qdrant_point_id=uuid.uuid4(),
-    )
-    db_session.add(face)
-    await db_session.commit()
-    await db_session.refresh(face)
-    return face
+# mock_face_instance from root conftest.py (uses local mock_image_asset override)
 
 
 @pytest.fixture

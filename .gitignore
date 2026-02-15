@@ -107,5 +107,8 @@ yarn-debug.log*
 yarn-error.log*
 /data/image_samples/
 
+# pytest-testmon local database
+.testmondata
+
 # MCP Ticketer
 .mcp-ticketer/

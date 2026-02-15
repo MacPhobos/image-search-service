@@ -123,22 +123,3 @@ def update_asset_person_ids_job(asset_id: int) -> dict[str, str | int]:
             }
 
 
-def process_image(image_path: str) -> dict[str, str]:
-    """Process image and extract embeddings (deprecated).
-
-    Args:
-        image_path: Path to image file
-
-    Returns:
-        Result dictionary with processing status
-
-    Note:
-        This is deprecated in favor of index_asset which handles full workflow.
-    """
-    logger.info("Processing image: %s", image_path)
-
-    return {
-        "status": "success",
-        "image_path": image_path,
-        "message": "Use index_asset instead",
-    }

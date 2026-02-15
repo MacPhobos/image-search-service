@@ -15,38 +15,33 @@ class TestGetDevice:
 
         clear_device_cache()
 
-    @patch.dict(os.environ, {}, clear=True)
-    @patch("torch.cuda.is_available", return_value=True)
-    def test_cuda_available(self, mock_cuda: MagicMock) -> None:
-        """Should return cuda when CUDA is available."""
+    @pytest.mark.parametrize(
+        "cuda_available,mps_available,expected",
+        [
+            pytest.param(True, True, "cuda", id="cuda-wins-over-mps"),
+            pytest.param(False, True, "mps", id="mps-fallback"),
+            pytest.param(False, False, "cpu", id="cpu-fallback"),
+        ],
+    )
+    def test_auto_detect_device(
+        self,
+        cuda_available: bool,
+        mps_available: bool,
+        expected: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Should auto-detect best available device."""
         from image_search_service.core.device import clear_device_cache, get_device
 
-        clear_device_cache()
-        assert get_device() == "cuda"
-
-    @patch.dict(os.environ, {}, clear=True)
-    @patch("torch.cuda.is_available", return_value=False)
-    def test_mps_fallback(self, mock_cuda: MagicMock) -> None:
-        """Should return mps when CUDA unavailable but MPS available."""
-        from image_search_service.core.device import clear_device_cache, get_device
-
+        monkeypatch.delenv("DEVICE", raising=False)
+        monkeypatch.delenv("FORCE_CPU", raising=False)
         clear_device_cache()
 
-        # Mock MPS availability
-        with patch("torch.backends.mps.is_available", return_value=True):
-            assert get_device() == "mps"
-
-    @patch.dict(os.environ, {}, clear=True)
-    @patch("torch.cuda.is_available", return_value=False)
-    def test_cpu_fallback(self, mock_cuda: MagicMock) -> None:
-        """Should return cpu when no GPU available."""
-        from image_search_service.core.device import clear_device_cache, get_device
-
-        clear_device_cache()
-
-        # Mock MPS as unavailable
-        with patch("torch.backends.mps.is_available", return_value=False):
-            assert get_device() == "cpu"
+        with (
+            patch("torch.cuda.is_available", return_value=cuda_available),
+            patch("torch.backends.mps.is_available", return_value=mps_available),
+        ):
+            assert get_device() == expected
 
     @patch.dict(os.environ, {"DEVICE": "cpu"})
     def test_device_env_override(self) -> None:
@@ -77,60 +72,53 @@ class TestGetDevice:
         clear_device_cache()
         assert get_device() == "cuda"
 
-    @patch.dict(os.environ, {"FORCE_CPU": "true"})
-    @patch("torch.cuda.is_available", return_value=True)
-    def test_force_cpu_true(self, mock_cuda: MagicMock) -> None:
-        """Should force CPU when FORCE_CPU=true even if CUDA available."""
-        from image_search_service.core.device import clear_device_cache, get_device
-
-        clear_device_cache()
-        assert get_device() == "cpu"
-
-    @patch.dict(os.environ, {"FORCE_CPU": "1"})
-    def test_force_cpu_one(self) -> None:
-        """Should force CPU when FORCE_CPU=1."""
-        from image_search_service.core.device import clear_device_cache, get_device
-
-        clear_device_cache()
-        assert get_device() == "cpu"
-
-    @patch.dict(os.environ, {"FORCE_CPU": "yes"})
-    def test_force_cpu_yes(self) -> None:
-        """Should force CPU when FORCE_CPU=yes."""
-        from image_search_service.core.device import clear_device_cache, get_device
-
-        clear_device_cache()
-        assert get_device() == "cpu"
-
-    @patch.dict(os.environ, {"DEVICE": "invalid_device"})
-    def test_invalid_device_raises(self) -> None:
-        """Should raise ValueError for invalid device."""
-        from image_search_service.core.device import clear_device_cache, get_device
-
-        clear_device_cache()
-        with pytest.raises(ValueError, match="Invalid DEVICE"):
-            get_device()
-
-    @patch.dict(os.environ, {"DEVICE": "cuda:5"})
-    @patch("torch.cuda.is_available", return_value=True)
-    @patch("torch.cuda.device_count", return_value=2)
-    def test_invalid_cuda_device_id_raises(
-        self, mock_count: MagicMock, mock_cuda: MagicMock
+    @pytest.mark.parametrize(
+        "force_cpu_value",
+        [
+            pytest.param("true", id="true"),
+            pytest.param("1", id="one"),
+            pytest.param("yes", id="yes"),
+        ],
+    )
+    def test_force_cpu(
+        self, force_cpu_value: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Should raise ValueError for invalid CUDA device ID."""
+        """Should force CPU when FORCE_CPU is set to truthy value."""
         from image_search_service.core.device import clear_device_cache, get_device
 
+        monkeypatch.setenv("FORCE_CPU", force_cpu_value)
         clear_device_cache()
-        with pytest.raises(ValueError, match="Invalid CUDA device ID"):
-            get_device()
 
-    @patch.dict(os.environ, {"DEVICE": "cuda:abc"})
-    def test_invalid_cuda_device_format_raises(self) -> None:
-        """Should raise ValueError for invalid CUDA device format."""
+        with patch("torch.cuda.is_available", return_value=True):
+            assert get_device() == "cpu"
+
+    @pytest.mark.parametrize(
+        "device,error_match,cuda_available,device_count",
+        [
+            pytest.param("invalid_device", "Invalid DEVICE", False, 0, id="bad-prefix"),
+            pytest.param("cuda:5", "Invalid CUDA device ID", True, 2, id="bad-cuda-id"),
+            pytest.param("cuda:abc", "Invalid CUDA device ID", False, 0, id="bad-cuda-format"),
+        ],
+    )
+    def test_invalid_device_raises(
+        self,
+        device: str,
+        error_match: str,
+        cuda_available: bool,
+        device_count: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Should raise ValueError for invalid device specifications."""
         from image_search_service.core.device import clear_device_cache, get_device
 
+        monkeypatch.setenv("DEVICE", device)
         clear_device_cache()
-        with pytest.raises(ValueError, match="Invalid CUDA device ID"):
+
+        with (
+            patch("torch.cuda.is_available", return_value=cuda_available),
+            patch("torch.cuda.device_count", return_value=device_count),
+            pytest.raises(ValueError, match=error_match),
+        ):
             get_device()
 
     @patch.dict(os.environ, {}, clear=True)
@@ -277,76 +265,44 @@ class TestGetOnnxProviders:
         # Should at least have CPU provider
         assert "CPUExecutionProvider" in providers
 
-    @patch("onnxruntime.get_available_providers")
-    def test_priority_order_cuda_coreml(self, mock_providers: MagicMock) -> None:
+    @pytest.mark.parametrize(
+        "available,expected",
+        [
+            pytest.param(
+                ["CPUExecutionProvider", "CUDAExecutionProvider", "CoreMLExecutionProvider"],
+                ["CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"],
+                id="cuda-coreml-cpu",
+            ),
+            pytest.param(
+                ["CPUExecutionProvider", "CUDAExecutionProvider"],
+                ["CUDAExecutionProvider", "CPUExecutionProvider"],
+                id="cuda-cpu",
+            ),
+            pytest.param(
+                ["CPUExecutionProvider", "CoreMLExecutionProvider"],
+                ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+                id="coreml-cpu",
+            ),
+            pytest.param(
+                ["CPUExecutionProvider"],
+                ["CPUExecutionProvider"],
+                id="cpu-only",
+            ),
+        ],
+    )
+    def test_provider_priority_order(
+        self, available: list[str], expected: list[str]
+    ) -> None:
         """Should return providers in priority order (CUDA > CoreML > CPU)."""
         from image_search_service.core.device import get_onnx_providers
 
-        mock_providers.return_value = [
-            "CPUExecutionProvider",
-            "CUDAExecutionProvider",
-            "CoreMLExecutionProvider",
-        ]
-
-        providers = get_onnx_providers()
-
-        # CUDA should come before CoreML, CoreML before CPU
-        cuda_idx = providers.index("CUDAExecutionProvider")
-        coreml_idx = providers.index("CoreMLExecutionProvider")
-        cpu_idx = providers.index("CPUExecutionProvider")
-
-        assert cuda_idx < coreml_idx < cpu_idx
-
-    @patch("onnxruntime.get_available_providers")
-    def test_priority_order_cuda_only(self, mock_providers: MagicMock) -> None:
-        """Should return CUDA before CPU when CoreML unavailable."""
-        from image_search_service.core.device import get_onnx_providers
-
-        mock_providers.return_value = [
-            "CPUExecutionProvider",
-            "CUDAExecutionProvider",
-        ]
-
-        providers = get_onnx_providers()
-
-        assert providers == [
-            "CUDAExecutionProvider",
-            "CPUExecutionProvider",
-        ]
-
-    @patch("onnxruntime.get_available_providers")
-    def test_priority_order_coreml_only(self, mock_providers: MagicMock) -> None:
-        """Should return CoreML before CPU when CUDA unavailable."""
-        from image_search_service.core.device import get_onnx_providers
-
-        mock_providers.return_value = [
-            "CPUExecutionProvider",
-            "CoreMLExecutionProvider",
-        ]
-
-        providers = get_onnx_providers()
-
-        assert providers == [
-            "CoreMLExecutionProvider",
-            "CPUExecutionProvider",
-        ]
-
-    @patch("onnxruntime.get_available_providers")
-    def test_cpu_only(self, mock_providers: MagicMock) -> None:
-        """Should return only CPU when no GPU providers available."""
-        from image_search_service.core.device import get_onnx_providers
-
-        mock_providers.return_value = ["CPUExecutionProvider"]
-
-        providers = get_onnx_providers()
-
-        assert providers == ["CPUExecutionProvider"]
+        with patch("onnxruntime.get_available_providers", return_value=available):
+            assert get_onnx_providers() == expected
 
     def test_onnxruntime_not_installed(self) -> None:
         """Should return CPU provider when onnxruntime not installed."""
         from image_search_service.core.device import get_onnx_providers
 
-        # Mock ImportError by patching the import inside get_onnx_providers
         with patch(
             "builtins.__import__", side_effect=ImportError("No module named 'onnxruntime'")
         ):
@@ -357,55 +313,27 @@ class TestGetOnnxProviders:
 class TestIsAppleSilicon:
     """Tests for is_apple_silicon() function."""
 
-    @patch("platform.system", return_value="Darwin")
-    @patch("platform.machine", return_value="arm64")
-    def test_apple_silicon_detected(
-        self, mock_machine: MagicMock, mock_system: MagicMock
+    @pytest.mark.parametrize(
+        "system,machine,expected",
+        [
+            pytest.param("Darwin", "arm64", True, id="apple-silicon"),
+            pytest.param("Darwin", "x86_64", False, id="intel-mac"),
+            pytest.param("Linux", "x86_64", False, id="linux-x86"),
+            pytest.param("Linux", "arm64", False, id="linux-arm64"),
+            pytest.param("Windows", "AMD64", False, id="windows"),
+        ],
+    )
+    def test_is_apple_silicon(
+        self, system: str, machine: str, expected: bool
     ) -> None:
-        """Should return True on Apple Silicon."""
+        """Should detect Apple Silicon based on platform and architecture."""
         from image_search_service.core.device import is_apple_silicon
 
-        assert is_apple_silicon() is True
-
-    @patch("platform.system", return_value="Darwin")
-    @patch("platform.machine", return_value="x86_64")
-    def test_macos_intel_not_apple_silicon(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ) -> None:
-        """Should return False on Intel Mac."""
-        from image_search_service.core.device import is_apple_silicon
-
-        assert is_apple_silicon() is False
-
-    @patch("platform.system", return_value="Linux")
-    @patch("platform.machine", return_value="x86_64")
-    def test_linux_not_apple_silicon(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ) -> None:
-        """Should return False on Linux."""
-        from image_search_service.core.device import is_apple_silicon
-
-        assert is_apple_silicon() is False
-
-    @patch("platform.system", return_value="Linux")
-    @patch("platform.machine", return_value="arm64")
-    def test_linux_arm64_not_apple_silicon(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ) -> None:
-        """Should return False on Linux ARM64 (not macOS)."""
-        from image_search_service.core.device import is_apple_silicon
-
-        assert is_apple_silicon() is False
-
-    @patch("platform.system", return_value="Windows")
-    @patch("platform.machine", return_value="AMD64")
-    def test_windows_not_apple_silicon(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ) -> None:
-        """Should return False on Windows."""
-        from image_search_service.core.device import is_apple_silicon
-
-        assert is_apple_silicon() is False
+        with (
+            patch("platform.system", return_value=system),
+            patch("platform.machine", return_value=machine),
+        ):
+            assert is_apple_silicon() is expected
 
 
 class TestClearDeviceCache:

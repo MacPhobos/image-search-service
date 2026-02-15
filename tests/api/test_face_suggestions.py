@@ -6,63 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qdrant_client.models import ScoredPoint
 
-
-# Fixtures for face suggestion tests
-@pytest.fixture
-async def mock_image_asset(db_session):
-    """Create a mock ImageAsset in the database."""
-    from image_search_service.db.models import ImageAsset, TrainingStatus
-
-    asset = ImageAsset(
-        path="/test/images/photo.jpg",
-        training_status=TrainingStatus.PENDING.value,
-        width=640,
-        height=480,
-        file_size=102400,
-        mime_type="image/jpeg",
-    )
-    db_session.add(asset)
-    await db_session.commit()
-    await db_session.refresh(asset)
-    return asset
-
-
-@pytest.fixture
-async def mock_face_instance(db_session, mock_image_asset):
-    """Create a mock FaceInstance in the database."""
-    from image_search_service.db.models import FaceInstance
-
-    face = FaceInstance(
-        id=uuid.uuid4(),
-        asset_id=mock_image_asset.id,
-        bbox_x=100,
-        bbox_y=150,
-        bbox_w=80,
-        bbox_h=80,
-        detection_confidence=0.95,
-        quality_score=0.75,
-        qdrant_point_id=uuid.uuid4(),
-    )
-    db_session.add(face)
-    await db_session.commit()
-    await db_session.refresh(face)
-    return face
-
-
-@pytest.fixture
-async def mock_person(db_session):
-    """Create a mock Person in the database."""
-    from image_search_service.db.models import Person, PersonStatus
-
-    person = Person(
-        id=uuid.uuid4(),
-        name="Test Person",
-        status=PersonStatus.ACTIVE.value,
-    )
-    db_session.add(person)
-    await db_session.commit()
-    await db_session.refresh(person)
-    return person
+# mock_image_asset, mock_face_instance, mock_person from root conftest.py
 
 
 @pytest.fixture

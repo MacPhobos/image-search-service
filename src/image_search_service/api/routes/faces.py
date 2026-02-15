@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session as SyncSession
 
 if TYPE_CHECKING:
-    from image_search_service.faces.clusterer import FaceClusterer
     from image_search_service.vector.face_qdrant import FaceQdrantClient
 
 from image_search_service.api.face_schemas import (
@@ -86,30 +85,6 @@ router = APIRouter(prefix="/faces", tags=["Faces"])
 
 
 # ============ Dependencies ============
-
-
-def get_face_clusterer_dep(
-    sync_db: SyncSession = Depends(get_sync_db),
-    min_cluster_size: int = 5,
-) -> "FaceClusterer":
-    """Dependency for getting a configured FaceClusterer instance.
-
-    Args:
-        sync_db: Synchronous database session
-        min_cluster_size: Minimum cluster size for HDBSCAN
-
-    Returns:
-        Configured FaceClusterer instance with injected dependencies
-    """
-    from image_search_service.faces.clusterer import get_face_clusterer
-    from image_search_service.vector.face_qdrant import get_face_qdrant_client
-
-    qdrant_client = get_face_qdrant_client()
-    return get_face_clusterer(
-        db_session=sync_db,
-        qdrant_client=qdrant_client,
-        min_cluster_size=min_cluster_size,
-    )
 
 
 # ============ Cluster Endpoints ============

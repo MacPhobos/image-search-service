@@ -61,19 +61,5 @@ def get_queue(priority: str = QUEUE_NORMAL) -> Queue:
     return _queues[priority]
 
 
-def get_all_queues() -> list[Queue]:
-    """Get all queues in priority order.
-
-    Returns:
-        List of Queue instances ordered by priority (high to low)
-    """
-    return [
-        get_queue(QUEUE_HIGH),
-        get_queue(QUEUE_NORMAL),
-        get_queue(QUEUE_LOW),
-        get_queue(QUEUE_DEFAULT),
-    ]
-
-
 if __name__ == "__main__":
     main()

@@ -20,201 +20,184 @@ from image_search_service.services.temporal_service import (
 class TestClassifyAgeEra:
     """Tests for age era classification."""
 
-    def test_infant_age(self):
-        assert classify_age_era(2) == AgeEraBucket.INFANT
-
-    def test_child_age(self):
-        assert classify_age_era(8) == AgeEraBucket.CHILD
-
-    def test_teen_age(self):
-        assert classify_age_era(15) == AgeEraBucket.TEEN
-
-    def test_young_adult_age(self):
-        assert classify_age_era(25) == AgeEraBucket.YOUNG_ADULT
-
-    def test_adult_age(self):
-        assert classify_age_era(45) == AgeEraBucket.ADULT
-
-    def test_senior_age(self):
-        assert classify_age_era(65) == AgeEraBucket.SENIOR
-
-    def test_none_age(self):
-        assert classify_age_era(None) is None
-
-    def test_boundary_infant_child(self):
-        # Test exact boundary between infant (<=3) and child (4-12)
-        assert classify_age_era(3) == AgeEraBucket.INFANT
-        assert classify_age_era(4) == AgeEraBucket.CHILD
-
-    def test_boundary_child_teen(self):
-        # Test exact boundary between child (4-12) and teen (13-19)
-        assert classify_age_era(12) == AgeEraBucket.CHILD
-        assert classify_age_era(13) == AgeEraBucket.TEEN
-
-    def test_boundary_teen_young_adult(self):
-        # Test exact boundary between teen (13-19) and young_adult (20-35)
-        assert classify_age_era(19) == AgeEraBucket.TEEN
-        assert classify_age_era(20) == AgeEraBucket.YOUNG_ADULT
-
-    def test_boundary_young_adult_adult(self):
-        # Test exact boundary between young_adult (20-35) and adult (36-55)
-        assert classify_age_era(35) == AgeEraBucket.YOUNG_ADULT
-        assert classify_age_era(36) == AgeEraBucket.ADULT
-
-    def test_boundary_adult_senior(self):
-        # Test exact boundary between adult (36-55) and senior (56+)
-        assert classify_age_era(55) == AgeEraBucket.ADULT
-        assert classify_age_era(56) == AgeEraBucket.SENIOR
-
-    def test_zero_age(self):
-        assert classify_age_era(0) == AgeEraBucket.INFANT
-
-    def test_very_old_age(self):
-        assert classify_age_era(100) == AgeEraBucket.SENIOR
+    @pytest.mark.parametrize(
+        "age,expected",
+        [
+            pytest.param(0, AgeEraBucket.INFANT, id="zero-age"),
+            pytest.param(2, AgeEraBucket.INFANT, id="infant"),
+            pytest.param(3, AgeEraBucket.INFANT, id="infant-upper-bound"),
+            pytest.param(4, AgeEraBucket.CHILD, id="child-lower-bound"),
+            pytest.param(8, AgeEraBucket.CHILD, id="child"),
+            pytest.param(12, AgeEraBucket.CHILD, id="child-upper-bound"),
+            pytest.param(13, AgeEraBucket.TEEN, id="teen-lower-bound"),
+            pytest.param(15, AgeEraBucket.TEEN, id="teen"),
+            pytest.param(19, AgeEraBucket.TEEN, id="teen-upper-bound"),
+            pytest.param(20, AgeEraBucket.YOUNG_ADULT, id="young-adult-lower-bound"),
+            pytest.param(25, AgeEraBucket.YOUNG_ADULT, id="young-adult"),
+            pytest.param(35, AgeEraBucket.YOUNG_ADULT, id="young-adult-upper-bound"),
+            pytest.param(36, AgeEraBucket.ADULT, id="adult-lower-bound"),
+            pytest.param(45, AgeEraBucket.ADULT, id="adult"),
+            pytest.param(55, AgeEraBucket.ADULT, id="adult-upper-bound"),
+            pytest.param(56, AgeEraBucket.SENIOR, id="senior-lower-bound"),
+            pytest.param(65, AgeEraBucket.SENIOR, id="senior"),
+            pytest.param(100, AgeEraBucket.SENIOR, id="very-old"),
+            pytest.param(None, None, id="none-age"),
+        ],
+    )
+    def test_classify_age_era(self, age, expected):
+        assert classify_age_era(age) == expected
 
 
 class TestGetEraAgeRange:
     """Tests for getting age range for era buckets."""
 
-    def test_infant_range(self):
-        min_age, max_age = get_era_age_range(AgeEraBucket.INFANT)
-        assert min_age == 0
-        assert max_age == 3
-
-    def test_child_range(self):
-        min_age, max_age = get_era_age_range(AgeEraBucket.CHILD)
-        assert min_age == 4
-        assert max_age == 12
-
-    def test_teen_range(self):
-        min_age, max_age = get_era_age_range(AgeEraBucket.TEEN)
-        assert min_age == 13
-        assert max_age == 19
-
-    def test_young_adult_range(self):
-        min_age, max_age = get_era_age_range(AgeEraBucket.YOUNG_ADULT)
-        assert min_age == 20
-        assert max_age == 35
-
-    def test_adult_range(self):
-        min_age, max_age = get_era_age_range(AgeEraBucket.ADULT)
-        assert min_age == 36
-        assert max_age == 55
-
-    def test_senior_range(self):
-        min_age, max_age = get_era_age_range(AgeEraBucket.SENIOR)
-        assert min_age == 56
-        assert max_age == 120
+    @pytest.mark.parametrize(
+        "era,expected_min,expected_max",
+        [
+            pytest.param(AgeEraBucket.INFANT, 0, 3, id="infant"),
+            pytest.param(AgeEraBucket.CHILD, 4, 12, id="child"),
+            pytest.param(AgeEraBucket.TEEN, 13, 19, id="teen"),
+            pytest.param(AgeEraBucket.YOUNG_ADULT, 20, 35, id="young-adult"),
+            pytest.param(AgeEraBucket.ADULT, 36, 55, id="adult"),
+            pytest.param(AgeEraBucket.SENIOR, 56, 120, id="senior"),
+        ],
+    )
+    def test_get_era_age_range(self, era, expected_min, expected_max):
+        min_age, max_age = get_era_age_range(era)
+        assert min_age == expected_min
+        assert max_age == expected_max
 
 
 class TestExtractDecade:
     """Tests for decade extraction from timestamps."""
 
-    def test_1990s(self):
-        assert extract_decade_from_timestamp(datetime(1995, 6, 15)) == "1990s"
-
-    def test_2000s(self):
-        assert extract_decade_from_timestamp(datetime(2005, 1, 1)) == "2000s"
-
-    def test_2020s(self):
-        assert extract_decade_from_timestamp(datetime(2024, 12, 31)) == "2020s"
-
-    def test_none_timestamp(self):
-        assert extract_decade_from_timestamp(None) is None
-
-    def test_decade_boundaries(self):
-        # Test exact decade boundaries
-        assert extract_decade_from_timestamp(datetime(1999, 12, 31)) == "1990s"
-        assert extract_decade_from_timestamp(datetime(2000, 1, 1)) == "2000s"
-        assert extract_decade_from_timestamp(datetime(2009, 12, 31)) == "2000s"
-        assert extract_decade_from_timestamp(datetime(2010, 1, 1)) == "2010s"
-
-    def test_historical_decades(self):
-        assert extract_decade_from_timestamp(datetime(1980, 5, 10)) == "1980s"
-        assert extract_decade_from_timestamp(datetime(1970, 3, 25)) == "1970s"
+    @pytest.mark.parametrize(
+        "timestamp,expected",
+        [
+            pytest.param(datetime(1970, 3, 25), "1970s", id="1970s"),
+            pytest.param(datetime(1980, 5, 10), "1980s", id="1980s"),
+            pytest.param(datetime(1995, 6, 15), "1990s", id="1990s"),
+            pytest.param(datetime(1999, 12, 31), "1990s", id="1990s-end"),
+            pytest.param(datetime(2000, 1, 1), "2000s", id="2000s-start"),
+            pytest.param(datetime(2005, 1, 1), "2000s", id="2000s"),
+            pytest.param(datetime(2009, 12, 31), "2000s", id="2000s-end"),
+            pytest.param(datetime(2010, 1, 1), "2010s", id="2010s-start"),
+            pytest.param(datetime(2024, 12, 31), "2020s", id="2020s"),
+            pytest.param(None, None, id="none"),
+        ],
+    )
+    def test_extract_decade(self, timestamp, expected):
+        assert extract_decade_from_timestamp(timestamp) == expected
 
 
 class TestTemporalQualityScore:
     """Tests for temporal quality score computation."""
 
-    def test_base_quality_only(self):
-        score = compute_temporal_quality_score(0.8)
-        assert score == pytest.approx(0.48)  # 60% of 0.8
-
-    def test_frontal_bonus(self):
-        score = compute_temporal_quality_score(0.7, pose="frontal")
-        assert score == pytest.approx(0.62)  # (0.7 * 0.6) + 0.2
-
-    def test_large_bbox_bonus(self):
-        score = compute_temporal_quality_score(0.7, bbox_area=15000)
-        assert score == pytest.approx(0.52)  # (0.7 * 0.6) + 0.1
-
-    def test_age_confidence_bonus(self):
-        score = compute_temporal_quality_score(0.7, age_confidence=0.9)
-        assert score == pytest.approx(0.51)  # (0.7 * 0.6) + (0.9 * 0.1)
-
-    def test_all_bonuses(self):
-        score = compute_temporal_quality_score(
-            0.8, pose="frontal", bbox_area=15000, age_confidence=1.0
-        )
-        assert score == pytest.approx(0.88)  # (0.8 * 0.6) + 0.2 + 0.1 + 0.1
-
-    def test_max_score_capped(self):
-        score = compute_temporal_quality_score(
-            1.0, pose="frontal", bbox_area=20000, age_confidence=1.0
-        )
+    @pytest.mark.parametrize(
+        "kwargs,expected",
+        [
+            pytest.param(
+                {"base_quality": 0.8},
+                0.48,
+                id="base-only",
+            ),
+            pytest.param(
+                {"base_quality": 0.7, "pose": "frontal"},
+                0.62,
+                id="frontal-bonus",
+            ),
+            pytest.param(
+                {"base_quality": 0.7, "bbox_area": 15000},
+                0.52,
+                id="large-bbox-bonus",
+            ),
+            pytest.param(
+                {"base_quality": 0.7, "age_confidence": 0.9},
+                0.51,
+                id="age-confidence-bonus",
+            ),
+            pytest.param(
+                {"base_quality": 0.8, "pose": "frontal", "bbox_area": 15000, "age_confidence": 1.0},
+                0.88,
+                id="all-bonuses",
+            ),
+            pytest.param(
+                {"base_quality": 1.0, "pose": "frontal", "bbox_area": 20000, "age_confidence": 1.0},
+                1.0,
+                id="max-score-capped",
+            ),
+            pytest.param(
+                {"base_quality": None, "pose": "frontal"},
+                0.2,
+                id="none-base-quality",
+            ),
+            pytest.param(
+                {"base_quality": 0.7, "bbox_area": 5000},
+                0.42,
+                id="small-bbox-no-bonus",
+            ),
+            pytest.param(
+                {"base_quality": 0.7, "pose": "profile"},
+                0.42,
+                id="non-frontal-no-bonus",
+            ),
+            pytest.param(
+                {"base_quality": 0.0},
+                0.0,
+                id="zero-quality",
+            ),
+        ],
+    )
+    def test_temporal_quality_score(self, kwargs, expected):
+        score = compute_temporal_quality_score(**kwargs)
+        assert score == pytest.approx(expected)
         assert score <= 1.0
-        assert score == 1.0
-
-    def test_none_base_quality(self):
-        score = compute_temporal_quality_score(None, pose="frontal")
-        assert score == pytest.approx(0.2)  # Only frontal bonus
-
-    def test_small_bbox_no_bonus(self):
-        score = compute_temporal_quality_score(0.7, bbox_area=5000)
-        assert score == pytest.approx(0.42)  # No bbox bonus
-
-    def test_non_frontal_pose(self):
-        score = compute_temporal_quality_score(0.7, pose="profile")
-        assert score == pytest.approx(0.42)  # No pose bonus
-
-    def test_zero_quality(self):
-        score = compute_temporal_quality_score(0.0)
-        assert score == 0.0
 
 
 class TestCoverageGaps:
     """Tests for coverage gap detection."""
 
-    def test_full_coverage(self):
-        all_eras = {e.value for e in AgeEraBucket}
-        assert get_coverage_gaps(all_eras) == []
-
-    def test_missing_infant(self):
-        existing = {"child", "teen", "young_adult", "adult", "senior"}
+    @pytest.mark.parametrize(
+        "existing,expected_gaps",
+        [
+            pytest.param(
+                {e.value for e in AgeEraBucket},
+                [],
+                id="full-coverage",
+            ),
+            pytest.param(
+                {"child", "teen", "young_adult", "adult", "senior"},
+                [AgeEraBucket.INFANT],
+                id="missing-infant",
+            ),
+            pytest.param(
+                {"child", "adult"},
+                [
+                    AgeEraBucket.INFANT,
+                    AgeEraBucket.TEEN,
+                    AgeEraBucket.YOUNG_ADULT,
+                    AgeEraBucket.SENIOR,
+                ],
+                id="missing-multiple",
+            ),
+            pytest.param(
+                set(),
+                [
+                    AgeEraBucket.INFANT,
+                    AgeEraBucket.CHILD,
+                    AgeEraBucket.TEEN,
+                    AgeEraBucket.YOUNG_ADULT,
+                    AgeEraBucket.ADULT,
+                    AgeEraBucket.SENIOR,
+                ],
+                id="empty-coverage",
+            ),
+        ],
+    )
+    def test_coverage_gaps(self, existing, expected_gaps):
         gaps = get_coverage_gaps(existing)
-        assert AgeEraBucket.INFANT in gaps
-        assert len(gaps) == 1
-
-    def test_missing_multiple(self):
-        existing = {"child", "adult"}
-        gaps = get_coverage_gaps(existing)
-        assert len(gaps) == 4
-        assert AgeEraBucket.INFANT in gaps
-        assert AgeEraBucket.TEEN in gaps
-        assert AgeEraBucket.YOUNG_ADULT in gaps
-        assert AgeEraBucket.SENIOR in gaps
-
-    def test_empty_coverage(self):
-        gaps = get_coverage_gaps(set())
-        assert len(gaps) == 6
-        # Verify all eras are returned
-        assert AgeEraBucket.INFANT in gaps
-        assert AgeEraBucket.CHILD in gaps
-        assert AgeEraBucket.TEEN in gaps
-        assert AgeEraBucket.YOUNG_ADULT in gaps
-        assert AgeEraBucket.ADULT in gaps
-        assert AgeEraBucket.SENIOR in gaps
+        assert set(gaps) == set(expected_gaps)
+        assert len(gaps) == len(expected_gaps)
 
 
 class TestEstimatePersonBirthYear:

@@ -5,24 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
-@pytest.fixture
-async def mock_image_asset(db_session):
-    """Create a mock ImageAsset in the database."""
-    from image_search_service.db.models import ImageAsset, TrainingStatus
-
-    asset = ImageAsset(
-        path="/test/images/photo.jpg",
-        training_status=TrainingStatus.PENDING.value,
-        width=640,
-        height=480,
-        file_size=102400,
-        mime_type="image/jpeg",
-    )
-    db_session.add(asset)
-    await db_session.commit()
-    await db_session.refresh(asset)
-    return asset
+# mock_image_asset from root conftest.py
+# mock_person and mock_face_instance kept local (variants with person_id assignment)
 
 
 @pytest.fixture

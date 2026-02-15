@@ -584,51 +584,6 @@ async def test_cleanup_orphaned_suggestions_job_moved_source(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_orphaned_suggestions_job_preserves_valid(
-    db_session, face_assigned_to_person_a, unassigned_face, person_a
-):
-    """Test cleanup job does NOT expire valid pending suggestions.
-
-    Setup: Create suggestion where source face still has matching person_id
-    - Run cleanup job
-    - Assert: Valid suggestion remains PENDING
-    """
-    from image_search_service.queue.face_jobs import cleanup_orphaned_suggestions_job
-
-    # Create valid suggestion (source face still assigned to suggested person)
-    suggestion = await create_suggestion(
-        db_session,
-        face_instance_id=unassigned_face.id,
-        suggested_person_id=person_a.id,  # Suggests Person A
-        source_face_id=face_assigned_to_person_a.id,  # Source is assigned to Person A
-        status=FaceSuggestionStatus.PENDING.value,
-    )
-
-    # Verify source face is still assigned to person_a
-    await db_session.refresh(face_assigned_to_person_a)
-    assert face_assigned_to_person_a.person_id == person_a.id
-
-    # Run cleanup job
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor() as executor:
-        result = await asyncio.get_event_loop().run_in_executor(
-            executor, cleanup_orphaned_suggestions_job
-        )
-
-    assert result["status"] == "completed"
-    assert result["expired_count"] == 0  # No orphaned suggestions
-
-    # Refresh suggestion
-    await db_session.refresh(suggestion)
-
-    # Assert: Valid suggestion remains PENDING
-    assert suggestion.status == FaceSuggestionStatus.PENDING.value
-    assert suggestion.reviewed_at is None
-
-
-@pytest.mark.asyncio
 async def test_cleanup_orphaned_suggestions_job_handles_multiple(
     db_session, image_asset, person_a, person_b
 ):

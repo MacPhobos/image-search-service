@@ -1,4 +1,4 @@
-.PHONY: help dev api lint format typecheck test db-up db-down migrate makemigrations worker ingest \
+.PHONY: help dev api lint format typecheck test test-serial test-fast test-failed-first test-profile test-affected test-cov db-up db-down migrate makemigrations worker ingest \
 	bootstrap-qdrant verify-qdrant exif-backfill backfill-hashes \
 	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection \
 	faces-cluster-dual faces-train-matching faces-pipeline faces-pipeline-dual faces-pipeline-full
@@ -19,8 +19,26 @@ format: ## Format code with ruff
 typecheck: ## Run mypy type checker
 	uv run mypy src/
 
-test: ## Run pytest tests (fast SQLite tier only)
+test: ## Run pytest tests (parallel, randomized, with timeout)
 	uv run pytest
+
+test-serial: ## Run pytest serially (for debugging test isolation issues)
+	uv run pytest -n0 -p no:randomly --timeout=60
+
+test-fast: ## Re-run only previously failed tests (serial, for quick iteration)
+	uv run pytest --lf -x -n0 --timeout=60
+
+test-failed-first: ## Run failed tests first, then all remaining tests
+	uv run pytest --ff
+
+test-profile: ## Show slowest 20 tests (serial, for profiling)
+	uv run pytest --durations=20 --durations-min=0.5 -n0 -p no:randomly --timeout=60
+
+test-affected: ## Run only tests affected by recent changes (requires testmon)
+	uv run pytest --testmon -n0 --timeout=60
+
+test-cov: ## Run tests with fast coverage collection
+	COVERAGE_CORE=sysmon uv run pytest --cov=image_search_service --cov-report=html -n0
 
 test-postgres: ## Run PostgreSQL integration tests (requires Docker)
 	@echo "Starting PostgreSQL integration tests (requires Docker)..."

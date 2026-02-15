@@ -242,14 +242,6 @@ class DirectoryScanResponse(BaseModel):
 # ============================================================================
 
 
-class RestartRequest(BaseModel):
-    """Request to restart training."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    failed_only: bool = Field(True, alias="failedOnly")
-
-
 class ControlResponse(BaseModel):
     """Response from control operation."""
 
