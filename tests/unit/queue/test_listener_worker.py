@@ -25,9 +25,19 @@ from image_search_service.queue.listener_worker import ListenerWorker
 
 @pytest.fixture
 def mock_redis():
-    """Create mock Redis connection."""
+    """Create mock Redis connection with properly configured connection pool.
+
+    The connection_pool.connection_kwargs must be a real dict (not MagicMock)
+    because RQ's Worker.__init__ calls:
+        connection.connection_pool.connection_kwargs.get('socket_timeout')
+
+    If it's a MagicMock, .get() returns another MagicMock (not None/int),
+    causing TypeError in socket_timeout comparison.
+    """
     redis = MagicMock()
     redis.ping.return_value = True
+    # Use a real dict for connection_kwargs so .get() returns None/int
+    redis.connection_pool.connection_kwargs = {'socket_timeout': 480}
     return redis
 
 
