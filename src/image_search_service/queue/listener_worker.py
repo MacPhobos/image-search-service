@@ -17,7 +17,9 @@ ARCHITECTURE
 """
 
 import gc
+import os
 import signal
+import socket
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -25,6 +27,8 @@ from typing import Any
 from redis import Redis
 from rq import Queue
 from rq.job import Job, JobStatus
+from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+from rq.worker import Worker as RQWorker
 
 from image_search_service.core.config import get_settings
 from image_search_service.core.device import get_device, get_device_info
@@ -56,6 +60,24 @@ class ListenerWorker:
         self.running = False
         self._gpu_initialized = False
         self._model_loaded = False
+
+        # Worker identification for RQ registration
+        self.worker_name = f"listener-{socket.gethostname()}-{os.getpid()}"
+        self.pid = os.getpid()
+        self.hostname = socket.gethostname()
+
+        # Create RQWorker instance for registration only (not for job execution)
+        # We still process jobs in-process, but this allows RQ monitoring tools
+        # to see the worker via Worker.all()
+        self._rq_worker = RQWorker(
+            queues=self.queues,
+            connection=self.connection,
+            name=self.worker_name,
+        )
+
+        # Track current job for monitoring
+        self._current_job: Job | None = None
+        self._is_busy = False
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -156,6 +178,96 @@ class ListenerWorker:
             self._model_loaded = False
             raise
 
+    def _register_birth(self) -> None:
+        """Register worker birth with Redis for RQ monitoring visibility.
+
+        Makes this worker visible to Worker.all() and monitoring tools.
+        Non-fatal if registration fails (worker can still process jobs).
+        """
+        try:
+            self._rq_worker.register_birth()  # type: ignore[no-untyped-call]
+            logger.info(f"✓ Worker registered: {self.worker_name}")
+            logger.debug(f"  PID: {self.pid}, Hostname: {self.hostname}")
+        except Exception as e:
+            logger.warning(f"Failed to register worker birth: {e}")
+
+    def _register_death(self) -> None:
+        """Unregister worker from Redis on shutdown.
+
+        Removes worker from Worker.all() listings.
+        Non-fatal if unregistration fails.
+        """
+        try:
+            self._rq_worker.register_death()  # type: ignore[no-untyped-call]
+            logger.info(f"✓ Worker unregistered: {self.worker_name}")
+        except Exception as e:
+            logger.warning(f"Failed to register worker death: {e}")
+
+    def _heartbeat(self) -> None:
+        """Send heartbeat to Redis to update last_heartbeat timestamp.
+
+        Allows monitoring tools to detect stale/dead workers.
+        Non-fatal if heartbeat fails.
+        """
+        try:
+            self._rq_worker.heartbeat()
+            logger.debug(f"Heartbeat sent for worker {self.worker_name}")
+        except Exception as e:
+            logger.debug(f"Heartbeat failed: {e}")
+
+    def _set_state(self, state: str) -> None:
+        """Update worker state in Redis (idle or busy).
+
+        Args:
+            state: Worker state ('idle' or 'busy')
+
+        Raises:
+            ValueError: If state is not 'idle' or 'busy'
+        """
+        if state not in ("idle", "busy"):
+            raise ValueError(f"Invalid worker state: {state} (expected 'idle' or 'busy')")
+
+        try:
+            self._rq_worker.set_state(state)
+            self._is_busy = state == "busy"
+            logger.debug(f"Worker state changed to: {state}")
+        except Exception as e:
+            logger.warning(f"Failed to set worker state to {state}: {e}")
+
+    def _set_current_job(self, job: Job | None) -> None:
+        """Track current job for monitoring visibility.
+
+        Args:
+            job: Current job being processed (or None if idle)
+        """
+        self._current_job = job
+        try:
+            job_id = job.id if job else None
+            self._rq_worker.set_current_job_id(job_id)
+            if job:
+                logger.debug(f"Current job set to: {job.id}")
+            else:
+                logger.debug("Current job cleared")
+        except Exception as e:
+            logger.warning(f"Failed to set current job: {e}")
+
+    def _cleanup_job_from_registries(self, job: Job) -> None:
+        """Remove job from all registries on worker shutdown.
+
+        Ensures interrupted jobs are cleaned up from StartedJobRegistry.
+        Idempotent and non-fatal.
+
+        Args:
+            job: Job to clean up
+        """
+        queue_name = job.origin or "default"
+        try:
+            started_registry = StartedJobRegistry(queue_name, connection=self.connection)
+            started_registry.remove(job)
+            logger.debug(f"Cleaned up job {job.id} from StartedJobRegistry")
+        except Exception as e:
+            logger.debug(f"Failed to cleanup job from registries: {e}")
+
     def _startup_checks(self) -> None:
         """Perform startup checks (device, libraries, etc)."""
         logger.info("=" * 70)
@@ -206,7 +318,7 @@ class ListenerWorker:
             if result is None:
                 return None
             job, _ = result
-            return job  # type: ignore[return-value]
+            return job
         except Exception as e:
             logger.warning(f"Error dequeuing from queues: {e}")
             return None
@@ -225,9 +337,24 @@ class ListenerWorker:
         """
         logger.info(f"Processing job {job.id} ({job.func_name})")
 
+        # Update worker state to busy and track current job
+        self._set_state("busy")
+        self._set_current_job(job)
+
+        # Get queue name for registry management
+        queue_name = job.origin or "default"
+
         try:
             job.set_status(JobStatus.STARTED)
             job.save()
+
+            # Add job to StartedJobRegistry for monitoring
+            try:
+                started_registry = StartedJobRegistry(queue_name, connection=self.connection)
+                started_registry.add(job, -1)  # -1 = no timeout
+            except Exception as e:
+                logger.warning(f"Failed to add job to StartedJobRegistry: {e}")
+
             start_time = time.time()
 
             # Execute the job function in main process
@@ -242,8 +369,21 @@ class ListenerWorker:
             job.ended_at = datetime.now(UTC)
             job.save()
 
+            # Move job from StartedJobRegistry to FinishedJobRegistry
+            try:
+                started_registry = StartedJobRegistry(queue_name, connection=self.connection)
+                started_registry.remove(job)
+                finished_registry = FinishedJobRegistry(queue_name, connection=self.connection)
+                finished_registry.add(job, -1)
+            except Exception as e:
+                logger.warning(f"Failed to update job registries on success: {e}")
+
             logger.info(f"✓ Job {job.id} completed successfully ({elapsed:.1f}s)")
             gc.collect()
+
+            # Clear current job and return to idle
+            self._set_current_job(None)
+            self._set_state("idle")
             return True
 
         except Exception as e:
@@ -255,12 +395,25 @@ class ListenerWorker:
             job.ended_at = datetime.now(UTC)
             job.save()
 
+            # Move job from StartedJobRegistry to FailedJobRegistry
+            try:
+                started_registry = StartedJobRegistry(queue_name, connection=self.connection)
+                started_registry.remove(job)
+                failed_registry = FailedJobRegistry(queue_name, connection=self.connection)
+                failed_registry.add(job, -1)
+            except Exception as reg_error:
+                logger.warning(f"Failed to update job registries on failure: {reg_error}")
+
             logger.error(
                 f"✗ Job {job.id} failed after {elapsed:.1f}s: {e}",
                 exc_info=True,
             )
 
             gc.collect()
+
+            # Clear current job and return to idle
+            self._set_current_job(None)
+            self._set_state("idle")
             return False
 
     def _handle_shutdown(self, signum: int, frame: Any) -> None:
@@ -287,6 +440,11 @@ class ListenerWorker:
         self._initialize_gpu()
         logger.info("")
         self._preload_embedding_model()
+        logger.info("")
+
+        # Register worker with Redis for monitoring visibility
+        self._register_birth()
+        self._set_state("idle")
 
         queue_names = [q.name for q in self.queues]
         logger.info("")
@@ -294,8 +452,18 @@ class ListenerWorker:
         logger.info("Processing jobs in main process (no fork/spawn)")
         logger.info("")
 
+        # Heartbeat tracking
+        last_heartbeat = time.time()
+        heartbeat_interval = 30.0  # Send heartbeat every 30 seconds
+
         try:
             while self.running:
+                # Send periodic heartbeat to Redis
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_interval:
+                    self._heartbeat()
+                    last_heartbeat = now
+
                 job = self._get_next_job()
 
                 if job:
@@ -306,7 +474,17 @@ class ListenerWorker:
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
         finally:
+            # Cleanup: ensure worker state is idle and current job is cleared
             logger.info("RQ Listener Worker shutting down")
+            self._set_state("idle")
+
+            # Cleanup interrupted job from registries if any
+            if self._current_job is not None:
+                self._cleanup_job_from_registries(self._current_job)
+                self._set_current_job(None)
+
+            # Unregister worker from Redis
+            self._register_death()
 
 
 def main() -> None:

@@ -133,14 +133,16 @@ class QueueService:
             finished_registry = FinishedJobRegistry(queue_name, connection=redis)
 
             count = queue.count
-            total_jobs += count
+            started_count = len(started_registry)
+            # Include both queued and started jobs in total count
+            total_jobs += count + started_count
 
             queues.append(
                 QueueSummary(
                     name=queue_name,
                     count=count,
                     isEmpty=queue.is_empty(),
-                    startedCount=len(started_registry),
+                    startedCount=started_count,
                     failedCount=len(failed_registry),
                     finishedCount=len(finished_registry),
                     scheduledCount=0,
