@@ -729,7 +729,7 @@ def detect_faces_for_session_job(
         try:
             from sqlalchemy import func
 
-            from image_search_service.db.models import FaceInstance, Person
+            from image_search_service.db.models import Person
             from image_search_service.queue.worker import get_redis
             from image_search_service.services.config_service import SyncConfigService
 
@@ -1716,7 +1716,7 @@ def find_more_centroid_suggestions_job(
     """
     import uuid as uuid_lib
 
-    from image_search_service.db.models import CentroidType, Person, PersonCentroid
+    from image_search_service.db.models import CentroidType, FaceInstance, Person, PersonCentroid
     from image_search_service.vector.centroid_qdrant import get_centroid_qdrant_client
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
@@ -1782,9 +1782,6 @@ def find_more_centroid_suggestions_job(
         if not centroid:
             # Compute centroid on-demand (sync operation)
             logger.info(f"[{job_id}] No active centroid found, computing...")
-
-            # Import sync centroid computation utilities
-            from image_search_service.db.models import FaceInstance
 
             # Get all face instances for this person
             faces_query = select(FaceInstance).where(FaceInstance.person_id == person_uuid)
