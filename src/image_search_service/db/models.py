@@ -953,6 +953,75 @@ class PersonCentroid(Base):
         )
 
 
+class StorageUploadStatus(str, Enum):
+    """Status enum for cloud storage upload records."""
+
+    PENDING = "pending"
+    UPLOADING = "uploading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class StorageUpload(Base):
+    """Tracks per-asset cloud storage upload status within a batch.
+
+    Each row represents one image asset being uploaded to a remote provider
+    (e.g., Google Drive) as part of a named batch export.  Batches are
+    idempotent: re-queuing the same (batch_id, asset_id) pair is a no-op.
+    """
+
+    __tablename__ = "storage_uploads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    asset_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("image_assets.id", ondelete="CASCADE"), nullable=False
+    )
+    person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("persons.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Remote storage metadata (populated after successful upload)
+    remote_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    remote_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="google_drive")
+
+    # Status tracking
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=StorageUploadStatus.PENDING.value
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    asset: Mapped["ImageAsset"] = relationship("ImageAsset")
+    person: Mapped["Person | None"] = relationship("Person")
+
+    __table_args__ = (
+        UniqueConstraint("batch_id", "asset_id", name="uq_storage_upload_batch_asset"),
+        Index("ix_storage_uploads_batch_id", "batch_id"),
+        Index("ix_storage_uploads_asset_id", "asset_id"),
+        Index("ix_storage_uploads_status", "status"),
+        Index("ix_storage_uploads_person_id", "person_id"),
+        Index("ix_storage_uploads_batch_status", "batch_id", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<StorageUpload(id={self.id}, batch_id={self.batch_id}, "
+            f"asset_id={self.asset_id}, status={self.status})>"
+        )
+
+
 class IgnoredDirectory(Base):
     """Directory marked as ignored (excluded from directory listings)."""
 
