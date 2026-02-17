@@ -275,6 +275,44 @@ class Settings(BaseSettings):
         description="Outlier trim threshold for 300+ faces (10% default)",
     )
 
+    # --- Google Drive Storage (optional, disabled by default) ---
+    google_drive_enabled: bool = Field(
+        default=False,
+        alias="GOOGLE_DRIVE_ENABLED",
+        description="Enable Google Drive storage integration",
+    )
+    google_drive_sa_json: str = Field(
+        default="",
+        alias="GOOGLE_DRIVE_SA_JSON",
+        description="Path to Google Drive service account JSON key file",
+    )
+    google_drive_root_id: str = Field(
+        default="",
+        alias="GOOGLE_DRIVE_ROOT_ID",
+        description="Google Drive folder ID shared with the service account (app root)",
+    )
+    google_drive_upload_batch_size: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        alias="GOOGLE_DRIVE_UPLOAD_BATCH_SIZE",
+        description="Number of photos per upload job chunk",
+    )
+    google_drive_path_cache_ttl: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+        alias="GOOGLE_DRIVE_PATH_CACHE_TTL",
+        description="TTL in seconds for path-to-ID resolution cache",
+    )
+    google_drive_path_cache_maxsize: int = Field(
+        default=1024,
+        ge=128,
+        le=10000,
+        alias="GOOGLE_DRIVE_PATH_CACHE_MAXSIZE",
+        description="Maximum entries in path-to-ID cache",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

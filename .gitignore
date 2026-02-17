@@ -112,3 +112,8 @@ yarn-error.log*
 
 # MCP Ticketer
 .mcp-ticketer/
+
+# Google Drive service account keys (NEVER commit)
+service-account*.json
+google-credentials*.json
+*-sa-key.json
