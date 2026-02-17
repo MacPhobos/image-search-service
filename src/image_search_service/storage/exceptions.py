@@ -51,9 +51,7 @@ class PathAmbiguousError(StorageError):
     def __init__(self, path: str, count: int) -> None:
         self.path = path
         self.count = count
-        super().__init__(
-            f"Ambiguous path '{path}': found {count} items with the same name"
-        )
+        super().__init__(f"Ambiguous path '{path}': found {count} items with the same name")
 
 
 class RateLimitError(StorageError):

@@ -28,6 +28,9 @@ dependencies = [
     "tqdm>=4.67.1",
     "python-multipart>=0.0.21",
     "httpx>=0.28.0",
+    "google-api-python-client>=2.190.0,<3.0.0",
+    "google-auth>=2.48.0,<3.0.0",
+    "google-auth-httplib2>=0.2.0,<1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +71,11 @@ disallow_untyped_defs = true
 module = ["rq.*", "qdrant_client.*", "open_clip.*", "torch.*", "PIL.*", "insightface.*", "onnxruntime.*", "cv2.*", "hdbscan.*", "tqdm.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["googleapiclient.*", "google.oauth2.*", "google.auth.*", "httplib2.*"]
+ignore_missing_imports = true
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
@@ -86,6 +94,7 @@ addopts = "-m 'not postgres' -n auto --dist worksteal --timeout=30 --durations=1
 [dependency-groups]
 dev = [
     "aiosqlite>=0.22.0",
+    "google-api-python-client-stubs>=1.26.0",
     "mypy>=1.19.1",
     "pillow>=12.0.0",
     "pytest>=9.0.2",

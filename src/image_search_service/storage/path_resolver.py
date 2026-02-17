@@ -171,9 +171,7 @@ class PathResolver:
         self._cache_maxsize = cache_maxsize
         self._cache_ttl = cache_ttl
         # Cache: (parent_id, child_name) -> (child_id, is_dir, timestamp)
-        self._cache: OrderedDict[
-            tuple[str, str], tuple[str, bool, float]
-        ] = OrderedDict()
+        self._cache: OrderedDict[tuple[str, str], tuple[str, bool, float]] = OrderedDict()
         self._lock = threading.Lock()
 
     @property
@@ -217,9 +215,7 @@ class PathResolver:
 
         return current_id
 
-    def cache_put(
-        self, parent_id: str, child_name: str, child_id: str, is_dir: bool
-    ) -> None:
+    def cache_put(self, parent_id: str, child_name: str, child_id: str, is_dir: bool) -> None:
         """Manually insert an entry into the cache.
 
         Useful after create_folder operations where we already know
