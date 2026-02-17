@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import threading
-import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -66,6 +65,11 @@ class TestNormalizePath:
 
     def test_single_slash_is_root(self) -> None:
         assert normalize_path("/") == "/"
+
+    def test_whitespace_only_segment_in_path_raises(self) -> None:
+        """Path like /a/   /b should raise ValueError."""
+        with pytest.raises(ValueError, match="whitespace-only"):
+            normalize_path("/a/   /b")
 
 
 class TestSanitizeFolderName:
@@ -161,20 +165,26 @@ class TestPathResolver:
         assert result == "file3"
 
     def test_cache_ttl_expiry(self) -> None:
+        """Cache entries expire after TTL using deterministic time mocking."""
         lookup: MagicMock = MagicMock(return_value=("child456", True))
-        resolver = PathResolver(
-            root_folder_id="root123",
-            lookup_fn=lookup,
-            cache_ttl=1,  # 1 second TTL for testing
-        )
-        resolver.resolve("/people")
-        assert lookup.call_count == 1
+        with patch("image_search_service.storage.path_resolver.monotonic") as mock_time:
+            mock_time.return_value = 100.0
+            resolver = PathResolver(
+                root_folder_id="root123",
+                lookup_fn=lookup,
+                cache_ttl=60,
+            )
+            resolver.resolve("/people")
+            assert lookup.call_count == 1
 
-        # Wait for TTL to expire
-        time.sleep(1.1)
+            # Same time -- should be cache hit
+            resolver.resolve("/people")
+            assert lookup.call_count == 1
 
-        resolver.resolve("/people")
-        assert lookup.call_count == 2  # Re-fetched after expiry
+            # Jump past TTL
+            mock_time.return_value = 161.0
+            resolver.resolve("/people")
+            assert lookup.call_count == 2  # Re-fetched after expiry
 
     def test_cache_maxsize_eviction(self) -> None:
         call_count = 0
@@ -298,3 +308,10 @@ class TestPathResolver:
         # This should be assignable to LookupFn
         fn: LookupFn = my_lookup
         assert callable(fn)
+
+    def test_multi_segment_resolution_from_fixture(
+        self, resolver_with_lookup: PathResolver
+    ) -> None:
+        """Verify full three-level path resolution using shared fixture."""
+        result = resolver_with_lookup.resolve("/people/John Doe/photo.jpg")
+        assert result == "file_photo"

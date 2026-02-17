@@ -185,11 +185,15 @@ class TestStorageBackendProtocol:
         assert not isinstance(incomplete, StorageBackend)
 
     def test_protocol_has_five_methods(self) -> None:
-        """StorageBackend defines exactly 5 methods."""
+        """StorageBackend defines exactly 5 protocol methods."""
+        expected = {"upload_file", "create_folder", "file_exists", "list_folder", "delete_file"}
+        # Check all expected methods exist
+        for method_name in expected:
+            assert hasattr(StorageBackend, method_name), f"Missing method: {method_name}"
+        # Check no extra public methods beyond protocol infrastructure
+        # vars() returns only attributes defined directly on the class (not inherited)
         protocol_methods = {
-            name
-            for name in dir(StorageBackend)
+            name for name in vars(StorageBackend)
             if not name.startswith("_")
         }
-        expected = {"upload_file", "create_folder", "file_exists", "list_folder", "delete_file"}
         assert protocol_methods == expected

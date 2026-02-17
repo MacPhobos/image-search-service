@@ -222,3 +222,39 @@ class TestValidateGoogleDriveConfig:
         with pytest.raises(ConfigurationError) as exc_info:
             validate_google_drive_config(settings)
         assert exc_info.value.field == "GOOGLE_DRIVE_SA_JSON"
+
+    def test_sa_file_invalid_json_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ConfigurationError when SA JSON file contains invalid JSON."""
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b"this is not valid json {{{")
+            sa_path = f.name
+        try:
+            monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true")
+            monkeypatch.setenv("GOOGLE_DRIVE_SA_JSON", sa_path)
+            monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "folder_abc123")
+            settings = Settings()
+
+            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_SA_JSON"):
+                validate_google_drive_config(settings)
+        finally:
+            os.unlink(sa_path)
+
+    def test_sa_file_wrong_type_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ConfigurationError when SA JSON file has wrong type field."""
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b'{"type": "authorized_user", "client_id": "foo"}')
+            sa_path = f.name
+        try:
+            monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true")
+            monkeypatch.setenv("GOOGLE_DRIVE_SA_JSON", sa_path)
+            monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "folder_abc123")
+            settings = Settings()
+
+            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_SA_JSON"):
+                validate_google_drive_config(settings)
+        finally:
+            os.unlink(sa_path)
