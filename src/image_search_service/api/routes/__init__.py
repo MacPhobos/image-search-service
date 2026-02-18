@@ -27,6 +27,7 @@ from image_search_service.api.routes.queues import (
     router as queues_router,
 )
 from image_search_service.api.routes.search import router as search_router
+from image_search_service.api.routes.storage import router as storage_router
 from image_search_service.api.routes.system import router as system_router
 from image_search_service.api.routes.training import router as training_router
 from image_search_service.api.routes.unknown_persons import (
@@ -63,6 +64,7 @@ api_v1_router.include_router(faces_router)
 api_v1_router.include_router(face_sessions_router)
 api_v1_router.include_router(face_suggestions_router)
 api_v1_router.include_router(face_centroids_router)
+api_v1_router.include_router(storage_router)
 api_v1_router.include_router(unknown_persons_router)
 api_v1_router.include_router(queues_router)
 api_v1_router.include_router(jobs_router)

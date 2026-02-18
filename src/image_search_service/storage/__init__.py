@@ -8,15 +8,21 @@ Pattern matches:
 - core/config.py: get_settings() -> Settings
 - db/session.py: get_engine() -> AsyncEngine
 
-Phase 1 exports (Foundation):
+Supported backends:
+    - GoogleDriveV3Storage        — service account (SA) authentication
+    - GoogleDriveOAuthV3Storage   — OAuth 2.0 user credentials (personal accounts)
+
+The active backend is selected by GOOGLE_DRIVE_AUTH_MODE:
+    "service_account" (default) → GoogleDriveV3Storage
+    "oauth"                      → GoogleDriveOAuthV3Storage
+
+Exports (Foundation):
     - StorageBackend protocol
     - StorageEntry, EntryType, UploadResult data types
     - Exception hierarchy (StorageError and subclasses)
     - Path normalization utilities
     - validate_google_drive_config() startup validation
-
-Phase 2 adds:
-    - GoogleDriveV3Storage implementation
+    - GoogleDriveV3Storage, GoogleDriveOAuthV3Storage implementations
     - AsyncStorageWrapper
     - get_storage() / get_async_storage() factory functions
 
@@ -69,6 +75,7 @@ from image_search_service.storage.path_resolver import (
 if TYPE_CHECKING:
     from image_search_service.storage.async_wrapper import AsyncStorageWrapper
     from image_search_service.storage.google_drive import GoogleDriveV3Storage
+    from image_search_service.storage.google_drive_oauth_v3 import GoogleDriveOAuthV3Storage
 
 __all__ = [
     # Protocol & types
@@ -97,6 +104,9 @@ __all__ = [
     # Factory functions (Phase 2)
     "get_storage",
     "get_async_storage",
+    # Concrete backends (for isinstance checks in health endpoints)
+    "GoogleDriveV3Storage",
+    "GoogleDriveOAuthV3Storage",
 ]
 
 
@@ -104,18 +114,22 @@ __all__ = [
 def get_storage() -> GoogleDriveV3Storage | None:
     """Get cached sync storage client (for RQ workers and CLI).
 
-    Returns GoogleDriveV3Storage if Google Drive is enabled and configured,
-    or None if disabled via feature toggle.
+    Returns a GoogleDriveV3Storage (or GoogleDriveOAuthV3Storage subclass)
+    if Google Drive is enabled and configured, or None if disabled.
+
+    The concrete backend is selected by GOOGLE_DRIVE_AUTH_MODE:
+        "service_account" (default) → GoogleDriveV3Storage (SA JSON key)
+        "oauth"                      → GoogleDriveOAuthV3Storage (refresh token)
 
     Follows the existing @lru_cache(maxsize=1) singleton pattern from:
     - services/embedding.py (get_embedding_service)
     - core/config.py (get_settings)
 
     Returns:
-        GoogleDriveV3Storage instance if enabled, None if disabled.
+        GoogleDriveV3Storage (or subclass) if enabled, None if disabled.
 
     Raises:
-        ConfigurationError: If enabled but misconfigured (missing SA key, etc.).
+        ConfigurationError: If enabled but misconfigured (missing credentials).
     """
     from image_search_service.core.config import get_settings
     from image_search_service.storage.google_drive import GoogleDriveV3Storage
@@ -125,15 +139,54 @@ def get_storage() -> GoogleDriveV3Storage | None:
     if not settings.google_drive_enabled:
         return None
 
-    if not settings.google_drive_sa_json:
-        raise ConfigurationError(
-            field="GOOGLE_DRIVE_SA_JSON",
-            detail="Must be set when GOOGLE_DRIVE_ENABLED=true",
-        )
+    # Root folder ID is required for both auth modes.
     if not settings.google_drive_root_id:
         raise ConfigurationError(
             field="GOOGLE_DRIVE_ROOT_ID",
             detail="Must be set when GOOGLE_DRIVE_ENABLED=true",
+        )
+
+    auth_mode = settings.google_drive_auth_mode
+
+    if auth_mode == "oauth":
+        # OAuth 2.0 user credentials path (personal Google accounts).
+        from image_search_service.storage.google_drive_oauth_v3 import (
+            GoogleDriveOAuthV3Storage,
+        )
+
+        if not settings.google_drive_client_id:
+            raise ConfigurationError(
+                field="GOOGLE_DRIVE_CLIENT_ID",
+                detail="Must be set when GOOGLE_DRIVE_AUTH_MODE=oauth",
+            )
+        if not settings.google_drive_client_secret:
+            raise ConfigurationError(
+                field="GOOGLE_DRIVE_CLIENT_SECRET",
+                detail="Must be set when GOOGLE_DRIVE_AUTH_MODE=oauth",
+            )
+        if not settings.google_drive_refresh_token:
+            raise ConfigurationError(
+                field="GOOGLE_DRIVE_REFRESH_TOKEN",
+                detail=(
+                    "Must be set when GOOGLE_DRIVE_AUTH_MODE=oauth. "
+                    "Run: python scripts/gdrive_oauth_bootstrap.py"
+                ),
+            )
+
+        return GoogleDriveOAuthV3Storage(
+            client_id=settings.google_drive_client_id,
+            client_secret=settings.google_drive_client_secret,
+            refresh_token=settings.google_drive_refresh_token,
+            root_folder_id=settings.google_drive_root_id,
+            path_cache_maxsize=settings.google_drive_path_cache_maxsize,
+            path_cache_ttl=settings.google_drive_path_cache_ttl,
+        )
+
+    # Default: service_account path (Google Workspace / shared folders).
+    if not settings.google_drive_sa_json:
+        raise ConfigurationError(
+            field="GOOGLE_DRIVE_SA_JSON",
+            detail="Must be set when GOOGLE_DRIVE_AUTH_MODE=service_account",
         )
 
     return GoogleDriveV3Storage(

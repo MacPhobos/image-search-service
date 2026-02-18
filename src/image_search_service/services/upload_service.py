@@ -43,7 +43,11 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _ensure_path_exists(storage: StorageBackend, path: str) -> str:
+def _ensure_path_exists(
+    storage: StorageBackend,
+    path: str,
+    start_parent_id: str | None = None,
+) -> str:
     """Create nested folders one segment at a time and return the leaf folder ID.
 
     Each path segment is created via ``storage.create_folder()``, which is
@@ -51,19 +55,27 @@ def _ensure_path_exists(storage: StorageBackend, path: str) -> str:
 
     Args:
         storage: Sync storage backend instance.
-        path: Forward-slash separated path, e.g. ``"people/Jane Doe"``.
+        path: Forward-slash separated path of *name* segments,
+              e.g. ``"Jane Doe"`` or ``"subdir/Jane Doe"``.
               Leading/trailing slashes are stripped before splitting.
+              Must NOT contain Drive folder IDs — use ``start_parent_id`` for that.
+        start_parent_id: Provider-specific folder ID to start the hierarchy from.
+              When provided, the first segment is created inside this folder
+              (i.e. it is used as the initial ``parent_id``).
+              When ``None`` (default), folders are created under the Drive root.
 
     Returns:
         Provider-specific folder ID of the deepest (leaf) folder.
-        Returns ``""`` (empty string) when ``path`` is empty or root-only (``"/"``).
-        Callers uploading to the root should pass ``folder_id=None`` explicitly.
+        Returns ``start_parent_id`` (or ``""``) when ``path`` is empty or
+        root-only (``"/"``).  The returned ID should be passed directly to
+        ``upload_file(folder_id=...)``.
     """
     segments = [s for s in path.strip("/").split("/") if s]
     if not segments:
-        return ""  # Root folder — caller should use None for folder_id
-    parent_id: str | None = None
-    folder_id: str = ""
+        # No name segments to create — use the provided starting folder as-is.
+        return start_parent_id or ""
+    parent_id: str | None = start_parent_id
+    folder_id: str = start_parent_id or ""
     for segment in segments:
         folder_id = storage.create_folder(segment, parent_id=parent_id)
         parent_id = folder_id
@@ -247,7 +259,12 @@ class UploadService:
 
         return batch_id
 
-    def process_batch(self, batch_id: str, remote_base_path: str) -> dict[str, object]:
+    def process_batch(
+        self,
+        batch_id: str,
+        remote_base_path: str,
+        start_folder_id: str | None = None,
+    ) -> dict[str, object]:
         """Process all pending/failed records in a batch.
 
         Ensures the remote folder hierarchy exists once before iterating
@@ -256,16 +273,22 @@ class UploadService:
 
         Args:
             batch_id: Batch to process.
-            remote_base_path: Virtual path used to resolve/create the remote
-                              folder.  Must match the value used in
-                              ``create_batch()``.
+            remote_base_path: Path of *name* segments to create beneath
+                              ``start_folder_id``, e.g. ``"Jane Doe"`` or ``""``.
+                              Must NOT contain Drive folder IDs.
+            start_folder_id: Drive folder ID to use as the root of the path
+                             hierarchy.  When provided, folder creation starts
+                             inside this folder rather than at the Drive root.
+                             Must match the value used in ``create_batch()``.
 
         Returns:
             Dict with keys: ``uploaded``, ``skipped``, ``failed``, ``errors``.
         """
         # Ensure the remote folder tree exists once for the whole batch
         try:
-            folder_id = _ensure_path_exists(self._storage, remote_base_path)
+            folder_id = _ensure_path_exists(
+                self._storage, remote_base_path, start_parent_id=start_folder_id
+            )
         except Exception as e:
             logger.error(
                 "Failed to create remote directory",
@@ -354,12 +377,18 @@ class UploadService:
             cancelled=counts.get(StorageUploadStatus.CANCELLED.value, 0),
         )
 
-    def resume_batch(self, batch_id: str, remote_base_path: str) -> dict[str, object]:
+    def resume_batch(
+        self,
+        batch_id: str,
+        remote_base_path: str,
+        start_folder_id: str | None = None,
+    ) -> dict[str, object]:
         """Resume a partially-failed batch by resetting FAILED records to PENDING.
 
         Args:
             batch_id: Batch to resume.
-            remote_base_path: Virtual path for the remote folder (same as original).
+            remote_base_path: Path of name segments (same as original).
+            start_folder_id: Drive folder ID root (same as original).
 
         Returns:
             Same dict as ``process_batch()``.
@@ -384,7 +413,7 @@ class UploadService:
                 extra={"batch_id": batch_id, "reset_count": reset_count},
             )
 
-        return self.process_batch(batch_id, remote_base_path)
+        return self.process_batch(batch_id, remote_base_path, start_folder_id=start_folder_id)
 
     def cancel_batch(self, batch_id: str) -> int:
         """Mark all pending/uploading records as CANCELLED.

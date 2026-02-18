@@ -46,6 +46,7 @@ def upload_person_photos_job(
     asset_ids: list[int],
     remote_base_path: str,
     batch_id: str,
+    start_folder_id: str | None = None,
 ) -> dict[str, Any]:
     """Upload a person's photos to cloud storage (sync, RQ-safe).
 
@@ -56,10 +57,14 @@ def upload_person_photos_job(
     Args:
         person_id: UUID string of the person whose photos are being uploaded.
         asset_ids: List of ImageAsset primary keys to upload.
-        remote_base_path: Virtual path prefix in the remote storage,
-                          e.g. ``"people/Jane Doe"``.
+        remote_base_path: Path of *name* segments beneath ``start_folder_id``,
+                          e.g. ``"Jane Doe"`` or ``""`` (upload directly into
+                          ``start_folder_id``).  Must NOT contain Drive folder IDs.
         batch_id: Caller-supplied batch identifier used for grouping and
                   resumption.
+        start_folder_id: Drive folder ID to use as the root of the upload
+                         hierarchy.  Folder creation for ``remote_base_path``
+                         segments starts inside this folder.
 
     Returns:
         Dict with ``uploaded``, ``skipped``, ``failed``, ``errors`` counts
@@ -81,6 +86,7 @@ def upload_person_photos_job(
             "person_id": person_id,
             "asset_count": len(asset_ids),
             "remote_base_path": remote_base_path,
+            "start_folder_id": start_folder_id,
         },
     )
 
@@ -112,7 +118,11 @@ def upload_person_photos_job(
             batch_id=batch_id,
         )
 
-        result = service.process_batch(batch_id=batch_id, remote_base_path=remote_base_path)
+        result = service.process_batch(
+            batch_id=batch_id,
+            remote_base_path=remote_base_path,
+            start_folder_id=start_folder_id,
+        )
 
         logger.info(
             "upload_person_photos_job complete",
@@ -146,14 +156,17 @@ def enqueue_person_upload(
     asset_ids: list[int],
     remote_base_path: str,
     batch_id: str,
+    start_folder_id: str | None = None,
 ) -> str:
     """Enqueue a single upload job for all assets in one call.
 
     Args:
         person_id: UUID string of the person.
         asset_ids: All asset IDs to upload.
-        remote_base_path: Remote folder path prefix.
+        remote_base_path: Path of name segments to create beneath
+                          ``start_folder_id``.
         batch_id: Batch identifier (must be unique per logical batch).
+        start_folder_id: Drive folder ID to use as the upload root.
 
     Returns:
         RQ job ID string.
@@ -167,6 +180,7 @@ def enqueue_person_upload(
         asset_ids=asset_ids,
         remote_base_path=remote_base_path,
         batch_id=batch_id,
+        start_folder_id=start_folder_id,
         job_timeout="30m",
         result_ttl=3600,
     )
@@ -177,6 +191,7 @@ def enqueue_person_upload(
             "batch_id": batch_id,
             "person_id": person_id,
             "asset_count": len(asset_ids),
+            "start_folder_id": start_folder_id,
         },
     )
     return str(job.id)
@@ -188,6 +203,7 @@ def enqueue_person_upload_chunked(
     remote_base_path: str,
     batch_id: str,
     chunk_size: int = BATCH_CHUNK_SIZE,
+    start_folder_id: str | None = None,
 ) -> list[str]:
     """Enqueue multiple upload jobs by splitting assets into chunks.
 
@@ -197,9 +213,11 @@ def enqueue_person_upload_chunked(
     Args:
         person_id: UUID string of the person.
         asset_ids: All asset IDs to upload (may be very large).
-        remote_base_path: Remote folder path prefix.
+        remote_base_path: Path of name segments to create beneath
+                          ``start_folder_id``.
         batch_id: Shared batch identifier for all chunk jobs.
         chunk_size: Number of assets per chunk (default: ``BATCH_CHUNK_SIZE``).
+        start_folder_id: Drive folder ID to use as the upload root.
 
     Returns:
         List of RQ job ID strings, one per chunk.
@@ -216,6 +234,7 @@ def enqueue_person_upload_chunked(
             asset_ids=chunk,
             remote_base_path=remote_base_path,
             batch_id=batch_id,
+            start_folder_id=start_folder_id,
         )
         job_ids.append(job_id)
 
@@ -227,6 +246,7 @@ def enqueue_person_upload_chunked(
             "total_assets": len(asset_ids),
             "chunks": len(chunks),
             "chunk_size": chunk_size,
+            "start_folder_id": start_folder_id,
         },
     )
     return job_ids

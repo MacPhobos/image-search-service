@@ -20,18 +20,26 @@ from image_search_service.storage.exceptions import ConfigurationError, StorageE
 def _make_settings(
     *,
     enabled: bool = False,
+    auth_mode: str = "service_account",
     sa_json: str = "",
     root_id: str = "",
     cache_maxsize: int = 1024,
     cache_ttl: int = 300,
+    client_id: str = "",
+    client_secret: str = "",
+    refresh_token: str = "",
 ) -> MagicMock:
     """Create a mock Settings object for testing."""
     settings = MagicMock()
     settings.google_drive_enabled = enabled
+    settings.google_drive_auth_mode = auth_mode
     settings.google_drive_sa_json = sa_json
     settings.google_drive_root_id = root_id
     settings.google_drive_path_cache_maxsize = cache_maxsize
     settings.google_drive_path_cache_ttl = cache_ttl
+    settings.google_drive_client_id = client_id
+    settings.google_drive_client_secret = client_secret
+    settings.google_drive_refresh_token = refresh_token
     return settings
 
 
@@ -70,7 +78,9 @@ class TestGetStorage:
         """get_storage raises ConfigurationError when SA JSON path not set."""
         with patch(
             "image_search_service.core.config.get_settings",
-            return_value=_make_settings(enabled=True, sa_json="", root_id="root"),
+            return_value=_make_settings(
+                enabled=True, auth_mode="service_account", sa_json="", root_id="root"
+            ),
         ):
             with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_SA_JSON"):
                 get_storage()
@@ -80,7 +90,10 @@ class TestGetStorage:
         with patch(
             "image_search_service.core.config.get_settings",
             return_value=_make_settings(
-                enabled=True, sa_json="/fake/sa.json", root_id=""
+                enabled=True,
+                auth_mode="service_account",
+                sa_json="/fake/sa.json",
+                root_id="",
             ),
         ):
             with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_ROOT_ID"):
@@ -93,7 +106,10 @@ class TestGetStorage:
         with patch(
             "image_search_service.core.config.get_settings",
             return_value=_make_settings(
-                enabled=True, sa_json="/fake/sa.json", root_id="root-id"
+                enabled=True,
+                auth_mode="service_account",
+                sa_json="/fake/sa.json",
+                root_id="root-id",
             ),
         ):
             result = get_storage()
@@ -269,8 +285,157 @@ class TestFactoryIntegration:
         with patch(
             "image_search_service.core.config.get_settings",
             return_value=_make_settings(
-                enabled=True, sa_json="/fake/sa.json", root_id=""
+                enabled=True, auth_mode="service_account", sa_json="/fake/sa.json", root_id=""
             ),
         ):
             with pytest.raises(StorageError):
                 get_storage()
+
+
+# ─── TestGetStorageOAuthMode ───────────────────────────────────────────────────
+
+
+class TestGetStorageOAuthMode:
+    """Tests for get_storage() with GOOGLE_DRIVE_AUTH_MODE=oauth."""
+
+    def setup_method(self) -> None:
+        """Clear lru_cache between tests."""
+        get_storage.cache_clear()
+        try:
+            from image_search_service.core.config import get_settings as _gs
+
+            if hasattr(_gs, "cache_clear"):
+                _gs.cache_clear()
+        except Exception:
+            pass
+
+    def test_oauth_mode_returns_oauth_backend(self) -> None:
+        """get_storage returns GoogleDriveOAuthV3Storage when auth_mode='oauth'."""
+        from image_search_service.storage.google_drive_oauth_v3 import (
+            GoogleDriveOAuthV3Storage,
+        )
+
+        with patch(
+            "image_search_service.core.config.get_settings",
+            return_value=_make_settings(
+                enabled=True,
+                auth_mode="oauth",
+                root_id="root-id",
+                client_id="my-client-id",
+                client_secret="my-client-secret",
+                refresh_token="my-refresh-token",
+            ),
+        ):
+            result = get_storage()
+
+        assert result is not None
+        assert isinstance(result, GoogleDriveOAuthV3Storage)
+        assert result._client_id == "my-client-id"
+        assert result._root_folder_id == "root-id"
+
+    def test_oauth_mode_not_an_instance_of_base_sa_class_only(self) -> None:
+        """OAuth backend is a subclass of GoogleDriveV3Storage (inheritance verified)."""
+        from image_search_service.storage.google_drive import GoogleDriveV3Storage
+
+        with patch(
+            "image_search_service.core.config.get_settings",
+            return_value=_make_settings(
+                enabled=True,
+                auth_mode="oauth",
+                root_id="root-id",
+                client_id="id",
+                client_secret="secret",
+                refresh_token="token",
+            ),
+        ):
+            result = get_storage()
+
+        assert result is not None
+        assert isinstance(result, GoogleDriveV3Storage)  # subclass
+
+    def test_oauth_mode_missing_client_id_raises_config_error(self) -> None:
+        """get_storage raises ConfigurationError when client_id is missing."""
+        with patch(
+            "image_search_service.core.config.get_settings",
+            return_value=_make_settings(
+                enabled=True,
+                auth_mode="oauth",
+                root_id="root-id",
+                client_id="",  # missing
+                client_secret="secret",
+                refresh_token="token",
+            ),
+        ):
+            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_CLIENT_ID"):
+                get_storage()
+
+    def test_oauth_mode_missing_client_secret_raises_config_error(self) -> None:
+        """get_storage raises ConfigurationError when client_secret is missing."""
+        with patch(
+            "image_search_service.core.config.get_settings",
+            return_value=_make_settings(
+                enabled=True,
+                auth_mode="oauth",
+                root_id="root-id",
+                client_id="id",
+                client_secret="",  # missing
+                refresh_token="token",
+            ),
+        ):
+            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_CLIENT_SECRET"):
+                get_storage()
+
+    def test_oauth_mode_missing_refresh_token_raises_config_error(self) -> None:
+        """get_storage raises ConfigurationError when refresh_token is missing."""
+        with patch(
+            "image_search_service.core.config.get_settings",
+            return_value=_make_settings(
+                enabled=True,
+                auth_mode="oauth",
+                root_id="root-id",
+                client_id="id",
+                client_secret="secret",
+                refresh_token="",  # missing
+            ),
+        ):
+            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_REFRESH_TOKEN"):
+                get_storage()
+
+    def test_oauth_mode_missing_root_id_raises_config_error(self) -> None:
+        """get_storage raises ConfigurationError when root_id is missing in oauth mode."""
+        with patch(
+            "image_search_service.core.config.get_settings",
+            return_value=_make_settings(
+                enabled=True,
+                auth_mode="oauth",
+                root_id="",  # missing
+                client_id="id",
+                client_secret="secret",
+                refresh_token="token",
+            ),
+        ):
+            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_ROOT_ID"):
+                get_storage()
+
+    def test_service_account_mode_still_works_after_adding_oauth_support(self) -> None:
+        """Default service_account mode is unaffected by OAuth changes."""
+        from image_search_service.storage.google_drive import GoogleDriveV3Storage
+        from image_search_service.storage.google_drive_oauth_v3 import (
+            GoogleDriveOAuthV3Storage,
+        )
+
+        with patch(
+            "image_search_service.core.config.get_settings",
+            return_value=_make_settings(
+                enabled=True,
+                auth_mode="service_account",
+                sa_json="/fake/sa.json",
+                root_id="root-id",
+            ),
+        ):
+            result = get_storage()
+
+        assert result is not None
+        assert isinstance(result, GoogleDriveV3Storage)
+        # Must NOT be the OAuth subclass
+        assert not isinstance(result, GoogleDriveOAuthV3Storage)

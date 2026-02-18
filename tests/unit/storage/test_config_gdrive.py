@@ -258,3 +258,167 @@ class TestValidateGoogleDriveConfig:
                 validate_google_drive_config(settings)
         finally:
             os.unlink(sa_path)
+
+
+class TestGoogleDriveOAuthSettings:
+    """Tests for OAuth config fields in Settings."""
+
+    def test_default_auth_mode_is_service_account(self) -> None:
+        """Default auth mode is service_account (backward compatible)."""
+        settings = Settings()
+        assert settings.google_drive_auth_mode == "service_account"
+
+    def test_default_oauth_credentials_are_empty(self) -> None:
+        """OAuth credential fields default to empty strings."""
+        settings = Settings()
+        assert settings.google_drive_client_id == ""
+        assert settings.google_drive_client_secret == ""
+        assert settings.google_drive_refresh_token == ""
+
+    def test_oauth_env_vars_loaded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OAuth credentials are loaded from environment variables."""
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", "my-client-id.apps.googleusercontent.com")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", "my-client-secret")
+        monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "1//my-refresh-token")
+
+        settings = Settings()
+        assert settings.google_drive_auth_mode == "oauth"
+        assert settings.google_drive_client_id == "my-client-id.apps.googleusercontent.com"
+        assert settings.google_drive_client_secret == "my-client-secret"
+        assert settings.google_drive_refresh_token == "1//my-refresh-token"
+
+    def test_invalid_auth_mode_raises_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CRITICAL-3: Typo in GOOGLE_DRIVE_AUTH_MODE must raise ValidationError at startup.
+
+        Previously auth_mode was plain str, so typos like 'oAuth' or
+        'service-account' silently fell through to the SA path with a
+        confusing error. Now it is Literal["service_account", "oauth"] so
+        pydantic-settings raises ValidationError immediately.
+        """
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oAuth")  # wrong case
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_another_invalid_auth_mode_raises_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Hyphenated variant 'service-account' must also raise ValidationError."""
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "service-account")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_service_account_literal_is_valid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """'service_account' (exact) is accepted by the Literal constraint."""
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "service_account")
+        settings = Settings()
+        assert settings.google_drive_auth_mode == "service_account"
+
+    def test_oauth_literal_is_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """'oauth' (exact) is accepted by the Literal constraint."""
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        settings = Settings()
+        assert settings.google_drive_auth_mode == "oauth"
+
+    def test_root_id_description_is_auth_mode_neutral(self) -> None:
+        """MINOR-4: google_drive_root_id description must not mention service account."""
+        # Access the field metadata through model_fields
+        field_info = Settings.model_fields.get("google_drive_root_id")
+        assert field_info is not None
+        description = field_info.description or ""
+        assert "service account" not in description.lower(), (
+            f"Description should be auth-mode neutral, got: {description!r}"
+        )
+
+
+class TestValidateGoogleDriveOAuthConfig:
+    """Tests for validate_google_drive_config() in OAuth mode."""
+
+    def test_oauth_mode_missing_root_id_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ConfigurationError when oauth mode but root ID is missing."""
+        monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true")
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", "id")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", "secret")
+        monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "token")
+        settings = Settings()
+
+        with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_ROOT_ID"):
+            validate_google_drive_config(settings)
+
+    def test_oauth_mode_missing_client_id_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ConfigurationError when oauth mode but GOOGLE_DRIVE_CLIENT_ID is missing."""
+        monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true")
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "root-id")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", "")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", "secret")
+        monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "token")
+        settings = Settings()
+
+        with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_CLIENT_ID"):
+            validate_google_drive_config(settings)
+
+    def test_oauth_mode_missing_client_secret_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ConfigurationError when oauth mode but GOOGLE_DRIVE_CLIENT_SECRET is missing."""
+        monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true")
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "root-id")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", "id")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", "")
+        monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "token")
+        settings = Settings()
+
+        with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_CLIENT_SECRET"):
+            validate_google_drive_config(settings)
+
+    def test_oauth_mode_missing_refresh_token_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ConfigurationError when oauth mode but GOOGLE_DRIVE_REFRESH_TOKEN is missing."""
+        monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true")
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "root-id")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", "id")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", "secret")
+        monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "")
+        settings = Settings()
+
+        with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_REFRESH_TOKEN"):
+            validate_google_drive_config(settings)
+
+    def test_oauth_mode_valid_config_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Valid OAuth configuration passes without raising."""
+        monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true")
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "root-folder-id")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", "id.apps.googleusercontent.com")
+        monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", "GOCSPX-secret")
+        monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "1//refresh-token-value")
+        settings = Settings()
+
+        # Should not raise
+        validate_google_drive_config(settings)
+
+    def test_disabled_skips_oauth_validation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No validation when Drive is disabled, regardless of auth mode."""
+        monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "false")
+        monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+        # All OAuth fields missing — still no error because Drive is disabled
+        settings = Settings()
+        validate_google_drive_config(settings)  # Must not raise

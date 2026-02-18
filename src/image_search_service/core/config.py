@@ -1,6 +1,7 @@
 """Application configuration management."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -281,6 +282,14 @@ class Settings(BaseSettings):
         alias="GOOGLE_DRIVE_ENABLED",
         description="Enable Google Drive storage integration",
     )
+    google_drive_auth_mode: Literal["service_account", "oauth"] = Field(
+        default="service_account",
+        alias="GOOGLE_DRIVE_AUTH_MODE",
+        description=(
+            "Authentication mode: 'service_account' (default) for SA JSON key, "
+            "'oauth' for OAuth 2.0 user credentials with refresh token"
+        ),
+    )
     google_drive_sa_json: str = Field(
         default="",
         alias="GOOGLE_DRIVE_SA_JSON",
@@ -289,7 +298,7 @@ class Settings(BaseSettings):
     google_drive_root_id: str = Field(
         default="",
         alias="GOOGLE_DRIVE_ROOT_ID",
-        description="Google Drive folder ID shared with the service account (app root)",
+        description="Google Drive folder ID for app uploads (app root)",
     )
     google_drive_upload_batch_size: int = Field(
         default=10,
@@ -311,6 +320,25 @@ class Settings(BaseSettings):
         le=10000,
         alias="GOOGLE_DRIVE_PATH_CACHE_MAXSIZE",
         description="Maximum entries in path-to-ID cache",
+    )
+    # OAuth 2.0 credentials (required when google_drive_auth_mode='oauth')
+    google_drive_client_id: str = Field(
+        default="",
+        alias="GOOGLE_DRIVE_CLIENT_ID",
+        description="OAuth 2.0 client ID from Google Cloud Console",
+    )
+    google_drive_client_secret: str = Field(
+        default="",
+        alias="GOOGLE_DRIVE_CLIENT_SECRET",
+        description="OAuth 2.0 client secret (treat as sensitive — never log)",
+    )
+    google_drive_refresh_token: str = Field(
+        default="",
+        alias="GOOGLE_DRIVE_REFRESH_TOKEN",
+        description=(
+            "OAuth 2.0 offline refresh token obtained from the bootstrap script. "
+            "Treat as sensitive — never log or commit."
+        ),
     )
 
 
