@@ -989,16 +989,19 @@ class TestRestartWorkflowIntegration:
         await db_session.commit()
         await db_session.refresh(pending_training_session)
 
-        # Step 1: Try to start training (normal flow)
-        # NOTE: This will fail because directory doesn't exist in test environment
-        # We're just verifying the endpoint exists and restart didn't break it
+        # Step 1: Start training (normal flow)
+        # NOTE: Asset discovery now happens asynchronously in the RQ worker,
+        # so the API returns 200 immediately with status=discovering even if the
+        # directory doesn't exist.  The worker will fail and transition to FAILED.
         response = await test_client.post(
             f"/api/v1/training/sessions/{pending_training_session.id}/start"
         )
 
-        # Expect 400 because directory doesn't exist, not 500 or 404
-        # This proves the endpoint works, just can't proceed without filesystem
-        assert response.status_code == 400
+        # Expect 200 — session transitions to DISCOVERING and RQ job is enqueued.
+        # The directory-not-found error will surface later in the worker, not here.
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "discovering"
 
     @pytest.mark.asyncio
     async def test_workflow_after_restart(
@@ -1035,13 +1038,16 @@ class TestRestartWorkflowIntegration:
         await db_session.refresh(failed_training_session)
         assert failed_training_session.status == SessionStatus.PENDING.value
 
-        # Step 2: Try to start training (normal flow after restart)
-        # NOTE: Will fail because directory doesn't exist in test environment
-        # We're just verifying restart didn't break the workflow
+        # Step 2: Start training (normal flow after restart)
+        # NOTE: Asset discovery now happens asynchronously in the RQ worker.
+        # The API returns 200 immediately with status=discovering regardless of
+        # whether the filesystem path exists.  Worker failure surfaces later.
         response = await test_client.post(
             f"/api/v1/training/sessions/{failed_training_session.id}/start"
         )
 
-        # Expect 400 because directory doesn't exist, not 500 or 404
-        # This proves restart worked and endpoint is accessible
-        assert response.status_code == 400
+        # Expect 200 — session transitions to DISCOVERING and RQ job is enqueued.
+        # This proves restart worked and the start endpoint is accessible.
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "discovering"

@@ -26,7 +26,6 @@ from image_search_service.db.models import (
     TrainingSubdirectory,
 )
 from image_search_service.queue.worker import QUEUE_HIGH, get_queue
-from image_search_service.services.asset_discovery import AssetDiscoveryService
 from image_search_service.services.perceptual_hash import compute_perceptual_hash
 
 logger = get_logger(__name__)
@@ -307,13 +306,11 @@ class TrainingService:
         logger.info(f"Added {len(subdirectories)} subdirectories to session {session_id}")
 
     async def enqueue_training(self, db: AsyncSession, session_id: int) -> str:
-        """Enqueue training session for background processing.
+        """Enqueue training session for background processing (fast path).
 
-        This method:
-        1. Discovers all assets in selected subdirectories
-        2. Creates TrainingJob records for each asset
-        3. Enqueues the main training job to RQ
-        4. Updates session status to RUNNING
+        Sets session status to DISCOVERING and immediately enqueues the RQ job.
+        All heavy work (asset discovery, hash computation, job creation) is
+        performed inside the worker so this method returns in milliseconds.
 
         Args:
             db: Database session
@@ -323,46 +320,25 @@ class TrainingService:
             RQ job ID
 
         Raises:
-            ValueError: If session not found or has no selected subdirectories
+            ValueError: If session not found
         """
-        # Get session
         session = await self.get_session(db, session_id)
         if not session:
             raise ValueError(f"Training session {session_id} not found")
 
-        # Discover assets in selected subdirectories
-        logger.info(f"Discovering assets for session {session_id}")
-        discovery_service = AssetDiscoveryService()
-        assets = await discovery_service.discover_assets(db, session_id)
-
-        if not assets:
-            raise ValueError(f"No assets found for session {session_id}")
-
-        # Update session total_images count
-        session.total_images = len(assets)
-        session.processed_images = 0
-        session.failed_images = 0
-
-        # Create TrainingJob records for each asset
-        asset_ids = [asset.id for asset in assets]
-        job_count = await self.create_training_jobs(db, session_id, asset_ids)
-
-        logger.info(f"Created {job_count} training jobs for session {session_id}")
-
-        # Update session status and timestamps
-        session.status = SessionStatus.RUNNING.value
-        session.started_at = datetime.now(UTC)
-
+        # Transition to DISCOVERING immediately so the API can return fast
+        session.status = SessionStatus.DISCOVERING.value
         await db.commit()
 
-        # Enqueue main training job to RQ (high priority)
+        # Enqueue the worker job — all discovery + training happens there
         from image_search_service.queue.training_jobs import train_session
 
         queue = get_queue(QUEUE_HIGH)
         rq_job = queue.enqueue(train_session, session_id, job_timeout="1h")
 
         logger.info(
-            f"Enqueued training session {session_id} as RQ job {rq_job.id} with {job_count} assets"
+            f"Enqueued training session {session_id} as RQ job {rq_job.id} "
+            f"(discovery will happen in worker)"
         )
 
         return str(rq_job.id)
@@ -569,7 +545,8 @@ class TrainingService:
         """Start or resume training for a session.
 
         Valid state transitions:
-        - pending → running (initial start, discovers assets)
+        - pending → discovering (initial start; discovery + job creation
+          happen asynchronously inside the RQ worker)
         - paused → running (resume existing jobs)
         - failed → running (resume existing jobs)
 
@@ -595,37 +572,35 @@ class TrainingService:
         ]
         if session.status not in valid_states:
             raise ValueError(
-                f"Cannot start training from state '{session.status}'. Valid states: {valid_states}"
+                f"Cannot start training from state '{session.status}'. "
+                f"Valid states: {valid_states}"
             )
 
-        # Check if session already running
-        if session.status == SessionStatus.RUNNING.value:
-            logger.warning(f"Session {session_id} already running")
-            return session
-
-        # PENDING state: discover assets and create jobs
+        # PENDING state: enqueue immediately and return with DISCOVERING status.
+        # Asset discovery and job creation happen inside the RQ worker so the
+        # HTTP response is returned in milliseconds.
         if session.status == SessionStatus.PENDING.value:
             rq_job_id = await self.enqueue_training(db, session_id)
-            logger.info(f"Started new training for session {session_id}, RQ job: {rq_job_id}")
-            # Session is already refreshed by enqueue_training
+            logger.info(
+                f"Enqueued training for session {session_id} (DISCOVERING), "
+                f"RQ job: {rq_job_id}"
+            )
             return await self.get_session(db, session_id) or session
 
-        # PAUSED or FAILED state: resume with existing jobs
-        # Clear paused_at when resuming from paused
+        # PAUSED or FAILED state: resume with existing jobs (no re-discovery needed)
         if session.status == SessionStatus.PAUSED.value:
             session.paused_at = None
 
-        # Set started_at if not set (failed before first start)
+        # Set started_at if not previously set (failed before first start)
         if not session.started_at:
             session.started_at = datetime.now(UTC)
 
-        # Update status to running
         session.status = SessionStatus.RUNNING.value
 
         await db.commit()
         await db.refresh(session)
 
-        # Enqueue RQ job to process existing pending jobs
+        # Enqueue RQ job to process the already-created pending jobs
         from image_search_service.queue.training_jobs import train_session
 
         queue = get_queue(QUEUE_HIGH)
@@ -687,8 +662,13 @@ class TrainingService:
         if not session:
             raise ValueError(f"Training session {session_id} not found")
 
-        # Validate state
-        valid_states = [SessionStatus.RUNNING.value, SessionStatus.PAUSED.value]
+        # Validate state — DISCOVERING is also cancellable (worker checks status before
+        # starting work, so it will see CANCELLED and exit cleanly)
+        valid_states = [
+            SessionStatus.DISCOVERING.value,
+            SessionStatus.RUNNING.value,
+            SessionStatus.PAUSED.value,
+        ]
         if session.status not in valid_states:
             raise ValueError(
                 f"Cannot cancel session in state '{session.status}'. Valid states: {valid_states}"
@@ -725,6 +705,17 @@ class TrainingService:
         session = await self.get_session(db, session_id)
         if not session:
             raise ValueError(f"Training session {session_id} not found")
+
+        # Guard: cannot restart while discovery is in progress — the original
+        # worker is still running asset discovery and creating jobs.  Allowing
+        # a restart here would create a second worker that races the first,
+        # leading to duplicate jobs or a session stuck in COMPLETED with
+        # unprocessed jobs.  The caller should cancel the session first.
+        if session.status == SessionStatus.DISCOVERING.value:
+            raise ValueError(
+                f"Session {session_id} is currently discovering assets. "
+                "Cancel it first before restarting."
+            )
 
         # Reset jobs based on failed_only flag
         if failed_only:
@@ -918,11 +909,14 @@ class TrainingService:
                 func.sum(TrainingSubdirectory.trained_count).label("total_trained"),
                 func.sum(TrainingSubdirectory.image_count).label("total_images"),
                 func.max(TrainingSubdirectory.created_at).label("last_trained_at"),
-                # Check if any linked session is currently running
+                # Check if any linked session is actively processing images.
+                # Both RUNNING and DISCOVERING count as "in progress".
                 # Use MAX(CASE...) for SQLite compatibility (bool_or is PostgreSQL-only)
                 func.max(
                     func.cast(
-                        TrainingSession.status == SessionStatus.RUNNING.value,
+                        TrainingSession.status.in_(
+                            [SessionStatus.RUNNING.value, SessionStatus.DISCOVERING.value]
+                        ),
                         Integer,
                     )
                 ).label("is_training"),
@@ -1098,6 +1092,8 @@ class TrainingService:
             current_phase = "face_detection"
         elif phase1_complete:
             current_phase = "face_detection"  # Pending or starting
+        elif training_session.status == SessionStatus.DISCOVERING.value:
+            current_phase = "discovering"
         else:
             current_phase = "training"
 
@@ -1109,6 +1105,8 @@ class TrainingService:
             and getattr(face_session, "status", None) == FaceDetectionSessionStatus.FAILED.value
         ):
             overall_status = "failed"
+        elif training_session.status == SessionStatus.DISCOVERING.value:
+            overall_status = "discovering"
         elif training_session.status == SessionStatus.RUNNING.value or (
             face_session
             and getattr(face_session, "status", None) == FaceDetectionSessionStatus.PROCESSING.value

@@ -4,7 +4,9 @@ RQ workers run in a synchronous context, so they need sync database access.
 This module provides synchronous database operations for background jobs.
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -254,3 +256,274 @@ def increment_subdirectory_trained_count_sync(
             f"Subdirectory not found for asset path {asset_file_path} "
             f"in session {session_id} (parent: {parent_dir})"
         )
+
+
+# ============================================================================
+# Sync asset discovery helpers (used by RQ worker during DISCOVERING phase)
+# ============================================================================
+
+_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".jpg", ".jpeg", ".png", ".webp"}
+)
+
+
+def ensure_asset_exists_sync(db_session: Session, file_path: str) -> ImageAsset:
+    """Create or return existing ImageAsset for a file path (sync).
+
+    Args:
+        db_session: Synchronous database session
+        file_path: Absolute file path for the image
+
+    Returns:
+        Existing or newly created ImageAsset record
+    """
+    stmt = select(ImageAsset).where(ImageAsset.path == file_path)
+    existing = db_session.execute(stmt).scalar_one_or_none()
+    if existing:
+        return existing
+
+    path_obj = Path(file_path)
+    stat = path_obj.stat()
+    asset = ImageAsset(
+        path=file_path,
+        file_size=stat.st_size,
+        file_modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+    )
+    db_session.add(asset)
+    db_session.flush()
+    logger.debug(f"Created new asset record for {file_path}")
+    return asset
+
+
+def discover_assets_sync(
+    db_session: Session,
+    session_id: int,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> list[ImageAsset]:
+    """Discover all image assets for selected subdirectories of a session (sync).
+
+    Scans each selected TrainingSubdirectory recursively for image files and
+    creates (or retrieves) ImageAsset records.  All writes are flushed but
+    a single commit is made at the end for efficiency.
+
+    The optional ``cancellation_check`` callback is invoked every 500 files
+    during the filesystem scan so that a user-triggered cancellation is
+    honoured without waiting for a potentially very long rglob to finish.
+    When the callback returns ``True`` the scan stops early and whatever
+    assets have been found so far are returned (the caller is responsible
+    for handling a partial or empty result).
+
+    Args:
+        db_session: Synchronous database session
+        session_id: Training session ID
+        cancellation_check: Optional zero-argument callable that returns True
+            when the scan should be aborted (e.g. session was cancelled).
+
+    Returns:
+        List of ImageAsset records discovered (new + existing).
+        May be a partial list if ``cancellation_check`` returned True.
+
+    Raises:
+        ValueError: If the training session does not exist
+    """
+    training_session = get_session_by_id_sync(db_session, session_id)
+    if not training_session:
+        raise ValueError(f"Training session {session_id} not found")
+
+    subdirs_stmt = (
+        select(TrainingSubdirectory)
+        .where(TrainingSubdirectory.session_id == session_id)
+        .where(TrainingSubdirectory.selected.is_(True))
+    )
+    selected_subdirs: list[TrainingSubdirectory] = list(
+        db_session.execute(subdirs_stmt).scalars().all()
+    )
+
+    if not selected_subdirs:
+        logger.warning(f"No selected subdirectories for session {session_id}")
+        return []
+
+    all_assets: list[ImageAsset] = []
+
+    for subdir in selected_subdirs:
+        dir_path = Path(subdir.path)
+        if not dir_path.exists() or not dir_path.is_dir():
+            logger.warning(f"Subdirectory does not exist: {subdir.path}")
+            continue
+
+        logger.info(f"Scanning directory (sync): {subdir.path}")
+        dir_assets: list[ImageAsset] = []
+        file_count = 0
+
+        for file_path in dir_path.rglob("*"):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() not in _IMAGE_EXTENSIONS:
+                continue
+
+            file_count += 1
+
+            # Check for cancellation every 500 files to avoid running an
+            # arbitrarily long filesystem scan after the user has cancelled.
+            if cancellation_check is not None and file_count % 500 == 0:
+                if cancellation_check():
+                    logger.info(
+                        f"Discovery cancelled for session {session_id} "
+                        f"after {file_count} files scanned"
+                    )
+                    # Commit assets found so far and return early.
+                    db_session.commit()
+                    return all_assets
+
+            asset = ensure_asset_exists_sync(db_session, str(file_path.absolute()))
+            dir_assets.append(asset)
+
+        logger.info(f"Found {len(dir_assets)} images in {subdir.path}")
+        all_assets.extend(dir_assets)
+
+    # Commit all new asset records together
+    db_session.commit()
+
+    logger.info(
+        f"Total assets discovered for session {session_id}: {len(all_assets)}"
+    )
+    return all_assets
+
+
+def create_training_jobs_sync(
+    db_session: Session,
+    session_id: int,
+    assets: list[ImageAsset],
+) -> dict[str, int]:
+    """Create TrainingJob records with perceptual-hash deduplication (sync).
+
+    Mirrors the logic of TrainingService.create_training_jobs() but uses
+    synchronous DB operations so it can run inside the RQ worker.
+
+    Algorithm:
+    1. Skip assets that already have jobs for this session.
+    2. Compute missing perceptual hashes.
+    3. Group assets by hash; oldest asset per group gets a PENDING job,
+       duplicates get SKIPPED jobs.
+    4. Increment session.skipped_images counter.
+
+    Args:
+        db_session: Synchronous database session
+        session_id: Training session ID
+        assets: List of ImageAsset records to process
+
+    Returns:
+        Dict with keys: jobs_created, unique, skipped
+    """
+    from collections import defaultdict
+
+    from image_search_service.services.perceptual_hash import compute_perceptual_hash
+
+    asset_ids = [a.id for a in assets]
+
+    # Find assets that already have jobs
+    existing_stmt = (
+        select(TrainingJob.asset_id)
+        .where(TrainingJob.session_id == session_id)
+        .where(TrainingJob.asset_id.in_(asset_ids))
+    )
+    existing_asset_ids: set[int] = set(
+        db_session.execute(existing_stmt).scalars().all()
+    )
+
+    new_assets = [a for a in assets if a.id not in existing_asset_ids]
+
+    if not new_assets:
+        logger.debug(
+            f"All {len(asset_ids)} assets already have jobs for session {session_id}"
+        )
+        return {"jobs_created": 0, "unique": 0, "skipped": 0}
+
+    # Compute missing perceptual hashes
+    for asset in new_assets:
+        if asset.perceptual_hash is None:
+            try:
+                asset.perceptual_hash = compute_perceptual_hash(asset.path)
+                logger.debug(
+                    f"Computed hash for asset {asset.id}: {asset.perceptual_hash}"
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to compute hash for asset {asset.id}: {exc}")
+
+    db_session.commit()
+
+    # Refresh to get stored hashes
+    for asset in new_assets:
+        db_session.refresh(asset)
+
+    # Group by perceptual hash (None → unique group per asset)
+    hash_groups: dict[str | None, list[ImageAsset]] = defaultdict(list)
+    for asset in new_assets:
+        hash_groups[asset.perceptual_hash].append(asset)
+
+    # Sort each group oldest-first so the oldest is the representative
+    for hash_val in hash_groups:
+        hash_groups[hash_val].sort(key=lambda a: a.created_at)
+
+    jobs_created = 0
+    unique_count = 0
+    skipped_count = 0
+
+    for hash_val, group in hash_groups.items():
+        if hash_val is None or len(group) == 1:
+            for asset in group:
+                db_session.add(
+                    TrainingJob(
+                        session_id=session_id,
+                        asset_id=asset.id,
+                        status=JobStatus.PENDING.value,
+                        progress=0,
+                        image_path=asset.path,
+                    )
+                )
+                jobs_created += 1
+                unique_count += 1
+        else:
+            representative = group[0]
+            duplicates = group[1:]
+
+            db_session.add(
+                TrainingJob(
+                    session_id=session_id,
+                    asset_id=representative.id,
+                    status=JobStatus.PENDING.value,
+                    progress=0,
+                    image_path=representative.path,
+                )
+            )
+            jobs_created += 1
+            unique_count += 1
+
+            for dup in duplicates:
+                db_session.add(
+                    TrainingJob(
+                        session_id=session_id,
+                        asset_id=dup.id,
+                        status=JobStatus.SKIPPED.value,
+                        progress=100,
+                        image_path=dup.path,
+                        skip_reason=f"Duplicate of asset {representative.id}",
+                    )
+                )
+                jobs_created += 1
+                skipped_count += 1
+
+    # Update session skipped_images counter
+    session_obj = get_session_by_id_sync(db_session, session_id)
+    if session_obj and skipped_count > 0:
+        session_obj.skipped_images = (session_obj.skipped_images or 0) + skipped_count
+
+    db_session.commit()
+
+    logger.info(
+        f"Created {jobs_created} training jobs for session {session_id}: "
+        f"{unique_count} unique, {skipped_count} skipped "
+        f"({len(existing_asset_ids)} already existed)"
+    )
+
+    return {"jobs_created": jobs_created, "unique": unique_count, "skipped": skipped_count}

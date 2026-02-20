@@ -49,6 +49,7 @@ class SessionStatus(str, Enum):
     """Status enum for training sessions."""
 
     PENDING = "pending"
+    DISCOVERING = "discovering"
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"

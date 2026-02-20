@@ -888,3 +888,149 @@ async def test_training_status_empty_subdirectories_list(
     result = await service.enrich_with_training_status(db_session, [], "/test")
 
     assert result == []
+
+
+# ============================================================================
+# DISCOVERING state tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_start_training_transitions_to_discovering(
+    test_client: AsyncClient,
+    db_session: AsyncSession,
+    test_category: Category,
+    monkeypatch,
+) -> None:
+    """POST /start on a PENDING session immediately returns DISCOVERING status.
+
+    The key behaviour: the API no longer blocks on filesystem scanning.
+    It enqueues the RQ job and returns DISCOVERING instantly.
+    """
+    from unittest.mock import MagicMock
+
+    from image_search_service.db.models import SessionStatus, TrainingSession
+
+    # Create a PENDING session with at least one subdirectory
+    session = TrainingSession(
+        name="Discover Test",
+        root_path="/test/images",
+        category_id=test_category.id,
+        status=SessionStatus.PENDING.value,
+        total_images=0,
+        processed_images=0,
+        failed_images=0,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    # Mock the RQ queue so we don't need a real Redis connection
+    mock_job = MagicMock()
+    mock_job.id = "fake-rq-job-id"
+    mock_queue = MagicMock()
+    mock_queue.enqueue.return_value = mock_job
+
+    def mock_get_queue(name: str):  # noqa: ANN001
+        return mock_queue
+
+    monkeypatch.setattr(
+        "image_search_service.services.training_service.get_queue",
+        mock_get_queue,
+    )
+
+    response = await test_client.post(f"/api/v1/training/sessions/{session.id}/start")
+
+    assert response.status_code == 200
+    data = response.json()
+    # API must return DISCOVERING immediately — not RUNNING
+    assert data["status"] == "discovering"
+    assert data["sessionId"] == session.id
+
+    # Confirm DB was updated
+    await db_session.refresh(session)
+    assert session.status == SessionStatus.DISCOVERING.value
+
+
+@pytest.mark.asyncio
+async def test_start_training_discovering_is_invalid_from_discovering(
+    test_client: AsyncClient,
+    db_session: AsyncSession,
+    test_category: Category,
+) -> None:
+    """Calling /start on a DISCOVERING session returns 400 (already in progress)."""
+    from image_search_service.db.models import SessionStatus, TrainingSession
+
+    session = TrainingSession(
+        name="Already Discovering",
+        root_path="/test/images",
+        category_id=test_category.id,
+        status=SessionStatus.DISCOVERING.value,
+        total_images=0,
+        processed_images=0,
+        failed_images=0,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    response = await test_client.post(f"/api/v1/training/sessions/{session.id}/start")
+
+    assert response.status_code == 400
+    assert "Cannot start training from state" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_enrich_with_training_status_discovering_shows_in_progress(
+    db_session: AsyncSession,
+    test_category: Category,
+) -> None:
+    """DISCOVERING sessions report 'in_progress' for their subdirectories.
+
+    This ensures the directory listing reflects that discovery is underway.
+    """
+    from image_search_service.api.training_schemas import DirectoryInfo
+    from image_search_service.db.models import SessionStatus, TrainingSession, TrainingSubdirectory
+    from image_search_service.services.training_service import TrainingService
+
+    # Create a session in DISCOVERING state
+    session = TrainingSession(
+        name="Discovering Session",
+        root_path="/test",
+        category_id=test_category.id,
+        status=SessionStatus.DISCOVERING.value,
+        total_images=0,
+        processed_images=0,
+        failed_images=0,
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    subdir = TrainingSubdirectory(
+        session_id=session.id,
+        path="/test/dir1",
+        name="dir1",
+        selected=True,
+        image_count=50,
+        trained_count=0,
+        status="pending",
+    )
+    db_session.add(subdir)
+    await db_session.commit()
+
+    service = TrainingService()
+
+    subdirs = [
+        DirectoryInfo(
+            path="/test/dir1",
+            name="dir1",
+            imageCount=50,
+            selected=False,
+        ),
+    ]
+
+    result = await service.enrich_with_training_status(db_session, subdirs, "/test")
+
+    assert len(result) == 1
+    # DISCOVERING session counts as in_progress for directory status
+    assert result[0].training_status == "in_progress"

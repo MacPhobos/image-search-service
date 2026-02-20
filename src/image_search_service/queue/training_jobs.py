@@ -48,9 +48,11 @@ from sqlalchemy import select
 from image_search_service.core.config import get_settings
 from image_search_service.core.device import get_device_info
 from image_search_service.core.logging import get_logger
-from image_search_service.db.models import JobStatus, TrainingJob
+from image_search_service.db.models import JobStatus, SessionStatus, TrainingJob
 from image_search_service.db.sync_operations import (
     create_evidence_sync,
+    create_training_jobs_sync,
+    discover_assets_sync,
     get_asset_by_id_sync,
     get_session_by_id_sync,
     get_sync_session,
@@ -129,8 +131,10 @@ def _load_image_pil(path: str) -> tuple[str, Image.Image | None]:
 def train_session(session_id: int) -> dict[str, object]:
     """Main training job that orchestrates batch processing.
 
-    This is the entry point job enqueued by the API. It discovers all assets,
-    creates TrainingJob records, and processes them in batches.
+    This is the entry point job enqueued by the API.  When the session is in
+    DISCOVERING state the worker performs asset discovery and job creation
+    synchronously before starting GPU processing.  This keeps the HTTP
+    response fast (milliseconds) while all heavy work runs in the background.
 
     FORK-SAFETY (macOS): This function runs in RQ work-horse subprocess.
     We disable proxy detection immediately to prevent urllib from forking
@@ -150,6 +154,102 @@ def train_session(session_id: int) -> dict[str, object]:
     settings = get_settings()
 
     try:
+        # ------------------------------------------------------------------
+        # Phase 0: Asset discovery (only when session is in DISCOVERING state)
+        # ------------------------------------------------------------------
+        training_session = get_session_by_id_sync(db_session, session_id)
+        if not training_session:
+            logger.error(f"Training session {session_id} not found in worker")
+            return {
+                "status": "failed",
+                "session_id": session_id,
+                "error": f"Training session {session_id} not found",
+            }
+
+        if training_session.status == SessionStatus.DISCOVERING.value:
+            logger.info(
+                f"Session {session_id} is DISCOVERING — running asset discovery in worker"
+            )
+
+            # Check for early cancellation before doing expensive I/O
+            if tracker.should_stop(db_session):
+                logger.info(
+                    f"Session {session_id} was cancelled before discovery started"
+                )
+                return {
+                    "status": "cancelled",
+                    "session_id": session_id,
+                    "processed": 0,
+                    "failed": 0,
+                    "message": "Cancelled before discovery",
+                }
+
+            # Discover all image assets (filesystem scan + DB inserts).
+            # Pass a cancellation callback so the scan can be interrupted
+            # every 500 files when the user cancels mid-discovery.
+            try:
+                assets = discover_assets_sync(
+                    db_session,
+                    session_id,
+                    cancellation_check=lambda: tracker.should_stop(db_session),
+                )
+            except ValueError as exc:
+                logger.error(f"Asset discovery failed for session {session_id}: {exc}")
+                training_session = get_session_by_id_sync(db_session, session_id)
+                if training_session:
+                    training_session.status = SessionStatus.FAILED.value
+                    db_session.commit()
+                return {
+                    "status": "failed",
+                    "session_id": session_id,
+                    "error": str(exc),
+                }
+
+            if not assets:
+                logger.warning(f"No assets discovered for session {session_id}")
+                training_session = get_session_by_id_sync(db_session, session_id)
+                if training_session:
+                    training_session.status = SessionStatus.FAILED.value
+                    db_session.commit()
+                return {
+                    "status": "failed",
+                    "session_id": session_id,
+                    "error": "No assets found for session",
+                }
+
+            logger.info(
+                f"Discovered {len(assets)} assets for session {session_id}; "
+                "creating training jobs"
+            )
+
+            # Create TrainingJob records with perceptual-hash deduplication
+            job_counts = create_training_jobs_sync(db_session, session_id, assets)
+
+            logger.info(
+                f"Created {job_counts['jobs_created']} training jobs for session "
+                f"{session_id}: {job_counts['unique']} unique, "
+                f"{job_counts['skipped']} skipped"
+            )
+
+            # Transition DISCOVERING → RUNNING and set totals / timestamps
+            training_session = get_session_by_id_sync(db_session, session_id)
+            if training_session:
+                training_session.total_images = len(assets)
+                training_session.processed_images = 0
+                training_session.failed_images = 0
+                training_session.status = SessionStatus.RUNNING.value
+                training_session.started_at = datetime.now(UTC)
+                db_session.commit()
+
+            logger.info(
+                f"Session {session_id} transitioned DISCOVERING → RUNNING "
+                f"({len(assets)} total images)"
+            )
+
+        # ------------------------------------------------------------------
+        # Phase 1: Process pending training jobs
+        # ------------------------------------------------------------------
+
         # Get all pending jobs for this session
         query = (
             select(TrainingJob)
@@ -230,9 +330,7 @@ def train_session(session_id: int) -> dict[str, object]:
         )
 
         # Mark training session as completed
-        from image_search_service.db.models import SessionStatus
-        from image_search_service.db.sync_operations import get_session_by_id_sync
-
+        # (SessionStatus and get_session_by_id_sync are imported at module level)
         training_session = get_session_by_id_sync(db_session, session_id)
         if training_session and processed_count > 0:
             training_session.status = SessionStatus.COMPLETED.value
@@ -310,6 +408,20 @@ def train_session(session_id: int) -> dict[str, object]:
 
     except Exception as e:
         logger.exception(f"Error in training session {session_id}: {e}")
+        # Best-effort DB update: mark session as FAILED so it does not stay
+        # stuck in DISCOVERING or RUNNING permanently.
+        try:
+            recovery_session = get_session_by_id_sync(db_session, session_id)
+            if recovery_session and recovery_session.status in (
+                SessionStatus.DISCOVERING.value,
+                SessionStatus.RUNNING.value,
+            ):
+                recovery_session.status = SessionStatus.FAILED.value
+                db_session.commit()
+        except Exception:
+            logger.error(
+                f"Failed to update session {session_id} status to FAILED during error recovery"
+            )
         return {
             "status": "failed",
             "session_id": session_id,

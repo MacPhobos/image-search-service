@@ -544,20 +544,148 @@ def test_train_single_asset_evidence_metadata(training_job_fixtures, monkeypatch
 
 
 def test_train_session_not_found(training_job_fixtures, monkeypatch):
-    """Test train_session returns error for invalid session_id."""
-    # Mock get_session_by_id_sync to return None
+    """Test train_session returns failed when session does not exist.
+
+    Previously (before DISCOVERING state refactor) this test expected "completed"
+    because the function would fall through to the "no pending jobs" check.
+    Now we check session existence first and return a proper error.
+    """
+    # Mock get_session_by_id_sync to return None (session not in DB)
     monkeypatch.setattr(
         "image_search_service.queue.training_jobs.get_session_by_id_sync",
         lambda session, session_id: None,
     )
 
-    # This will return early since no pending jobs
     result = train_session(session_id=999)
 
-    # Should complete with no jobs processed
-    assert result["status"] == "completed"
+    # Should fail fast with an informative error
+    assert result["status"] == "failed"
+    assert result["session_id"] == 999
+    assert "not found" in result["error"]
+
+
+def test_train_session_discovering_cancelled_before_discovery(
+    training_job_fixtures, monkeypatch
+):
+    """Test train_session exits cleanly when cancelled while DISCOVERING."""
+    fixtures = training_job_fixtures
+
+    # Put session in DISCOVERING state
+    session = fixtures["session"]
+    session.status = SessionStatus.DISCOVERING.value
+    fixtures["db_session"].commit()
+
+    # ProgressTracker reports stop (cancelled / paused)
+    fixtures["mock_tracker"].should_stop.return_value = True
+
+    result = train_session(session_id=1)
+
+    assert result["status"] == "cancelled"
+    assert result["session_id"] == 1
     assert result["processed"] == 0
-    assert result["message"] == "No pending jobs"
+
+
+def test_train_session_discovering_no_assets(training_job_fixtures, monkeypatch):
+    """Test train_session fails gracefully when discovery finds zero assets."""
+    fixtures = training_job_fixtures
+
+    # Put session in DISCOVERING state
+    session = fixtures["session"]
+    session.status = SessionStatus.DISCOVERING.value
+    fixtures["db_session"].commit()
+
+    # discover_assets_sync returns empty list (no images found).
+    # Accept **kwargs to be compatible with the cancellation_check parameter.
+    monkeypatch.setattr(
+        "image_search_service.queue.training_jobs.discover_assets_sync",
+        lambda db, session_id, **kwargs: [],
+    )
+
+    result = train_session(session_id=1)
+
+    assert result["status"] == "failed"
+    assert result["session_id"] == 1
+    assert "No assets found" in result["error"]
+
+
+def test_train_session_discovering_transitions_to_running(
+    training_job_fixtures, monkeypatch
+):
+    """Test DISCOVERING session transitions to RUNNING after discovery, then processes jobs."""
+    fixtures = training_job_fixtures
+    db_session = fixtures["db_session"]
+
+    # Put session in DISCOVERING state
+    session = fixtures["session"]
+    session.status = SessionStatus.DISCOVERING.value
+    session.total_images = 0  # Will be set by discovery
+    db_session.commit()
+
+    # Track status updates to verify the DISCOVERING → RUNNING transition
+    status_updates: list[str] = []
+
+    real_get_session = None
+    from image_search_service.db.sync_operations import get_session_by_id_sync as _real_get
+
+    real_get_session = _real_get
+
+    def spy_get_session(db, sid):
+        result_obj = real_get_session(db, sid)
+        if result_obj is not None:
+            status_updates.append(result_obj.status)
+        return result_obj
+
+    monkeypatch.setattr(
+        "image_search_service.queue.training_jobs.get_session_by_id_sync",
+        spy_get_session,
+    )
+
+    # discover_assets_sync returns the existing assets.
+    # Accept **kwargs to be compatible with the cancellation_check parameter.
+    discovered_assets = fixtures["assets"][:3]
+    monkeypatch.setattr(
+        "image_search_service.queue.training_jobs.discover_assets_sync",
+        lambda db, session_id, **kwargs: discovered_assets,
+    )
+
+    # create_training_jobs_sync reports jobs created (jobs already exist in DB)
+    monkeypatch.setattr(
+        "image_search_service.queue.training_jobs.create_training_jobs_sync",
+        lambda db, session_id, assets: {
+            "jobs_created": len(assets),
+            "unique": len(assets),
+            "skipped": 0,
+        },
+    )
+
+    # train_batch succeeds
+    def mock_train_batch(session_id, asset_ids, batch_num, **kwargs):
+        return {"processed": len(asset_ids), "failed": 0, "io_time": 0.1, "gpu_time": 0.2}
+
+    monkeypatch.setattr(
+        "image_search_service.queue.training_jobs.train_batch",
+        mock_train_batch,
+    )
+
+    # Mock face detection auto-trigger
+    def mock_get_queue(name):
+        mock_queue = MagicMock()
+        mock_queue.enqueue.return_value = MagicMock(id="test-job-id")
+        return mock_queue
+
+    monkeypatch.setattr("image_search_service.queue.worker.get_queue", mock_get_queue)
+
+    result = train_session(session_id=1)
+
+    # Worker should have successfully completed (discovery + training both ran)
+    assert result["status"] == "completed"
+    assert result["session_id"] == 1
+
+    # Verify that the status was set to RUNNING during discovery phase
+    # (one of the spy calls should have seen RUNNING)
+    assert "running" in status_updates, (
+        f"Expected RUNNING in status updates but got: {status_updates}"
+    )
 
 
 def test_train_session_no_pending_jobs(training_job_fixtures, monkeypatch):
