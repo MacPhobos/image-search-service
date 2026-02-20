@@ -689,7 +689,7 @@ async def update_person(
 async def get_person_photos(
     person_id: UUID,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=10000),
     db: AsyncSession = Depends(get_db),
 ) -> PersonPhotosResponse:
     """
