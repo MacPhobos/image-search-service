@@ -47,32 +47,80 @@ TEST_SYNC_DATABASE_URL = "sqlite:///:memory:"
 
 @pytest.fixture(autouse=True)
 def test_settings(monkeypatch):
-    """Clear settings cache and override with test-safe collection names.
+    """Clear settings cache and establish a clean test environment.
 
-    CRITICAL: This fixture serves two safety purposes:
-    1. Clears the settings LRU cache to prevent production settings from leaking between tests
-    2. Sets test-safe Qdrant collection names to prevent accidental deletion of live data
+    CRITICAL: This fixture serves three safety purposes:
+    1. Clears the settings and storage LRU caches to prevent production settings
+       from leaking between tests.
+    2. Sets test-safe Qdrant collection names to prevent accidental deletion of
+       live data.
+    3. Neutralizes Google Drive env vars so .env credentials do not bleed into
+       tests.
 
-    This MUST remain function-scoped and autouse. Every test must get fresh settings
-    with test-safe collection names. Removing or session-scoping this fixture risks
-    production data deletion.
+    WHY Drive neutralization is necessary:
+    The .env file is a legitimate local development credential file with
+    GOOGLE_DRIVE_ENABLED=true and real OAuth tokens. pydantic-settings reads
+    .env at Settings() construction time. Without explicit env var overrides,
+    every test that calls Settings() (directly or via get_settings()) receives
+    the live credentials and enabled=True — causing "disabled" tests to fail
+    and "no-network" tests to make real Google Drive API calls.
+
+    HOW the override works:
+    pydantic-settings priority: OS env vars > .env file > field defaults.
+    monkeypatch.setenv() sets OS env vars, which win over .env values.
+    Individual tests that need Drive enabled call _enable_drive(monkeypatch),
+    which calls monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "true") to override
+    the "false" set here — last write within the same test wins.
+
+    WHY get_storage.cache_clear() is also needed:
+    get_storage() is @lru_cache(maxsize=1) — a second independent cache.
+    Clearing only get_settings.cache_clear() leaves a stale storage client
+    cached across tests. Any test that bypasses the _require_drive_enabled()
+    guard and calls get_async_storage() directly could receive a cached storage
+    instance from a previous test.
+
+    This MUST remain function-scoped and autouse. Every test must get fresh
+    settings. Removing or session-scoping this fixture risks production data
+    deletion (Qdrant) and unintended network calls (Drive).
 
     Replaces the former clear_settings_cache + use_test_settings fixtures.
     """
     from image_search_service.core.config import get_settings
+    from image_search_service.storage import get_storage
 
-    # Clear any cached settings from previous test
+    # Clear any cached settings and storage from previous test
     get_settings.cache_clear()
+    get_storage.cache_clear()
 
     # Set environment variables for test collection names
     monkeypatch.setenv("QDRANT_COLLECTION", "test_image_assets")
     monkeypatch.setenv("QDRANT_FACE_COLLECTION", "test_faces")
 
-    # Clear cache again so new env vars are picked up
+    # Neutralize Google Drive env vars so .env credentials do not bleed into
+    # tests. Each of these overrides the corresponding .env value with the safe
+    # default. Tests that need Drive enabled call _enable_drive(monkeypatch)
+    # afterward, which overrides ENABLED and other required vars.
+    monkeypatch.setenv("GOOGLE_DRIVE_ENABLED", "false")
+    monkeypatch.setenv("GOOGLE_DRIVE_AUTH_MODE", "service_account")
+    monkeypatch.setenv("GOOGLE_DRIVE_ROOT_ID", "")
+    monkeypatch.setenv("GOOGLE_DRIVE_SA_JSON", "")
+    monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", "")
+    monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", "")
+    monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "")
+    # These three match .env values today (no current failures) but could
+    # diverge if .env changes; isolate them now for robustness.
+    monkeypatch.setenv("GOOGLE_DRIVE_UPLOAD_BATCH_SIZE", "10")
+    monkeypatch.setenv("GOOGLE_DRIVE_PATH_CACHE_TTL", "300")
+    monkeypatch.setenv("GOOGLE_DRIVE_PATH_CACHE_MAXSIZE", "1024")
+
+    # Clear caches again so new env vars are picked up by the first
+    # get_settings() / get_storage() call in this test
     get_settings.cache_clear()
+    get_storage.cache_clear()
     yield
-    # Clear cache after test so no test-specific settings leak
+    # Clear caches after test so no test-specific settings leak to the next test
     get_settings.cache_clear()
+    get_storage.cache_clear()
 
 
 @pytest.fixture

@@ -135,34 +135,35 @@ def test_search_vectors_respects_offset(
         assert ids1 != ids2
 
 
-def test_ensure_collection_creates_if_missing() -> None:
+def test_ensure_collection_creates_if_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that ensure_collection creates collection if it doesn't exist."""
+    import image_search_service.vector.qdrant as qdrant_module
+
     # Create fresh in-memory client
     client = QdrantClient(":memory:")
 
-    # Verify collection doesn't exist
-    collections = client.get_collections().collections
+    # Verify collection doesn't exist in our fresh client
     settings = get_settings()
+    collections = client.get_collections().collections
     collection_names = [c.name for c in collections]
     assert settings.qdrant_collection not in collection_names
 
-    # Ensure collection (should create it)
-    # Temporarily patch get_qdrant_client to return our fresh client
-    import image_search_service.vector.qdrant as qdrant_module
+    # _collection_ensured is a module-level set that persists across tests in the
+    # same process. If a previous test (e.g. via the qdrant_client fixture) already
+    # called ensure_collection, the fast-path guard returns early and our fresh
+    # in-memory client never gets the collection.
+    # monkeypatch replaces the set with an empty one and auto-restores it after
+    # the test, preventing both false negatives here and pollution of other tests.
+    monkeypatch.setattr(qdrant_module, "_collection_ensured", set())
+    monkeypatch.setattr(qdrant_module, "get_qdrant_client", lambda: client)
 
-    original_get_client = qdrant_module.get_qdrant_client
-    qdrant_module.get_qdrant_client = lambda: client
+    # ensure_collection must now create the collection (cache was empty)
+    ensure_collection(embedding_dim=768)  # Image search uses 768-dim
 
-    try:
-        ensure_collection(embedding_dim=768)  # Image search uses 768-dim
-
-        # Verify collection was created
-        collections = client.get_collections().collections
-        collection_names = [c.name for c in collections]
-        assert settings.qdrant_collection in collection_names
-    finally:
-        # Restore original function
-        qdrant_module.get_qdrant_client = original_get_client
+    # Verify collection was created in our test client
+    collections = client.get_collections().collections
+    collection_names = [c.name for c in collections]
+    assert settings.qdrant_collection in collection_names
 
 
 def test_ensure_collection_idempotent() -> None:

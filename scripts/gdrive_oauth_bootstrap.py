@@ -61,7 +61,7 @@ SCOPE_PRESETS: dict[str, list[str]] = {
     "drive.file": ["https://www.googleapis.com/auth/drive.file"],
 }
 
-DEFAULT_PORT = 8080
+DEFAULT_PORT = 12345
 
 
 def main() -> int:

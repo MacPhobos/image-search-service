@@ -20,7 +20,7 @@ typecheck: ## Run mypy type checker
 	uv run mypy src/
 
 test: ## Run pytest tests (parallel, randomized, with timeout)
-	uv run pytest
+	uv run pytest -n auto
 
 test-serial: ## Run pytest serially (for debugging test isolation issues)
 	uv run pytest -n0 -p no:randomly --timeout=60

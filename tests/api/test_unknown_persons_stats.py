@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import patch
 from uuid import uuid4
@@ -112,20 +113,27 @@ async def unclustered_faces(
 @pytest.mark.asyncio
 async def test_stats_zero_state(test_client: AsyncClient) -> None:
     """Test stats endpoint with no faces."""
-    response = await test_client.get("/api/v1/faces/unknown-persons/stats")
+    # The test_client fixture does NOT mock get_redis, so real Redis would be called.
+    # Mock it here to ensure "zero state" regardless of any stale Redis data
+    # that may have been written by previous test runs or pipeline executions.
+    with patch("image_search_service.api.routes.unknown_persons.get_redis") as mock_redis:
+        mock_redis_conn = mock_redis.return_value
+        mock_redis_conn.get.return_value = None  # No cached data in Redis
 
-    assert response.status_code == 200
-    data = response.json()
+        response = await test_client.get("/api/v1/faces/unknown-persons/stats")
 
-    assert data["totalUnassignedFaces"] == 0
-    assert data["totalClusteredFaces"] == 0
-    assert data["totalNoiseFaces"] == 0
-    assert data["totalUnclusteredFaces"] == 0
-    assert data["candidateGroups"] == 0
-    assert data["avgGroupSize"] == 0.0
-    assert data["avgGroupConfidence"] == 0.0
-    assert data["totalDismissedGroups"] == 0
-    assert data["lastDiscoveryAt"] is None
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["totalUnassignedFaces"] == 0
+        assert data["totalClusteredFaces"] == 0
+        assert data["totalNoiseFaces"] == 0
+        assert data["totalUnclusteredFaces"] == 0
+        assert data["candidateGroups"] == 0
+        assert data["avgGroupSize"] == 0.0
+        assert data["avgGroupConfidence"] == 0.0
+        assert data["totalDismissedGroups"] == 0
+        assert data["lastDiscoveryAt"] is None
 
 
 @pytest.mark.asyncio
@@ -196,8 +204,11 @@ async def test_stats_with_redis_timestamp(
 
     with patch("image_search_service.api.routes.unknown_persons.get_redis") as mock_redis:
         mock_redis_conn = mock_redis.return_value
+        # The route calls json.loads() on the Redis value. A bare ISO string
+        # causes JSONDecodeError (the colon in "10:30" is not valid JSON).
+        # Encode the value as a JSON object matching how face_jobs.py stores it.
         mock_redis_conn.get.side_effect = lambda key: (
-            discovery_time.isoformat().encode("utf-8")
+            json.dumps({"timestamp": discovery_time.isoformat()}).encode("utf-8")
             if key == "unknown_persons:last_discovery"
             else None
         )

@@ -11,22 +11,34 @@ from httpx import AsyncClient
 @pytest.mark.asyncio
 async def test_discover_minimal_params(test_client: AsyncClient) -> None:
     """Test discovery with default parameters."""
-    with patch("image_search_service.api.routes.unknown_persons.get_queue") as mock_get_queue:
-        # Mock queue and job
+    # The route pre-generates a UUID via uuid.uuid4() and returns it directly —
+    # it never reads job.id from the enqueue return value. Patch uuid.uuid4 to
+    # get a predictable job ID. Also patch get_redis because the route calls it
+    # before get_queue to pre-seed the progress key in Redis.
+    fixed_uuid = "test-job-123"
+    with (
+        patch("image_search_service.api.routes.unknown_persons.get_queue") as mock_get_queue,
+        patch("image_search_service.api.routes.unknown_persons.get_redis") as mock_get_redis,
+        patch(
+            "image_search_service.api.routes.unknown_persons.uuid.uuid4",
+            return_value=fixed_uuid,
+        ),
+    ):
         mock_queue = MagicMock()
-        mock_job = MagicMock()
-        mock_job.id = "test-job-123"
-        mock_queue.enqueue.return_value = mock_job
+        mock_queue.enqueue.return_value = MagicMock()
         mock_get_queue.return_value = mock_queue
+
+        mock_redis_conn = MagicMock()
+        mock_get_redis.return_value = mock_redis_conn
 
         response = await test_client.post("/api/v1/faces/unknown-persons/discover", json={})
 
         assert response.status_code == 200
         data = response.json()
 
-        assert data["jobId"] == "test-job-123"
+        assert data["jobId"] == fixed_uuid
         assert data["status"] == "queued"
-        assert data["progressKey"] == "job:test-job-123:progress"
+        assert data["progressKey"] == f"job:{fixed_uuid}:progress"
         assert "params" in data
 
         # Verify job was enqueued with defaults
@@ -43,12 +55,24 @@ async def test_discover_minimal_params(test_client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_discover_custom_params(test_client: AsyncClient) -> None:
     """Test discovery with custom parameters."""
-    with patch("image_search_service.api.routes.unknown_persons.get_queue") as mock_get_queue:
+    # Same wiring issue as test_discover_minimal_params: the route uses a
+    # pre-generated uuid.uuid4() (not job.id) and calls get_redis() before
+    # get_queue(). Patch all three to get deterministic, isolated behavior.
+    fixed_uuid = "test-job-456"
+    with (
+        patch("image_search_service.api.routes.unknown_persons.get_queue") as mock_get_queue,
+        patch("image_search_service.api.routes.unknown_persons.get_redis") as mock_get_redis,
+        patch(
+            "image_search_service.api.routes.unknown_persons.uuid.uuid4",
+            return_value=fixed_uuid,
+        ),
+    ):
         mock_queue = MagicMock()
-        mock_job = MagicMock()
-        mock_job.id = "test-job-456"
-        mock_queue.enqueue.return_value = mock_job
+        mock_queue.enqueue.return_value = MagicMock()
         mock_get_queue.return_value = mock_queue
+
+        mock_redis_conn = MagicMock()
+        mock_get_redis.return_value = mock_redis_conn
 
         response = await test_client.post(
             "/api/v1/faces/unknown-persons/discover",
@@ -65,7 +89,7 @@ async def test_discover_custom_params(test_client: AsyncClient) -> None:
         assert response.status_code == 200
         data = response.json()
 
-        assert data["jobId"] == "test-job-456"
+        assert data["jobId"] == fixed_uuid
 
         # Verify custom params passed to job
         call_kwargs = mock_queue.enqueue.call_args[1]

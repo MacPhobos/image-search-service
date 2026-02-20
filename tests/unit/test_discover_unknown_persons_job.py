@@ -401,12 +401,14 @@ def test_progress_reporting(mock_dependencies: dict) -> None:
     mock_dependencies["session"].execute.side_effect = mock_execute
 
     # Act
+    test_progress_key = "job:test-job-123:progress"
     result = discover_unknown_persons_job(
         clustering_method="hdbscan",
         min_cluster_size=5,
         min_quality=0.3,
         max_faces=50000,
         min_cluster_confidence=0.70,
+        progress_key=test_progress_key,
     )
 
     # Assert
@@ -421,7 +423,7 @@ def test_progress_reporting(mock_dependencies: dict) -> None:
     assert "metadata" in phases
     assert "persistence" in phases
     assert "caching" in phases
-    assert "complete" in phases
+    assert "completed" in phases
 
 
 def test_unsupported_clustering_method(mock_dependencies: dict) -> None:
