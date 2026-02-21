@@ -31,11 +31,13 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from rq import get_current_job
-from sqlalchemy import select
+from sklearn.decomposition import PCA  # type: ignore[import-untyped]
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 
 from image_search_service.db.models import (
     FaceInstance,
@@ -2020,6 +2022,7 @@ def discover_unknown_persons_job(
     min_cluster_confidence: float = 0.70,
     eps: float = 0.5,
     progress_key: str | None = None,
+    pca_target_dim: int = 50,
 ) -> dict[str, Any]:
     """Discover unknown person groups by clustering unassigned faces.
 
@@ -2040,6 +2043,10 @@ def discover_unknown_persons_job(
         max_faces: Maximum faces to cluster (memory ceiling)
         min_cluster_confidence: Minimum average pairwise similarity to keep cluster
         eps: Not used for HDBSCAN (reserved for DBSCAN)
+        progress_key: Redis key for real-time progress updates
+        pca_target_dim: Target dimensions for PCA before clustering (0 to disable).
+            Reducing from 512d to <=50d triggers HDBSCAN's Boruvka algorithm
+            (parallel, O(N log^2 N)) instead of Prim's (single-threaded, O(N^2 D)).
 
     Returns:
         dict with: status, total_faces, clusters_found, noise_count,
@@ -2208,19 +2215,99 @@ def discover_unknown_persons_job(
         logger.info(f"[{job_id}] Built embedding matrix: {embeddings.shape}")
         update_progress("embedding", 100, 100, f"Matrix shape: {embeddings.shape}")
 
+        # PHASE 3.5: Dimensionality reduction for efficient clustering
+        #
+        # At 512 dimensions, HDBSCAN selects Prim's MST algorithm (dimensions > 60
+        # threshold in hdbscan 0.8.x), which is single-threaded O(N^2 * D).
+        # PCA to <=50 dimensions triggers Boruvka algorithm selection, which IS
+        # parallel and uses KD-tree pruning: O(N * log^2(N)).
+        #
+        # The original 512d embeddings are preserved for Phase 5 (confidence scores)
+        # which needs full-dimensional cosine similarity for accuracy.
+        #
+        # Note on algorithm="boruvka_kdtree": when explicitly set, hdbscan validates
+        # metric against BALLTREE_VALID_METRICS (not KDTREE_VALID_METRICS) due to a
+        # library quirk, but BALLTREE_VALID_METRICS is a superset, so "euclidean" works
+        # correctly.
+        import time as _time
+
+        n_samples, n_dims = embeddings.shape
+        if pca_target_dim > 0 and n_dims > pca_target_dim and n_samples > pca_target_dim:
+            update_progress(
+                "dimensionality_reduction",
+                0,
+                100,
+                f"Reducing dimensions: {n_dims}d -> {pca_target_dim}d",
+            )
+
+            pca_start = _time.monotonic()
+            # Guard: PCA cannot produce more components than min(n_samples-1, n_features)
+            n_components = min(pca_target_dim, n_samples - 1)
+            pca = PCA(n_components=n_components, random_state=42)
+            embeddings_for_clustering = pca.fit_transform(embeddings)
+            pca_elapsed = _time.monotonic() - pca_start
+
+            explained_variance = float(pca.explained_variance_ratio_.sum())
+            logger.info(
+                f"[{job_id}] PCA: {n_dims}d -> {n_components}d, "
+                f"variance retained: {explained_variance:.1%}, "
+                f"elapsed: {pca_elapsed:.2f}s"
+            )
+
+            if explained_variance < 0.90:
+                logger.warning(
+                    f"[{job_id}] PCA retained only {explained_variance:.1%} variance "
+                    f"(threshold: 90%). Clustering quality may be degraded."
+                )
+
+            update_progress(
+                "dimensionality_reduction",
+                100,
+                100,
+                f"PCA complete: {n_components}d, {explained_variance:.0%} variance retained",
+            )
+        else:
+            # Embeddings are already low-dimensional, PCA is disabled, or too few samples
+            embeddings_for_clustering = embeddings
+            logger.info(
+                f"[{job_id}] Skipping PCA: pca_target_dim={pca_target_dim}, "
+                f"dimensions={n_dims}, samples={n_samples}"
+            )
+
         # PHASE 4: Run HDBSCAN clustering
         update_progress("clustering", 0, 100, "Running HDBSCAN clustering...")
+
+        # Select HDBSCAN algorithm based on whether PCA was applied.
+        # Boruvka with KD-tree is efficient at low dimensions (<=50d after PCA)
+        # but worse than HDBSCAN's auto-selected Prim's algorithm at 512d.
+        pca_was_applied = embeddings_for_clustering.shape[1] < embeddings.shape[1]
+        hdbscan_algorithm = "boruvka_kdtree" if pca_was_applied else "best"
+        # core_dist_n_jobs parallelism only applies to the Boruvka algorithm;
+        # when using "best" (Prim's at high dimensions), it must be 1.
+        hdbscan_n_jobs = -1 if pca_was_applied else 1
+
+        logger.info(
+            "[%s] Using HDBSCAN algorithm=%s (PCA applied: %s, dims: %d)",
+            job_id,
+            hdbscan_algorithm,
+            pca_was_applied,
+            embeddings_for_clustering.shape[1],
+        )
 
         clusterer = hdbscan.HDBSCAN(
             min_cluster_size=min_cluster_size,
             min_samples=3,  # More conservative than min_cluster_size
             metric="euclidean",  # Standard for face embeddings
             cluster_selection_method="eom",  # Excess of mass (more stable)
-            core_dist_n_jobs=1,  # Single thread (RQ worker context)
+            algorithm=hdbscan_algorithm,
+            core_dist_n_jobs=hdbscan_n_jobs,
         )
 
-        logger.info(f"[{job_id}] Starting HDBSCAN clustering...")
-        labels = clusterer.fit_predict(embeddings)
+        logger.info(
+            f"[{job_id}] Starting HDBSCAN clustering on "
+            f"{embeddings_for_clustering.shape} data..."
+        )
+        labels = clusterer.fit_predict(embeddings_for_clustering)
         logger.info(f"[{job_id}] HDBSCAN clustering complete")
 
         update_progress("clustering", 100, 100, "Clustering complete")
@@ -2296,43 +2383,79 @@ def discover_unknown_persons_job(
             f"Found {qualifying_groups} qualifying groups (filtered {filtered_low_confidence})",
         )
 
-        # PHASE 6: Update FaceInstance.cluster_id in database
+        # PHASE 6: Update FaceInstance.cluster_id in database (batch)
+        phase6_start = _time.monotonic()
         update_progress("persistence", 0, 100, "Updating database...")
 
-        # Build mapping: face_id -> cluster_id
-        face_to_cluster: dict[str, str] = {}
+        # Group face IDs by cluster_id for batch updates.
+        # face_ids are already uuid.UUID objects from Qdrant — no string round-trip needed.
+        cluster_to_faces: dict[str, list[uuid_lib.UUID]] = {}
 
         for label, face_id in zip(labels, face_ids):
             if label == -1:
-                # Noise faces get special marker
-                face_to_cluster[str(face_id)] = "-1"
+                # Noise faces: store with "-1" marker
+                cluster_to_faces.setdefault("-1", []).append(face_id)
             else:
                 cluster_id = f"unknown_{label}"
-                # Only update if cluster qualified (passed confidence filter)
+                # Only include faces from qualifying clusters
                 if cluster_id in cluster_metadata:
-                    face_to_cluster[str(face_id)] = cluster_id
+                    cluster_to_faces.setdefault(cluster_id, []).append(face_id)
 
-        # Batch update FaceInstance records
+        # Execute batch UPDATE per cluster_id.
+        # Uses the same pattern as clusterer.py and dual_clusterer.py:
+        # update(FaceInstance).where(FaceInstance.id.in_(...)).values(cluster_id=...)
         updated_count = 0
-        for face_id_str, cluster_id in face_to_cluster.items():
-            try:
-                face_uuid = uuid_lib.UUID(face_id_str)
-                stmt = (
-                    select(FaceInstance)
-                    .where(FaceInstance.id == face_uuid)
-                )
-                face = db_session.execute(stmt).scalar_one_or_none()
+        # Defensive chunk size for query planner efficiency on very large clusters.
+        # PostgreSQL has no hard IN clause limit, but very large IN lists
+        # can cause query planner slowdowns. 5000 is conservative.
+        max_batch_size = 5000
 
-                if face:
-                    face.cluster_id = cluster_id
-                    updated_count += 1
+        for cluster_id, cluster_face_ids in cluster_to_faces.items():
+            try:
+                # Use a SAVEPOINT so a failed batch doesn't poison the
+                # entire transaction (PostgreSQL aborts all subsequent
+                # statements after a statement error within a transaction).
+                nested = db_session.begin_nested()
+
+                # Chunk large clusters to avoid query planner overhead
+                for chunk_start in range(0, len(cluster_face_ids), max_batch_size):
+                    chunk = cluster_face_ids[chunk_start : chunk_start + max_batch_size]
+
+                    stmt = (
+                        update(FaceInstance)
+                        .where(FaceInstance.id.in_(chunk))
+                        .values(cluster_id=cluster_id)
+                    )
+                    cursor_result = cast(CursorResult[Any], db_session.execute(stmt))
+                    updated_count += cursor_result.rowcount
+
+                nested.commit()
 
             except Exception as e:
-                logger.warning(f"[{job_id}] Failed to update face {face_id_str}: {e}")
+                nested.rollback()
+                logger.warning(
+                    f"[{job_id}] Failed to update cluster {cluster_id} "
+                    f"({len(cluster_face_ids)} faces): {e}"
+                )
                 continue
 
         db_session.commit()
-        logger.info(f"[{job_id}] Updated cluster_id for {updated_count} faces")
+
+        total_faces_in_clusters = sum(len(fids) for fids in cluster_to_faces.values())
+        phase6_elapsed = _time.monotonic() - phase6_start
+        logger.info(
+            f"[{job_id}] Batch updated cluster_id for {updated_count} faces "
+            f"across {len(cluster_to_faces)} clusters "
+            f"(expected: {total_faces_in_clusters}) in {phase6_elapsed:.2f}s"
+        )
+
+        # Warn if update count doesn't match expectations
+        if updated_count < total_faces_in_clusters * 0.9:
+            logger.warning(
+                f"[{job_id}] Update count mismatch: updated {updated_count} "
+                f"but expected ~{total_faces_in_clusters}. "
+                f"Some faces may not have been found in the database."
+            )
 
         update_progress("persistence", 100, 100, f"Updated {updated_count} faces")
 
