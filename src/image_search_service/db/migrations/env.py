@@ -4,7 +4,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -53,7 +53,42 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    """Execute migrations with provided connection."""
+    """Execute migrations with provided connection.
+
+    Before running migrations we ensure the alembic_version table exists with
+    a VARCHAR(128) version_num column.  Alembic hardcodes VARCHAR(32) which is
+    too short for descriptive revision IDs such as
+    '013_add_discovering_session_status' (34 chars).  We handle two cases:
+
+    * Fresh database: CREATE TABLE IF NOT EXISTS creates the table with the
+      wide column before Alembic tries to INSERT any revision ID.
+    * Existing database: ALTER TABLE widens the column non-destructively if it
+      is still the old VARCHAR(32) default.
+
+    Both statements are committed in their own transaction so they take effect
+    before Alembic opens its own migration transaction.
+    """
+    # Step 1: Ensure alembic_version exists with a wide version_num column.
+    # If the table already exists this is a no-op.
+    connection.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS alembic_version ("
+            "    version_num VARCHAR(128) NOT NULL, "
+            "    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)"
+            ")"
+        )
+    )
+    # Step 2: Widen the column on existing databases that still have
+    # the Alembic-default VARCHAR(32).  On PostgreSQL this is always safe
+    # and instant (no table rewrite needed for varchar widening).
+    connection.execute(
+        text(
+            "ALTER TABLE alembic_version "
+            "ALTER COLUMN version_num TYPE VARCHAR(128)"
+        )
+    )
+    connection.commit()
+
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
