@@ -35,7 +35,6 @@ from typing import Any, cast
 
 import numpy as np
 from rq import get_current_job
-from sklearn.decomposition import PCA  # type: ignore[import-untyped]
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 
@@ -777,64 +776,81 @@ def detect_faces_for_session_job(
             persons = persons_query.all()
 
             if persons:
-                # Queue suggestion jobs (centroid or prototype based on config)
+                # Queue batch suggestion jobs (B4/B5: batch enqueue instead of per-person)
                 from rq import Queue
+
+                from image_search_service.db.models import PersonPrototype
 
                 redis_client = get_redis()
                 queue = Queue("default", connection=redis_client)
 
-                for person in persons:
-                    # Decide which job to use based on face count and config
-                    if use_centroids and person.face_count >= min_faces_for_centroid:
-                        # Use faster centroid-based search
-                        job = queue.enqueue(
-                            "image_search_service.queue.face_jobs.find_more_centroid_suggestions_job",
-                            person_id=str(person.id),
-                            min_similarity=0.70,
-                            max_results=50,
-                            unassigned_only=True,
-                            job_timeout="10m",
-                        )
-                        centroid_jobs_queued += 1
-                        logger.debug(
-                            f"[{job_id}] Queued centroid suggestion job",
-                            extra={
-                                "person_id": str(person.id),
-                                "face_count": person.face_count,
-                                "job_id": job.id,
-                                "job_type": "centroid",
-                            }
-                        )
-                    else:
-                        # Fall back to prototype-based (for persons with few faces or when disabled)
-                        job = queue.enqueue(
-                            "image_search_service.queue.face_jobs.propagate_person_label_multiproto_job",
-                            person_id=str(person.id),
-                            max_suggestions=50,  # Standard limit
-                            min_confidence=0.7,  # Standard threshold
-                            job_timeout="10m",
-                        )
-                        prototype_jobs_queued += 1
-                        logger.debug(
-                            f"[{job_id}] Queued multi-proto suggestion job",
-                            extra={
-                                "person_id": str(person.id),
-                                "face_count": person.face_count,
-                                "job_id": job.id,
-                                "job_type": "prototype",
-                                "reason": "insufficient_faces" if use_centroids else "centroids_disabled",  # noqa: E501
-                            }
-                        )
+                # B5: Pre-check prototype existence to avoid no-op propagation jobs.
+                # Query which persons actually have prototypes in a single batch query
+                # rather than per-person inside the job (prevents "No prototypes" warnings).
+                persons_with_prototypes = set(
+                    row[0] for row in db_session.execute(
+                        select(PersonPrototype.person_id)
+                        .where(PersonPrototype.person_id.in_([p.id for p in persons]))
+                        .group_by(PersonPrototype.person_id)
+                    ).all()
+                )
 
+                # Partition persons by job type (centroid vs. prototype-based)
+                centroid_person_ids = [
+                    str(p.id) for p in persons
+                    if use_centroids and p.face_count >= min_faces_for_centroid
+                ]
+                prototype_person_ids = [
+                    str(p.id) for p in persons
+                    if not (use_centroids and p.face_count >= min_faces_for_centroid)
+                    and p.id in persons_with_prototypes  # B5: skip persons without prototypes
+                ]
+
+                logger.info(
+                    f"[{job_id}] Partitioned {len(persons)} persons for batch suggestion jobs",
+                    extra={
+                        "centroid_count": len(centroid_person_ids),
+                        "prototype_count": len(prototype_person_ids),
+                        "skipped_no_prototype": len(persons) - len(centroid_person_ids) - len(prototype_person_ids),  # noqa: E501
+                    },
+                )
+
+                # Enqueue at most 2 batch jobs (instead of N individual jobs)
+                if centroid_person_ids:
+                    queue.enqueue(
+                        "image_search_service.queue.face_jobs"
+                        ".find_centroid_suggestions_batch_job",
+                        person_ids=centroid_person_ids,
+                        min_similarity=0.70,
+                        max_results_per_person=50,
+                        unassigned_only=True,
+                        job_timeout="30m",
+                    )
+                    centroid_jobs_queued = 1
+                    suggestions_jobs_queued += 1
+
+                if prototype_person_ids:
+                    queue.enqueue(
+                        "image_search_service.queue.face_jobs"
+                        ".propagate_labels_batch_job",
+                        person_ids=prototype_person_ids,
+                        max_suggestions=50,
+                        min_confidence=0.7,
+                        preserve_existing=True,
+                        job_timeout="30m",
+                    )
+                    prototype_jobs_queued = 1
                     suggestions_jobs_queued += 1
 
                 logger.info(
-                    f"[{job_id}] Post-training suggestion jobs queued",
+                    f"[{job_id}] Post-training suggestion batch jobs queued",
                     extra={
                         "session_id": session_id,
                         "jobs_queued": suggestions_jobs_queued,
                         "centroid_jobs": centroid_jobs_queued,
                         "prototype_jobs": prototype_jobs_queued,
+                        "persons_in_centroid_batch": len(centroid_person_ids),
+                        "persons_in_prototype_batch": len(prototype_person_ids),
                         "mode": suggestions_mode,
                     }
                 )
@@ -1430,6 +1446,251 @@ def find_more_suggestions_job(
         db_session.close()
 
 
+def _propagate_labels_for_person(
+    db_session: Any,
+    face_qdrant_client: Any,
+    person_id: str,
+    min_confidence: float = 0.7,
+    max_suggestions: int = 50,
+    preserve_existing: bool = True,
+    job_id: str = "no-job",
+) -> dict[str, Any]:
+    """Core logic for multi-prototype label propagation for a single person.
+
+    Accepts externally-managed DB session and Qdrant client for batch reuse,
+    avoiding the per-job connection overhead (~245ms) when processing many persons.
+
+    Does NOT commit or close the session -- the caller is responsible for
+    transaction management (savepoints in batch mode, direct commit in standalone mode).
+
+    Args:
+        db_session: Synchronous SQLAlchemy session (caller-managed lifecycle)
+        face_qdrant_client: FaceQdrantClient instance (caller-managed)
+        person_id: UUID string of the person
+        min_confidence: Minimum cosine similarity (default: 0.7)
+        max_suggestions: Maximum suggestions to create (default: 50)
+        preserve_existing: If True, keep existing pending suggestions and only add new ones
+        job_id: Job identifier for structured log context
+
+    Returns:
+        dict with counts: suggestions_created, prototypes_used, candidates_evaluated,
+        expired_count, preserved_count, skipped_duplicates
+    """
+    import uuid as uuid_lib
+
+    from image_search_service.db.models import Person, PersonPrototype
+
+    # 1. Get person
+    person_uuid = uuid_lib.UUID(person_id)
+    person = db_session.get(Person, person_uuid)
+
+    if not person:
+        logger.warning(f"[{job_id}] Person {person_id} not found")
+        return {"status": "error", "message": "Person not found"}
+
+    # 2. Get all prototypes for this person
+    prototypes_query = select(PersonPrototype).where(PersonPrototype.person_id == person_uuid)
+    prototypes = list(db_session.execute(prototypes_query).scalars().all())
+
+    if not prototypes:
+        logger.warning(f"[{job_id}] No prototypes found for person {person_id}")
+        return {"status": "error", "message": "No prototypes"}
+
+    # 3. Get prototype embeddings from Qdrant
+    qdrant = face_qdrant_client
+
+    # First, collect all face instances and point IDs
+    face_instances = {}  # proto.face_instance_id -> face
+    point_ids = []
+
+    for proto in prototypes:
+        face = db_session.get(FaceInstance, proto.face_instance_id)
+        if face and face.qdrant_point_id:
+            face_instances[proto.face_instance_id] = face
+            point_ids.append(face.qdrant_point_id)
+
+    # Batch retrieve embeddings
+    embeddings_map = qdrant.get_embeddings_batch(point_ids)
+
+    # Build prototype embeddings dict
+    prototype_embeddings: dict[str, dict[str, Any]] = {}
+
+    for proto in prototypes:
+        face = face_instances.get(proto.face_instance_id)
+        if face and face.qdrant_point_id:
+            embedding = embeddings_map.get(face.qdrant_point_id)
+            if embedding:
+                prototype_embeddings[str(proto.face_instance_id)] = {
+                    "embedding": embedding,
+                    "face_id": str(face.id),
+                    "quality": face.quality_score or 0.0,
+                }
+
+    if not prototype_embeddings:
+        logger.warning(f"[{job_id}] No prototype embeddings found for person {person_id}")
+        return {"status": "error", "message": "No prototype embeddings found"}
+
+    logger.info(
+        f"[{job_id}] Found {len(prototype_embeddings)} prototypes for person {person.name}"
+    )
+
+    # 4. Search using each prototype and aggregate results
+    candidate_faces: dict[str, dict[str, Any]] = {}  # face_id -> {scores, max_score, ...}
+
+    for proto_face_id, proto_data in prototype_embeddings.items():
+        # Search for similar faces
+        results = qdrant.search_similar_faces(
+            query_embedding=proto_data["embedding"],
+            limit=max_suggestions * 3,  # Get more candidates for aggregation
+            score_threshold=min_confidence,
+        )
+
+        logger.debug(
+            f"[{job_id}] Prototype {proto_face_id}: found {len(results)} similar faces"
+        )
+
+        for result in results:
+            # Extract face_id from payload
+            if result.payload is None:
+                continue
+
+            face_id_str = result.payload.get("face_instance_id")
+            if not face_id_str:
+                continue
+
+            try:
+                face_id_uuid = uuid_lib.UUID(face_id_str)
+            except ValueError:
+                logger.warning(f"[{job_id}] Invalid face_id in payload: {face_id_str}")
+                continue
+
+            score = result.score
+
+            # Get the face instance to check person assignment
+            face = db_session.get(FaceInstance, face_id_uuid)
+
+            if not face:
+                continue
+
+            # Skip if this face belongs to any person already
+            if face.person_id is not None:
+                continue
+
+            # Aggregate results
+            face_id = str(face_id_uuid)
+            if face_id not in candidate_faces:
+                candidate_faces[face_id] = {
+                    "scores": {},
+                    "max_score": 0.0,
+                    "face_instance": face,
+                }
+
+            candidate_faces[face_id]["scores"][proto_face_id] = score
+            candidate_faces[face_id]["max_score"] = max(
+                candidate_faces[face_id]["max_score"],
+                score,
+            )
+
+    logger.info(
+        f"[{job_id}] Aggregated {len(candidate_faces)} candidate faces from all prototypes"
+    )
+
+    # 5. Sort by aggregate confidence (max score) and take top N
+    sorted_candidates = sorted(
+        candidate_faces.items(),
+        key=lambda x: x[1]["max_score"],
+        reverse=True,
+    )[:max_suggestions]
+
+    # 6. Conditionally expire old pending suggestions for this person
+    now = datetime.now(UTC)
+    expired_count = 0
+
+    if not preserve_existing:
+        # Only expire when explicitly requested (preserve_existing=False)
+        expire_result = db_session.execute(
+            select(FaceSuggestion).where(
+                FaceSuggestion.suggested_person_id == person_uuid,
+                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+            )
+        )
+        old_suggestions = expire_result.scalars().all()
+
+        for old_suggestion in old_suggestions:
+            old_suggestion.status = FaceSuggestionStatus.EXPIRED.value
+            old_suggestion.reviewed_at = now
+
+        expired_count = len(old_suggestions)
+        if expired_count > 0:
+            logger.info(f"[{job_id}] Expired {expired_count} old pending suggestions")
+
+    # 6.5. Get existing pending suggestions to avoid duplicates (when preserving)
+    existing_face_ids: set[str] = set()
+    if preserve_existing:
+        existing_pending_result = db_session.execute(
+            select(FaceSuggestion.face_instance_id).where(
+                FaceSuggestion.suggested_person_id == person_uuid,
+                FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+            )
+        )
+        existing_face_ids = set(str(fid) for fid in existing_pending_result.scalars().all())
+        if existing_face_ids:
+            logger.debug(
+                f"[{job_id}] Found {len(existing_face_ids)} existing pending suggestions "
+                "to preserve"
+            )
+
+    # 7. Create new suggestions with multi-prototype data
+    suggestions_created = 0
+    skipped_duplicates = 0
+
+    for face_id, data in sorted_candidates:
+        # Skip if already has pending suggestion (preserve mode)
+        if face_id in existing_face_ids:
+            logger.debug(f"[{job_id}] Skipping face {face_id} - already has pending suggestion")
+            skipped_duplicates += 1
+            continue
+
+        # Find best prototype for source_face_id (highest quality among matches)
+        best_proto_id = max(
+            data["scores"].keys(),
+            key=lambda pid: prototype_embeddings[pid]["quality"],
+        )
+
+        suggestion = FaceSuggestion(
+            face_instance_id=uuid_lib.UUID(face_id),
+            suggested_person_id=person_uuid,
+            source_face_id=uuid_lib.UUID(best_proto_id),  # Best quality matching prototype
+            confidence=data["scores"][best_proto_id],  # Score from that prototype
+            aggregate_confidence=data["max_score"],  # MAX score across all
+            matching_prototype_ids=list(data["scores"].keys()),
+            prototype_scores=data["scores"],
+            prototype_match_count=len(data["scores"]),
+            status=FaceSuggestionStatus.PENDING.value,
+        )
+        db_session.add(suggestion)
+        suggestions_created += 1
+
+    preserved_count = len(existing_face_ids) if preserve_existing else 0
+
+    logger.info(
+        f"[{job_id}] Multi-prototype propagation complete for {person.name}: "
+        f"{suggestions_created} suggestions created, "
+        f"{len(prototype_embeddings)} prototypes used, "
+        f"{preserved_count} preserved, {skipped_duplicates} duplicates skipped"
+    )
+
+    return {
+        "status": "completed",
+        "suggestions_created": suggestions_created,
+        "prototypes_used": len(prototype_embeddings),
+        "candidates_evaluated": len(candidate_faces),
+        "expired_count": expired_count,
+        "preserved_count": preserved_count,
+        "skipped_duplicates": skipped_duplicates,
+    }
+
+
 def propagate_person_label_multiproto_job(
     person_id: str,
     min_confidence: float = 0.7,
@@ -1447,6 +1708,10 @@ def propagate_person_label_multiproto_job(
     - Uses MAX score as aggregate_confidence
     - Stores prototype match count
 
+    This is a thin wrapper around _propagate_labels_for_person() that manages
+    its own DB session and Qdrant client lifecycle (standalone job mode).
+    For processing many persons in one job, use propagate_labels_batch_job().
+
     Args:
         person_id: UUID string of the person
         min_confidence: Minimum cosine similarity (default: 0.7)
@@ -1458,9 +1723,6 @@ def propagate_person_label_multiproto_job(
         dict with counts: suggestions_created, prototypes_used, candidates_evaluated,
         expired_count, preserved_count
     """
-    import uuid as uuid_lib
-
-    from image_search_service.db.models import Person, PersonPrototype
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     job = get_current_job()
@@ -1471,223 +1733,600 @@ def propagate_person_label_multiproto_job(
     db_session = get_sync_session()
 
     try:
-        # 1. Get person
-        person_uuid = uuid_lib.UUID(person_id)
-        person = db_session.get(Person, person_uuid)
-
-        if not person:
-            logger.warning(f"[{job_id}] Person {person_id} not found")
-            return {"status": "error", "message": "Person not found"}
-
-        # 2. Get all prototypes for this person
-        prototypes_query = select(PersonPrototype).where(PersonPrototype.person_id == person_uuid)
-        prototypes = list(db_session.execute(prototypes_query).scalars().all())
-
-        if not prototypes:
-            logger.warning(f"[{job_id}] No prototypes found for person {person_id}")
-            return {"status": "error", "message": "No prototypes"}
-
-        # 3. Get prototype embeddings from Qdrant
-        qdrant = get_face_qdrant_client()
-
-        # First, collect all face instances and point IDs
-        face_instances = {}  # proto.face_instance_id -> face
-        point_ids = []
-
-        for proto in prototypes:
-            face = db_session.get(FaceInstance, proto.face_instance_id)
-            if face and face.qdrant_point_id:
-                face_instances[proto.face_instance_id] = face
-                point_ids.append(face.qdrant_point_id)
-
-        # Batch retrieve embeddings
-        embeddings_map = qdrant.get_embeddings_batch(point_ids)
-
-        # Build prototype embeddings dict
-        prototype_embeddings: dict[str, dict[str, Any]] = {}
-
-        for proto in prototypes:
-            face = face_instances.get(proto.face_instance_id)
-            if face and face.qdrant_point_id:
-                embedding = embeddings_map.get(face.qdrant_point_id)
-                if embedding:
-                    prototype_embeddings[str(proto.face_instance_id)] = {
-                        "embedding": embedding,
-                        "face_id": str(face.id),
-                        "quality": face.quality_score or 0.0,
-                    }
-
-        if not prototype_embeddings:
-            logger.warning(f"[{job_id}] No prototype embeddings found for person {person_id}")
-            return {"status": "error", "message": "No prototype embeddings found"}
-
-        logger.info(
-            f"[{job_id}] Found {len(prototype_embeddings)} prototypes for person {person.name}"
+        face_qdrant_client = get_face_qdrant_client()
+        result = _propagate_labels_for_person(
+            db_session=db_session,
+            face_qdrant_client=face_qdrant_client,
+            person_id=person_id,
+            min_confidence=min_confidence,
+            max_suggestions=max_suggestions,
+            preserve_existing=preserve_existing,
+            job_id=job_id,
         )
-
-        # 4. Search using each prototype and aggregate results
-        candidate_faces: dict[str, dict[str, Any]] = {}  # face_id -> {scores, max_score, ...}
-
-        for proto_face_id, proto_data in prototype_embeddings.items():
-            # Search for similar faces
-            results = qdrant.search_similar_faces(
-                query_embedding=proto_data["embedding"],
-                limit=max_suggestions * 3,  # Get more candidates for aggregation
-                score_threshold=min_confidence,
-            )
-
-            logger.debug(
-                f"[{job_id}] Prototype {proto_face_id}: found {len(results)} similar faces"
-            )
-
-            for result in results:
-                # Extract face_id from payload
-                if result.payload is None:
-                    continue
-
-                face_id_str = result.payload.get("face_instance_id")
-                if not face_id_str:
-                    continue
-
-                try:
-                    face_id_uuid = uuid_lib.UUID(face_id_str)
-                except ValueError:
-                    logger.warning(f"[{job_id}] Invalid face_id in payload: {face_id_str}")
-                    continue
-
-                score = result.score
-
-                # Get the face instance to check person assignment
-                face = db_session.get(FaceInstance, face_id_uuid)
-
-                if not face:
-                    continue
-
-                # Skip if this face belongs to any person already
-                if face.person_id is not None:
-                    continue
-
-                # Aggregate results
-                face_id = str(face_id_uuid)
-                if face_id not in candidate_faces:
-                    candidate_faces[face_id] = {
-                        "scores": {},
-                        "max_score": 0.0,
-                        "face_instance": face,
-                    }
-
-                candidate_faces[face_id]["scores"][proto_face_id] = score
-                candidate_faces[face_id]["max_score"] = max(
-                    candidate_faces[face_id]["max_score"],
-                    score,
-                )
-
-        logger.info(
-            f"[{job_id}] Aggregated {len(candidate_faces)} candidate faces from all prototypes"
-        )
-
-        # 5. Sort by aggregate confidence (max score) and take top N
-        sorted_candidates = sorted(
-            candidate_faces.items(),
-            key=lambda x: x[1]["max_score"],
-            reverse=True,
-        )[:max_suggestions]
-
-        # 6. Conditionally expire old pending suggestions for this person
-        now = datetime.now(UTC)
-        expired_count = 0
-
-        if not preserve_existing:
-            # Only expire when explicitly requested (preserve_existing=False)
-            expire_result = db_session.execute(
-                select(FaceSuggestion).where(
-                    FaceSuggestion.suggested_person_id == person_uuid,
-                    FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
-                )
-            )
-            old_suggestions = expire_result.scalars().all()
-
-            for old_suggestion in old_suggestions:
-                old_suggestion.status = FaceSuggestionStatus.EXPIRED.value
-                old_suggestion.reviewed_at = now
-
-            expired_count = len(old_suggestions)
-            if expired_count > 0:
-                logger.info(f"[{job_id}] Expired {expired_count} old pending suggestions")
-
-        # 6.5. Get existing pending suggestions to avoid duplicates (when preserving)
-        existing_face_ids: set[str] = set()
-        if preserve_existing:
-            existing_pending_result = db_session.execute(
-                select(FaceSuggestion.face_instance_id).where(
-                    FaceSuggestion.suggested_person_id == person_uuid,
-                    FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
-                )
-            )
-            existing_face_ids = set(str(fid) for fid in existing_pending_result.scalars().all())
-            if existing_face_ids:
-                logger.debug(
-                    f"[{job_id}] Found {len(existing_face_ids)} existing pending suggestions "
-                    "to preserve"
-                )
-
-        # 7. Create new suggestions with multi-prototype data
-        suggestions_created = 0
-        skipped_duplicates = 0
-
-        for face_id, data in sorted_candidates:
-            # Skip if already has pending suggestion (preserve mode)
-            if face_id in existing_face_ids:
-                logger.debug(f"[{job_id}] Skipping face {face_id} - already has pending suggestion")
-                skipped_duplicates += 1
-                continue
-
-            # Find best prototype for source_face_id (highest quality among matches)
-            best_proto_id = max(
-                data["scores"].keys(),
-                key=lambda pid: prototype_embeddings[pid]["quality"],
-            )
-
-            suggestion = FaceSuggestion(
-                face_instance_id=uuid_lib.UUID(face_id),
-                suggested_person_id=person_uuid,
-                source_face_id=uuid_lib.UUID(best_proto_id),  # Best quality matching prototype
-                confidence=data["scores"][best_proto_id],  # Score from that prototype
-                aggregate_confidence=data["max_score"],  # MAX score across all
-                matching_prototype_ids=list(data["scores"].keys()),
-                prototype_scores=data["scores"],
-                prototype_match_count=len(data["scores"]),
-                status=FaceSuggestionStatus.PENDING.value,
-            )
-            db_session.add(suggestion)
-            suggestions_created += 1
-
-        db_session.commit()
-
-        preserved_count = len(existing_face_ids) if preserve_existing else 0
-
-        logger.info(
-            f"[{job_id}] Multi-prototype propagation complete for {person.name}: "
-            f"{suggestions_created} suggestions created, "
-            f"{len(prototype_embeddings)} prototypes used, "
-            f"{preserved_count} preserved, {skipped_duplicates} duplicates skipped"
-        )
-
-        return {
-            "status": "completed",
-            "suggestions_created": suggestions_created,
-            "prototypes_used": len(prototype_embeddings),
-            "candidates_evaluated": len(candidate_faces),
-            "expired_count": expired_count,
-            "preserved_count": preserved_count,
-            "skipped_duplicates": skipped_duplicates,
-        }
+        # Commit after successful helper call (helper does NOT commit)
+        if result.get("status") == "completed":
+            db_session.commit()
+        return result
 
     except Exception as e:
         logger.exception(f"[{job_id}] Error in multi-prototype propagation job: {e}")
         return {"status": "error", "message": str(e)}
     finally:
         db_session.close()
+
+
+def propagate_labels_batch_job(
+    person_ids: list[str],
+    max_suggestions: int = 50,
+    min_confidence: float = 0.7,
+    preserve_existing: bool = True,
+    retry_individually: bool = True,
+) -> dict[str, Any]:
+    """Multi-prototype label propagation batch job.
+
+    Processes multiple persons in a single RQ job, sharing one DB session and
+    one Qdrant client across all persons. This eliminates the ~245ms per-job
+    setup overhead (session init + Qdrant client init + RQ dequeue latency)
+    that accumulates to ~22s when processing 90 persons individually.
+
+    Error isolation uses SQLAlchemy savepoints (nested transactions) so that a
+    failure for one person does not roll back work already completed for other
+    persons. A single commit is issued at the end for all successful savepoints,
+    minimising the number of PostgreSQL round-trips vs. per-person commits.
+
+    Persons that fail are optionally re-queued as individual standalone jobs
+    (see ``retry_individually``). If more than 20% of persons fail, the batch
+    likely has a systemic issue and individual retry is suppressed to avoid
+    cascading load.
+
+    Args:
+        person_ids: List of UUID strings for persons to process
+        max_suggestions: Maximum suggestions to create per person (default: 50)
+        min_confidence: Minimum cosine similarity threshold (default: 0.7)
+        preserve_existing: If True, keep existing pending suggestions and add only new ones
+        retry_individually: If True (default), re-queue failed persons as standalone jobs.
+            Disabled automatically when failure rate exceeds 20% (systemic error guard).
+
+    Returns:
+        dict with: persons_processed, persons_skipped, persons_failed, total_suggestions,
+        failed_person_ids
+    """
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    total_suggestions = 0
+    persons_processed = 0
+    persons_skipped = 0
+    failed_person_ids: list[str] = []
+
+    logger.info(
+        f"[{job_id}] Starting multi-prototype label propagation batch for "
+        f"{len(person_ids)} persons"
+    )
+
+    db_session = get_sync_session()
+    face_qdrant_client = get_face_qdrant_client()
+
+    try:
+        for person_id in person_ids:
+            savepoint = db_session.begin_nested()
+            try:
+                result = _propagate_labels_for_person(
+                    db_session=db_session,
+                    face_qdrant_client=face_qdrant_client,
+                    person_id=person_id,
+                    min_confidence=min_confidence,
+                    max_suggestions=max_suggestions,
+                    preserve_existing=preserve_existing,
+                    job_id=job_id,
+                )
+                savepoint.commit()
+
+                created = result.get("suggestions_created", 0)
+                if created and created > 0:
+                    persons_processed += 1
+                    total_suggestions += created
+                else:
+                    persons_skipped += 1
+
+            except Exception as e:
+                savepoint.rollback()
+                logger.warning(
+                    f"[{job_id}] Failed to process person {person_id}: {e}",
+                    extra={"person_id": person_id, "error": str(e)},
+                )
+                failed_person_ids.append(person_id)
+                continue
+
+        # Single final commit for all successful savepoints (1 round-trip vs. N)
+        db_session.commit()
+
+    finally:
+        db_session.close()
+
+    failure_rate = len(failed_person_ids) / len(person_ids) if person_ids else 0.0
+
+    logger.info(
+        f"[{job_id}] Propagation batch complete: "
+        f"{persons_processed} processed, {persons_skipped} skipped, "
+        f"{len(failed_person_ids)} failed, {total_suggestions} total suggestions",
+        extra={
+            "persons_processed": persons_processed,
+            "persons_skipped": persons_skipped,
+            "persons_failed": len(failed_person_ids),
+            "total_suggestions": total_suggestions,
+            "failure_rate": f"{failure_rate:.0%}",
+        },
+    )
+
+    if failed_person_ids:
+        logger.warning(
+            f"[{job_id}] Failed person IDs: {failed_person_ids}. "
+            "Re-queue manually or wait for retry.",
+        )
+        # Retry individually unless the failure rate suggests a systemic error.
+        # Cap: if >20% of persons failed, do NOT auto-retry (likely a cluster-wide issue).
+        if retry_individually and failure_rate <= 0.20:
+            try:
+                from rq import Queue
+
+                from image_search_service.queue.worker import get_redis
+
+                redis_client = get_redis()
+                retry_queue = Queue("default", connection=redis_client)
+                for failed_id in failed_person_ids:
+                    retry_queue.enqueue(
+                        "image_search_service.queue.face_jobs"
+                        ".propagate_person_label_multiproto_job",
+                        person_id=failed_id,
+                        max_suggestions=max_suggestions,
+                        min_confidence=min_confidence,
+                        preserve_existing=preserve_existing,
+                        job_timeout="10m",
+                    )
+                logger.info(
+                    f"[{job_id}] Re-queued {len(failed_person_ids)} failed persons "
+                    "as individual standalone jobs"
+                )
+            except Exception as retry_err:
+                logger.warning(f"[{job_id}] Failed to re-queue individual retry jobs: {retry_err}")
+        elif failure_rate > 0.20:
+            logger.warning(
+                f"[{job_id}] Failure rate {failure_rate:.0%} exceeds 20% threshold -- "
+                "suppressing individual retry to avoid cascading load. "
+                f"Inspect failed persons manually: {failed_person_ids}"
+            )
+
+    return {
+        "persons_processed": persons_processed,
+        "persons_skipped": persons_skipped,
+        "persons_failed": len(failed_person_ids),
+        "total_suggestions": total_suggestions,
+        "failed_person_ids": failed_person_ids,
+    }
+
+
+
+def _find_centroid_suggestions_for_person(
+    db_session: Any,
+    face_qdrant_client: Any,
+    centroid_qdrant_client: Any,
+    person_id: str,
+    min_similarity: float = 0.70,
+    max_results: int = 50,
+    unassigned_only: bool = True,
+    job_id: str = "no-job",
+) -> dict[str, Any]:
+    """Core logic for centroid-based suggestion finding for a single person.
+
+    Accepts externally-managed DB session and Qdrant clients for batch reuse,
+    avoiding the ~245ms per-job setup overhead when processing many persons.
+
+    Does NOT commit or close the session -- the caller is responsible for
+    transaction management (savepoints in batch mode, direct commit in standalone mode).
+
+    If no active centroid exists, one is computed on-demand from the person's face
+    embeddings (requires at least 5 faces). The centroid is committed to the DB
+    and upserted into Qdrant before the suggestion search proceeds.
+
+    Args:
+        db_session: Synchronous SQLAlchemy session (caller-managed lifecycle)
+        face_qdrant_client: FaceQdrantClient instance (caller-managed)
+        centroid_qdrant_client: CentroidQdrantClient instance (caller-managed)
+        person_id: UUID string of the person
+        min_similarity: Minimum cosine similarity threshold (default: 0.70)
+        max_results: Maximum suggestions to create (default: 50)
+        unassigned_only: If True, only suggest unassigned faces
+        job_id: Job identifier for structured log context
+
+    Returns:
+        dict with: status, suggestions_created, centroids_used, candidates_found,
+        duplicates_skipped
+    """
+    import uuid as uuid_lib
+
+    from image_search_service.db.models import CentroidType, FaceInstance, Person, PersonCentroid
+
+    person_uuid = uuid_lib.UUID(person_id)
+
+    logger.info(
+        f"[{job_id}] Starting centroid suggestion search for person {person_id} "
+        f"(min_similarity={min_similarity}, max_results={max_results})"
+    )
+
+    # 1. Get person
+    person = db_session.get(Person, person_uuid)
+    if not person:
+        logger.warning(f"[{job_id}] Person {person_id} not found")
+        return {"status": "error", "message": "Person not found"}
+
+    # 2. Get or compute active centroid
+    centroid_query = (
+        select(PersonCentroid)
+        .where(
+            PersonCentroid.person_id == person_uuid,
+            PersonCentroid.status == "active",
+            PersonCentroid.centroid_type == CentroidType.GLOBAL,
+        )
+        .order_by(PersonCentroid.created_at.desc())
+        .limit(1)
+    )
+    centroid_result = db_session.execute(centroid_query)
+    centroid = centroid_result.scalar_one_or_none()
+
+    if not centroid:
+        # Compute centroid on-demand (sync operation)
+        logger.info(f"[{job_id}] No active centroid found, computing...")
+
+        # Get all face instances for this person
+        faces_query = select(FaceInstance).where(FaceInstance.person_id == person_uuid)
+        faces = list(db_session.execute(faces_query).scalars().all())
+
+        if len(faces) < 5:
+            logger.warning(
+                f"[{job_id}] Only {len(faces)} faces available "
+                f"(minimum 5 required for centroid)"
+            )
+            return {
+                "status": "error",
+                "message": f"Only {len(faces)} faces (need 5+)",
+            }
+
+        # Collect all Qdrant point IDs
+        point_ids = [face.qdrant_point_id for face in faces if face.qdrant_point_id]
+
+        # Batch retrieve embeddings
+        embeddings_map = face_qdrant_client.get_embeddings_batch(point_ids)
+
+        # Build result lists, maintaining order
+        embeddings = []
+        face_ids = []
+
+        for face in faces:
+            if face.qdrant_point_id:
+                embedding = embeddings_map.get(face.qdrant_point_id)
+                if embedding:
+                    embeddings.append(embedding)
+                    face_ids.append(face.id)
+
+        if len(embeddings) < 5:
+            logger.warning(
+                f"[{job_id}] Only {len(embeddings)} embeddings found in Qdrant "
+                f"(minimum 5 required)"
+            )
+            return {
+                "status": "error",
+                "message": f"Only {len(embeddings)} embeddings (need 5+)",
+            }
+
+        # Compute centroid vector
+        import hashlib
+
+        from image_search_service.core.config import get_settings
+
+        embeddings_array = np.array(embeddings, dtype=np.float32)
+
+        # Compute mean and normalize
+        centroid_mean = np.mean(embeddings_array, axis=0)
+        norm = np.linalg.norm(centroid_mean)
+        centroid_vector_arr = (centroid_mean / norm).astype(np.float32)
+
+        # Create centroid record
+        centroid_id = uuid_lib.uuid4()
+        settings = get_settings()
+
+        # Compute source hash
+        sorted_ids = sorted(str(fid) for fid in face_ids)
+        hash_input = ":".join(sorted_ids)
+        source_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+
+        centroid = PersonCentroid(
+            centroid_id=centroid_id,
+            person_id=person_uuid,
+            qdrant_point_id=centroid_id,
+            model_version=settings.centroid_model_version,
+            centroid_version=settings.centroid_algorithm_version,
+            centroid_type=CentroidType.GLOBAL,
+            cluster_label="global",
+            n_faces=len(face_ids),
+            status="active",
+            source_face_ids_hash=source_hash,
+            build_params={
+                "trim_outliers": False,
+                "n_faces_used": len(face_ids),
+            },
+        )
+        db_session.add(centroid)
+        db_session.flush()
+
+        # Store in Qdrant
+        centroid_qdrant_client.upsert_centroid(
+            centroid_id=centroid_id,
+            vector=centroid_vector_arr.tolist(),
+            payload={
+                "person_id": person_uuid,
+                "centroid_id": centroid_id,
+                "model_version": settings.centroid_model_version,
+                "centroid_version": settings.centroid_algorithm_version,
+                "centroid_type": "global",
+                "cluster_label": "global",
+                "n_faces": len(face_ids),
+                "created_at": centroid.created_at.isoformat(),
+                "source_hash": source_hash,
+                "build_params": centroid.build_params,
+            },
+        )
+
+        # Commit the new centroid so it's durable regardless of later per-person result
+        db_session.commit()
+        logger.info(
+            f"[{job_id}] Created centroid {centroid_id} from {len(face_ids)} faces"
+        )
+
+    # 3. Get centroid vector from Qdrant
+    centroid_vector = centroid_qdrant_client.get_centroid_vector(centroid.centroid_id)
+
+    if not centroid_vector:
+        logger.error(
+            f"[{job_id}] Centroid vector not found in Qdrant for {centroid.centroid_id}"
+        )
+        return {"status": "error", "message": "Centroid vector not found"}
+
+    # 4. Search faces collection using centroid
+    search_results = centroid_qdrant_client.search_faces_with_centroid(
+        centroid_vector=centroid_vector,
+        limit=max_results * 2,  # Get extra to account for filtering
+        score_threshold=min_similarity,
+        exclude_person_id=person_uuid if unassigned_only else None,
+    )
+
+    logger.info(
+        f"[{job_id}] Found {len(search_results)} candidate faces using centroid for {person.name}"
+    )
+
+    # 5. Get existing pending suggestions to avoid duplicates
+    existing_pending_query = select(FaceSuggestion.face_instance_id).where(
+        FaceSuggestion.suggested_person_id == person_uuid,
+        FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
+    )
+    existing_pending_ids = set(
+        str(fid) for fid in db_session.execute(existing_pending_query).scalars().all()
+    )
+
+    # 6. Create FaceSuggestion records
+    suggestions_created = 0
+    duplicates_skipped = 0
+
+    for result in search_results:
+        if suggestions_created >= max_results:
+            break
+
+        # Get face_id from payload
+        if result.payload is None:
+            continue
+
+        face_id_str = result.payload.get("face_instance_id")
+        if not face_id_str:
+            continue
+
+        try:
+            face_id_uuid = uuid_lib.UUID(face_id_str)
+        except ValueError:
+            logger.warning(f"[{job_id}] Invalid face_id in payload: {face_id_str}")
+            continue
+
+        # Check if already has pending suggestion
+        if str(face_id_uuid) in existing_pending_ids:
+            duplicates_skipped += 1
+            continue
+
+        # Get face instance to verify it's still unassigned
+        face_inst = db_session.get(FaceInstance, face_id_uuid)
+        if not face_inst:
+            continue
+
+        # Skip if face is assigned (double-check)
+        if unassigned_only and face_inst.person_id is not None:
+            continue
+
+        # Create suggestion
+        suggestion = FaceSuggestion(
+            face_instance_id=face_id_uuid,
+            suggested_person_id=person_uuid,
+            source_face_id=None,  # Centroid-based suggestions don't have a single source face
+            confidence=result.score,
+            status=FaceSuggestionStatus.PENDING.value,
+        )
+        db_session.add(suggestion)
+        suggestions_created += 1
+
+    logger.info(
+        f"[{job_id}] Centroid suggestion search complete for {person.name}: "
+        f"{suggestions_created} suggestions created, "
+        f"{duplicates_skipped} duplicates skipped"
+    )
+
+    return {
+        "status": "completed",
+        "suggestions_created": suggestions_created,
+        "centroids_used": 1,
+        "candidates_found": len(search_results),
+        "duplicates_skipped": duplicates_skipped,
+    }
+
+
+def find_centroid_suggestions_batch_job(
+    person_ids: list[str],
+    min_similarity: float = 0.70,
+    max_results_per_person: int = 50,
+    unassigned_only: bool = True,
+    retry_individually: bool = True,
+) -> dict[str, Any]:
+    """Centroid-based suggestion batch job.
+
+    Processes multiple persons in a single RQ job, sharing one DB session,
+    one face Qdrant client, and one centroid Qdrant client across all persons.
+    This eliminates the ~245ms per-job connection overhead that accumulates to
+    ~22s when processing 90 persons individually.
+
+    Error isolation uses SQLAlchemy savepoints (nested transactions) so that a
+    failure for one person does not roll back work already completed for other
+    persons. A single commit is issued at the end for all successful savepoints.
+
+    Persons that fail are optionally re-queued as individual standalone jobs
+    (see ``retry_individually``). If more than 20% of persons fail, individual
+    retry is suppressed (likely a systemic error, not per-person failure).
+
+    Args:
+        person_ids: List of UUID strings for persons to process
+        min_similarity: Minimum cosine similarity threshold (default: 0.70)
+        max_results_per_person: Maximum suggestions per person (default: 50)
+        unassigned_only: If True, only suggest unassigned faces
+        retry_individually: If True (default), re-queue failed persons as standalone jobs.
+            Disabled automatically when failure rate exceeds 20%.
+
+    Returns:
+        dict with: persons_processed, persons_skipped, persons_failed, total_suggestions,
+        failed_person_ids
+    """
+    from image_search_service.vector.centroid_qdrant import get_centroid_qdrant_client
+    from image_search_service.vector.face_qdrant import get_face_qdrant_client
+
+    job = get_current_job()
+    job_id = job.id if job else "no-job"
+
+    total_suggestions = 0
+    persons_processed = 0
+    persons_skipped = 0
+    failed_person_ids: list[str] = []
+
+    logger.info(
+        f"[{job_id}] Starting centroid suggestion batch for {len(person_ids)} persons"
+    )
+
+    db_session = get_sync_session()
+    face_qdrant_client = get_face_qdrant_client()
+    centroid_qdrant_client = get_centroid_qdrant_client()
+
+    try:
+        for person_id in person_ids:
+            savepoint = db_session.begin_nested()
+            try:
+                result = _find_centroid_suggestions_for_person(
+                    db_session=db_session,
+                    face_qdrant_client=face_qdrant_client,
+                    centroid_qdrant_client=centroid_qdrant_client,
+                    person_id=person_id,
+                    min_similarity=min_similarity,
+                    max_results=max_results_per_person,
+                    unassigned_only=unassigned_only,
+                    job_id=job_id,
+                )
+                savepoint.commit()
+
+                created = result.get("suggestions_created", 0)
+                if created and created > 0:
+                    persons_processed += 1
+                    total_suggestions += created
+                else:
+                    persons_skipped += 1
+
+            except Exception as e:
+                savepoint.rollback()
+                logger.warning(
+                    f"[{job_id}] Failed to process person {person_id}: {e}",
+                    extra={"person_id": person_id, "error": str(e)},
+                )
+                failed_person_ids.append(person_id)
+                continue
+
+        # Single final commit for all successful savepoints (1 round-trip vs. N)
+        db_session.commit()
+
+    finally:
+        db_session.close()
+
+    failure_rate = len(failed_person_ids) / len(person_ids) if person_ids else 0.0
+
+    logger.info(
+        f"[{job_id}] Centroid batch complete: "
+        f"{persons_processed} processed, {persons_skipped} skipped, "
+        f"{len(failed_person_ids)} failed, {total_suggestions} total suggestions",
+        extra={
+            "persons_processed": persons_processed,
+            "persons_skipped": persons_skipped,
+            "persons_failed": len(failed_person_ids),
+            "total_suggestions": total_suggestions,
+            "failure_rate": f"{failure_rate:.0%}",
+        },
+    )
+
+    if failed_person_ids:
+        logger.warning(
+            f"[{job_id}] Failed person IDs: {failed_person_ids}. "
+            "Re-queue manually or wait for retry.",
+        )
+        # Retry individually unless failure rate suggests a systemic error (>20% threshold).
+        if retry_individually and failure_rate <= 0.20:
+            try:
+                from rq import Queue
+
+                from image_search_service.queue.worker import get_redis
+
+                redis_client = get_redis()
+                retry_queue = Queue("default", connection=redis_client)
+                for failed_id in failed_person_ids:
+                    retry_queue.enqueue(
+                        "image_search_service.queue.face_jobs"
+                        ".find_more_centroid_suggestions_job",
+                        person_id=failed_id,
+                        min_similarity=min_similarity,
+                        max_results=max_results_per_person,
+                        unassigned_only=unassigned_only,
+                        job_timeout="10m",
+                    )
+                logger.info(
+                    f"[{job_id}] Re-queued {len(failed_person_ids)} failed persons "
+                    "as individual standalone jobs"
+                )
+            except Exception as retry_err:
+                logger.warning(f"[{job_id}] Failed to re-queue individual retry jobs: {retry_err}")
+        elif failure_rate > 0.20:
+            logger.warning(
+                f"[{job_id}] Failure rate {failure_rate:.0%} exceeds 20% threshold -- "
+                "suppressing individual retry to avoid cascading load. "
+                f"Inspect failed persons manually: {failed_person_ids}"
+            )
+
+    return {
+        "persons_processed": persons_processed,
+        "persons_skipped": persons_skipped,
+        "persons_failed": len(failed_person_ids),
+        "total_suggestions": total_suggestions,
+        "failed_person_ids": failed_person_ids,
+    }
 
 
 def find_more_centroid_suggestions_job(
@@ -1706,26 +2345,26 @@ def find_more_centroid_suggestions_job(
     4. Create FaceSuggestion records for matches (status=PENDING)
     5. Return job result with counts
 
+    This is a thin wrapper around _find_centroid_suggestions_for_person() that
+    manages its own DB session and Qdrant client lifecycle (standalone job mode).
+    For processing many persons in one job, use find_centroid_suggestions_batch_job().
+
     Args:
         person_id: UUID string of the person
         min_similarity: Minimum cosine similarity threshold (0.5-0.95)
         max_results: Maximum number of suggestions to create (1-500)
         unassigned_only: If True, only suggest unassigned faces
+        progress_key: Optional Redis key for progress updates (standalone mode only)
 
     Returns:
         dict with: suggestions_created, centroids_used, candidates_found,
         duplicates_skipped
     """
-    import uuid as uuid_lib
-
-    from image_search_service.db.models import CentroidType, FaceInstance, Person, PersonCentroid
     from image_search_service.vector.centroid_qdrant import get_centroid_qdrant_client
     from image_search_service.vector.face_qdrant import get_face_qdrant_client
 
     job = get_current_job()
     job_id = job.id if job else "no-job"
-
-    person_uuid = uuid_lib.UUID(person_id)
 
     logger.info(
         f"[{job_id}] Starting centroid-based find-more for person {person_id} "
@@ -1759,252 +2398,35 @@ def find_more_centroid_suggestions_job(
             logger.warning(f"[{job_id}] Failed to update progress: {e}")
 
     try:
-        # Initial progress update
         update_progress("starting", 0, 4, "Initializing centroid search")
-        # 1. Get person
-        person = db_session.get(Person, person_uuid)
-        if not person:
-            logger.warning(f"[{job_id}] Person {person_id} not found")
-            return {"status": "error", "message": "Person not found"}
 
-        # 2. Get or compute active centroid
-        centroid_query = (
-            select(PersonCentroid)
-            .where(
-                PersonCentroid.person_id == person_uuid,
-                PersonCentroid.status == "active",
-                PersonCentroid.centroid_type == CentroidType.GLOBAL,
-            )
-            .order_by(PersonCentroid.created_at.desc())
-            .limit(1)
+        face_qdrant_client = get_face_qdrant_client()
+        centroid_qdrant_client = get_centroid_qdrant_client()
+
+        result = _find_centroid_suggestions_for_person(
+            db_session=db_session,
+            face_qdrant_client=face_qdrant_client,
+            centroid_qdrant_client=centroid_qdrant_client,
+            person_id=person_id,
+            min_similarity=min_similarity,
+            max_results=max_results,
+            unassigned_only=unassigned_only,
+            job_id=job_id,
         )
-        centroid_result = db_session.execute(centroid_query)
-        centroid = centroid_result.scalar_one_or_none()
 
-        if not centroid:
-            # Compute centroid on-demand (sync operation)
-            logger.info(f"[{job_id}] No active centroid found, computing...")
-
-            # Get all face instances for this person
-            faces_query = select(FaceInstance).where(FaceInstance.person_id == person_uuid)
-            faces = list(db_session.execute(faces_query).scalars().all())
-
-            if len(faces) < 5:
-                logger.warning(
-                    f"[{job_id}] Only {len(faces)} faces available "
-                    f"(minimum 5 required for centroid)"
-                )
-                return {
-                    "status": "error",
-                    "message": f"Only {len(faces)} faces (need 5+)",
-                }
-
-            # Retrieve embeddings from Qdrant
-            face_qdrant = get_face_qdrant_client()
-
-            # Collect all Qdrant point IDs
-            point_ids = [face.qdrant_point_id for face in faces if face.qdrant_point_id]
-
-            # Batch retrieve embeddings
-            embeddings_map = face_qdrant.get_embeddings_batch(point_ids)
-
-            # Build result lists, maintaining order
-            embeddings = []
-            face_ids = []
-
-            for face in faces:
-                if face.qdrant_point_id:
-                    embedding = embeddings_map.get(face.qdrant_point_id)
-                    if embedding:
-                        embeddings.append(embedding)
-                        face_ids.append(face.id)
-
-            if len(embeddings) < 5:
-                logger.warning(
-                    f"[{job_id}] Only {len(embeddings)} embeddings found in Qdrant "
-                    f"(minimum 5 required)"
-                )
-                return {
-                    "status": "error",
-                    "message": f"Only {len(embeddings)} embeddings (need 5+)",
-                }
-
-            # Compute centroid vector
-            import hashlib
-
-            import numpy as np
-
-            from image_search_service.core.config import get_settings
-
-            embeddings_array = np.array(embeddings, dtype=np.float32)
-
-            # Compute mean and normalize
-            centroid_mean = np.mean(embeddings_array, axis=0)
-            norm = np.linalg.norm(centroid_mean)
-            centroid_vector = (centroid_mean / norm).astype(np.float32)
-
-            # Create centroid record
-            centroid_id = uuid_lib.uuid4()
-            settings = get_settings()
-
-            # Compute source hash
-            sorted_ids = sorted(str(fid) for fid in face_ids)
-            hash_input = ":".join(sorted_ids)
-            source_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
-
-            centroid = PersonCentroid(
-                centroid_id=centroid_id,
-                person_id=person_uuid,
-                qdrant_point_id=centroid_id,
-                model_version=settings.centroid_model_version,
-                centroid_version=settings.centroid_algorithm_version,
-                centroid_type=CentroidType.GLOBAL,
-                cluster_label="global",
-                n_faces=len(face_ids),
-                status="active",
-                source_face_ids_hash=source_hash,
-                build_params={
-                    "trim_outliers": False,
-                    "n_faces_used": len(face_ids),
-                },
-            )
-            db_session.add(centroid)
-            db_session.flush()
-
-            # Store in Qdrant
-            centroid_qdrant = get_centroid_qdrant_client()
-            centroid_qdrant.upsert_centroid(
-                centroid_id=centroid_id,
-                vector=centroid_vector.tolist(),
-                payload={
-                    "person_id": person_uuid,
-                    "centroid_id": centroid_id,
-                    "model_version": settings.centroid_model_version,
-                    "centroid_version": settings.centroid_algorithm_version,
-                    "centroid_type": "global",
-                    "cluster_label": "global",
-                    "n_faces": len(face_ids),
-                    "created_at": centroid.created_at.isoformat(),
-                    "source_hash": source_hash,
-                    "build_params": centroid.build_params,
-                },
-            )
-
+        if result.get("status") == "completed":
+            # Helper does NOT commit; we do it here in standalone mode
             db_session.commit()
-            logger.info(
-                f"[{job_id}] Created centroid {centroid_id} from {len(face_ids)} faces"
+            update_progress(
+                "completed",
+                4,
+                4,
+                f"Created {result.get('suggestions_created', 0)} new suggestions",
             )
+        else:
+            update_progress("failed", 0, 0, result.get("message", "Unknown error"))
 
-        # 3. Get centroid vector from Qdrant
-        update_progress("retrieving", 1, 4, "Retrieved centroid embedding")
-        centroid_qdrant = get_centroid_qdrant_client()
-        centroid_vector = centroid_qdrant.get_centroid_vector(centroid.centroid_id)
-
-        if not centroid_vector:
-            logger.error(
-                f"[{job_id}] Centroid vector not found in Qdrant for {centroid.centroid_id}"
-            )
-            update_progress("failed", 0, 0, "Centroid vector not found")
-            return {"status": "error", "message": "Centroid vector not found"}
-
-        # 4. Search faces collection using centroid
-        update_progress(
-            "searching", 2, 4, f"Searching for similar faces (threshold={min_similarity})"
-        )
-        search_results = centroid_qdrant.search_faces_with_centroid(
-            centroid_vector=centroid_vector,
-            limit=max_results * 2,  # Get extra to account for filtering
-            score_threshold=min_similarity,
-            exclude_person_id=person_uuid if unassigned_only else None,
-        )
-
-        logger.info(
-            f"[{job_id}] Found {len(search_results)} candidate faces using centroid"
-        )
-
-        # 5. Get existing pending suggestions to avoid duplicates
-        update_progress(
-            "creating", 3, 4, f"Creating suggestions from {len(search_results)} matches"
-        )
-        existing_pending_query = select(FaceSuggestion.face_instance_id).where(
-            FaceSuggestion.suggested_person_id == person_uuid,
-            FaceSuggestion.status == FaceSuggestionStatus.PENDING.value,
-        )
-        existing_pending_ids = set(
-            str(fid) for fid in db_session.execute(existing_pending_query).scalars().all()
-        )
-
-        # 6. Create FaceSuggestion records
-        suggestions_created = 0
-        duplicates_skipped = 0
-        face_qdrant = get_face_qdrant_client()
-
-        for result in search_results:
-            if suggestions_created >= max_results:
-                break
-
-            # Get face_id from payload
-            if result.payload is None:
-                continue
-
-            face_id_str = result.payload.get("face_instance_id")
-            if not face_id_str:
-                continue
-
-            try:
-                face_id_uuid = uuid_lib.UUID(face_id_str)
-            except ValueError:
-                logger.warning(f"[{job_id}] Invalid face_id in payload: {face_id_str}")
-                continue
-
-            # Check if already has pending suggestion
-            if str(face_id_uuid) in existing_pending_ids:
-                duplicates_skipped += 1
-                continue
-
-            # Get face instance to verify it's still unassigned
-            face_inst = db_session.get(FaceInstance, face_id_uuid)
-            if not face_inst:
-                continue
-
-            # Skip if face is assigned (double-check)
-            if unassigned_only and face_inst.person_id is not None:
-                continue
-
-            # Create suggestion
-            suggestion = FaceSuggestion(
-                face_instance_id=face_id_uuid,
-                suggested_person_id=person_uuid,
-                source_face_id=None,  # Centroid-based suggestions don't have a single source face
-                confidence=result.score,
-                status=FaceSuggestionStatus.PENDING.value,
-            )
-            db_session.add(suggestion)
-            suggestions_created += 1
-
-        db_session.commit()
-
-        logger.info(
-            f"[{job_id}] Centroid-based find-more complete for {person.name}: "
-            f"{suggestions_created} suggestions created, "
-            f"{duplicates_skipped} duplicates skipped"
-        )
-
-        # Update final progress
-        update_progress(
-            "completed",
-            4,
-            4,
-            f"Created {suggestions_created} new suggestions",
-        )
-
-        return {
-            "status": "completed",
-            "suggestions_created": suggestions_created,
-            "centroids_used": 1,
-            "candidates_found": len(search_results),
-            "duplicates_skipped": duplicates_skipped,
-        }
+        return result
 
     except Exception as e:
         logger.exception(f"[{job_id}] Error in centroid-based find-more job: {e}")
@@ -2012,6 +2434,7 @@ def find_more_centroid_suggestions_job(
         return {"status": "error", "message": str(e)}
     finally:
         db_session.close()
+
 
 
 def discover_unknown_persons_job(
@@ -2182,11 +2605,44 @@ def discover_unknown_persons_job(
         update_progress("retrieval", 100, 100, f"Retrieved {total_faces} faces")
 
         # PHASE 2: Memory ceiling check
+        #
+        # C1: Memory estimate accounts for PCA reduction when enabled.
+        # Without PCA: HDBSCAN builds O(N²) distance matrix → (N² × 8 bytes)
+        # With PCA:    distance matrix shrinks to (N × reduced_dims × 8 × 5) bytes
+        #              (×5 heuristic for intermediate HDBSCAN data structures)
+        # This more accurate estimate avoids falsely rejecting feasible configurations.
         update_progress("memory_check", 0, 100, "Checking memory requirements...")
 
-        # HDBSCAN needs O(N²) memory for distance matrix
         max_clustering_memory_gb = 4
-        estimated_memory_gb = (total_faces**2 * 8) / (1024**3)
+        n_original_dims = len(faces_with_embeddings[0][1]) if faces_with_embeddings else 512
+        pca_would_reduce = (
+            pca_target_dim > 0
+            and n_original_dims > pca_target_dim
+            and total_faces > pca_target_dim
+        )
+        if pca_would_reduce:
+            pca_effective_dim = min(pca_target_dim, total_faces - 1)
+        else:
+            pca_effective_dim = n_original_dims
+        pca_will_apply = pca_effective_dim < n_original_dims
+
+        if pca_will_apply:
+            # After PCA: O(N × D_reduced) distance computations in Boruvka
+            estimated_memory_gb = (total_faces * pca_effective_dim * 8 * 5) / (1024**3)
+        else:
+            # Without PCA: O(N²) distance matrix
+            estimated_memory_gb = (total_faces**2 * 8) / (1024**3)
+
+        logger.info(
+            "[%s] Memory estimate: %.2f GB (max: %d GB, pca_will_apply=%s, "
+            "n_faces=%d, effective_dims=%d)",
+            job_id,
+            estimated_memory_gb,
+            max_clustering_memory_gb,
+            pca_will_apply,
+            total_faces,
+            pca_effective_dim,
+        )
 
         if estimated_memory_gb > max_clustering_memory_gb:
             error_msg = (
@@ -2198,10 +2654,6 @@ def discover_unknown_persons_job(
             update_progress("failed", 0, 0, error_msg)
             return {"status": "error", "message": error_msg}
 
-        logger.info(
-            f"[{job_id}] Memory check passed: {estimated_memory_gb:.2f} GB "
-            f"(max: {max_clustering_memory_gb} GB)"
-        )
         update_progress("memory_check", 100, 100, "Memory check passed")
 
         # PHASE 3: Build embedding matrix
@@ -2215,83 +2667,71 @@ def discover_unknown_persons_job(
         logger.info(f"[{job_id}] Built embedding matrix: {embeddings.shape}")
         update_progress("embedding", 100, 100, f"Matrix shape: {embeddings.shape}")
 
-        # PHASE 3.5: Dimensionality reduction for efficient clustering
+        # PHASE 3.5: Dimensionality reduction via shared utility
         #
-        # At 512 dimensions, HDBSCAN selects Prim's MST algorithm (dimensions > 60
-        # threshold in hdbscan 0.8.x), which is single-threaded O(N^2 * D).
-        # PCA to <=50 dimensions triggers Boruvka algorithm selection, which IS
-        # parallel and uses KD-tree pruning: O(N * log^2(N)).
-        #
-        # The original 512d embeddings are preserved for Phase 5 (confidence scores)
-        # which needs full-dimensional cosine similarity for accuracy.
-        #
-        # Note on algorithm="boruvka_kdtree": when explicitly set, hdbscan validates
-        # metric against BALLTREE_VALID_METRICS (not KDTREE_VALID_METRICS) due to a
-        # library quirk, but BALLTREE_VALID_METRICS is a superset, so "euclidean" works
-        # correctly.
+        # Delegates to reduce_dimensions_pca() which encapsulates the Boruvka-trigger
+        # logic (PCA ≤50d → hdbscan selects Boruvka KD-tree, O(N log²N), parallel).
+        # The original 512d embeddings are preserved in `embeddings` for Phase 5
+        # (confidence scores via cosine similarity -- needs full dimensionality).
         import time as _time
 
-        n_samples, n_dims = embeddings.shape
-        if pca_target_dim > 0 and n_dims > pca_target_dim and n_samples > pca_target_dim:
-            update_progress(
-                "dimensionality_reduction",
-                0,
-                100,
-                f"Reducing dimensions: {n_dims}d -> {pca_target_dim}d",
-            )
+        from image_search_service.faces.embedding_preprocessing import (
+            reduce_dimensions_pca,
+            select_hdbscan_params,
+        )
 
-            pca_start = _time.monotonic()
-            # Guard: PCA cannot produce more components than min(n_samples-1, n_features)
-            n_components = min(pca_target_dim, n_samples - 1)
-            pca = PCA(n_components=n_components, random_state=42)
-            embeddings_for_clustering = pca.fit_transform(embeddings)
-            pca_elapsed = _time.monotonic() - pca_start
+        pca_start = _time.monotonic()
+        update_progress(
+            "dimensionality_reduction",
+            0,
+            100,
+            f"Reducing dimensions: {embeddings.shape[1]}d -> {pca_target_dim}d",
+        )
 
-            explained_variance = float(pca.explained_variance_ratio_.sum())
-            logger.info(
-                f"[{job_id}] PCA: {n_dims}d -> {n_components}d, "
-                f"variance retained: {explained_variance:.1%}, "
-                f"elapsed: {pca_elapsed:.2f}s"
-            )
+        embeddings_for_clustering, pca_stats = reduce_dimensions_pca(
+            embeddings=embeddings,
+            target_dim=pca_target_dim,
+            random_state=42,
+            variance_warning_threshold=0.90,
+            job_id=job_id,
+        )
 
-            if explained_variance < 0.90:
-                logger.warning(
-                    f"[{job_id}] PCA retained only {explained_variance:.1%} variance "
-                    f"(threshold: 90%). Clustering quality may be degraded."
-                )
+        pca_elapsed = _time.monotonic() - pca_start
+        pca_was_applied = bool(pca_stats["applied"])
+        reduced_dims = int(pca_stats["reduced_dims"])
 
+        if pca_was_applied:
             update_progress(
                 "dimensionality_reduction",
                 100,
                 100,
-                f"PCA complete: {n_components}d, {explained_variance:.0%} variance retained",
+                f"PCA complete: {reduced_dims}d, "
+                f"{pca_stats['explained_variance']:.0%} variance retained, "
+                f"{pca_elapsed:.2f}s elapsed",
             )
         else:
-            # Embeddings are already low-dimensional, PCA is disabled, or too few samples
-            embeddings_for_clustering = embeddings
-            logger.info(
-                f"[{job_id}] Skipping PCA: pca_target_dim={pca_target_dim}, "
-                f"dimensions={n_dims}, samples={n_samples}"
+            update_progress(
+                "dimensionality_reduction",
+                100,
+                100,
+                f"PCA skipped (dims={embeddings.shape[1]})",
             )
 
         # PHASE 4: Run HDBSCAN clustering
         update_progress("clustering", 0, 100, "Running HDBSCAN clustering...")
 
-        # Select HDBSCAN algorithm based on whether PCA was applied.
-        # Boruvka with KD-tree is efficient at low dimensions (<=50d after PCA)
-        # but worse than HDBSCAN's auto-selected Prim's algorithm at 512d.
-        pca_was_applied = embeddings_for_clustering.shape[1] < embeddings.shape[1]
-        hdbscan_algorithm = "boruvka_kdtree" if pca_was_applied else "best"
-        # core_dist_n_jobs parallelism only applies to the Boruvka algorithm;
-        # when using "best" (Prim's at high dimensions), it must be 1.
-        hdbscan_n_jobs = -1 if pca_was_applied else 1
+        # Select HDBSCAN algorithm via shared utility (mirrors FaceClusterer selection).
+        hdbscan_params = select_hdbscan_params(
+            n_dims=reduced_dims,
+            pca_applied=pca_was_applied,
+        )
 
         logger.info(
             "[%s] Using HDBSCAN algorithm=%s (PCA applied: %s, dims: %d)",
             job_id,
-            hdbscan_algorithm,
+            hdbscan_params["algorithm"],
             pca_was_applied,
-            embeddings_for_clustering.shape[1],
+            reduced_dims,
         )
 
         clusterer = hdbscan.HDBSCAN(
@@ -2299,8 +2739,7 @@ def discover_unknown_persons_job(
             min_samples=3,  # More conservative than min_cluster_size
             metric="euclidean",  # Standard for face embeddings
             cluster_selection_method="eom",  # Excess of mass (more stable)
-            algorithm=hdbscan_algorithm,
-            core_dist_n_jobs=hdbscan_n_jobs,
+            **hdbscan_params,
         )
 
         logger.info(

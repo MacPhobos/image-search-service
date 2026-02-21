@@ -73,6 +73,11 @@ module = ["rq.*", "qdrant_client.*", "open_clip.*", "torch.*", "PIL.*", "insight
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = ["sklearn.*"]
+ignore_missing_imports = true
+ignore_errors = true
+
+[[tool.mypy.overrides]]
 module = ["googleapiclient.*", "google.oauth2.*", "google.auth.*", "httplib2.*"]
 ignore_missing_imports = true
 ignore_errors = true

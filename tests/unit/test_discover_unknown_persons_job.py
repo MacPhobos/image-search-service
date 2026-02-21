@@ -163,9 +163,18 @@ def test_insufficient_faces(mock_dependencies: dict) -> None:
 
 
 def test_memory_ceiling_exceeded(mock_dependencies: dict) -> None:
-    """Test that job fails when memory ceiling is exceeded."""
-    # Arrange: Too many faces (would require >4GB memory)
-    # sqrt(4 * 1024^3 / 8) ~ 23170 faces for 4GB
+    """Test that job fails when memory ceiling is exceeded.
+
+    The memory ceiling uses an accurate PCA-aware formula (C1 fix):
+    - Without PCA: O(N²) distance matrix → (N² × 8 bytes)
+    - With PCA: O(N × D_reduced × 8 × 5) bytes
+
+    To trigger the ceiling with the more accurate estimate, we disable PCA
+    (pca_target_dim=0) so the original O(N²) formula applies.
+    25,000 faces × 25,000 × 8 bytes = ~4.66 GB, which exceeds the 4 GB cap.
+    """
+    # Arrange: Too many faces (would require >4GB memory WITHOUT PCA)
+    # sqrt(4 * 1024^3 / 8) ~ 23170 faces for 4GB (O(N²) formula)
     face_ids = [uuid.uuid4() for _ in range(25000)]
     embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(25000)]
 
@@ -173,13 +182,14 @@ def test_memory_ceiling_exceeded(mock_dependencies: dict) -> None:
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
     ]
 
-    # Act
+    # Act: disable PCA so the O(N²) memory formula applies
     result = discover_unknown_persons_job(
         clustering_method="hdbscan",
         min_cluster_size=5,
         min_quality=0.3,
         max_faces=50000,
         min_cluster_confidence=0.70,
+        pca_target_dim=0,  # disable PCA → triggers O(N²) formula → 4.66 GB > 4 GB cap
     )
 
     # Assert
