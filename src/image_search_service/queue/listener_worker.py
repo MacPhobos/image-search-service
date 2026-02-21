@@ -27,7 +27,7 @@ from typing import Any
 from redis import Redis
 from rq import Queue
 from rq.job import Job, JobStatus
-from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+from rq.registry import FailedJobRegistry, FinishedJobRegistry
 from rq.worker import Worker as RQWorker
 
 from image_search_service.core.config import get_settings
@@ -254,19 +254,13 @@ class ListenerWorker:
     def _cleanup_job_from_registries(self, job: Job) -> None:
         """Remove job from all registries on worker shutdown.
 
-        Ensures interrupted jobs are cleaned up from StartedJobRegistry.
-        Idempotent and non-fatal.
+        Idempotent and non-fatal. In RQ 2.x, StartedJobRegistry no longer
+        supports add/remove — no-op for registry cleanup on interrupted jobs.
 
         Args:
             job: Job to clean up
         """
-        queue_name = job.origin or "default"
-        try:
-            started_registry = StartedJobRegistry(queue_name, connection=self.connection)
-            started_registry.remove(job)
-            logger.debug(f"Cleaned up job {job.id} from StartedJobRegistry")
-        except Exception as e:
-            logger.debug(f"Failed to cleanup job from registries: {e}")
+        logger.debug(f"Cleanup called for interrupted job {job.id} (no registry ops in RQ 2.x)")
 
     def _startup_checks(self) -> None:
         """Perform startup checks (device, libraries, etc)."""
@@ -348,13 +342,6 @@ class ListenerWorker:
             job.set_status(JobStatus.STARTED)
             job.save()
 
-            # Add job to StartedJobRegistry for monitoring
-            try:
-                started_registry = StartedJobRegistry(queue_name, connection=self.connection)
-                started_registry.add(job, -1)  # -1 = no timeout
-            except Exception as e:
-                logger.warning(f"Failed to add job to StartedJobRegistry: {e}")
-
             start_time = time.time()
 
             # Execute the job function in main process
@@ -369,14 +356,13 @@ class ListenerWorker:
             job.ended_at = datetime.now(UTC)
             job.save()
 
-            # Move job from StartedJobRegistry to FinishedJobRegistry
+            # Add job to FinishedJobRegistry
+            # Note: StartedJobRegistry.add/remove raises NotImplementedError in RQ 2.x
             try:
-                started_registry = StartedJobRegistry(queue_name, connection=self.connection)
-                started_registry.remove(job)
                 finished_registry = FinishedJobRegistry(queue_name, connection=self.connection)
                 finished_registry.add(job, -1)
             except Exception as e:
-                logger.warning(f"Failed to update job registries on success: {e}")
+                logger.warning(f"Failed to add job to FinishedJobRegistry: {e}")
 
             logger.info(f"✓ Job {job.id} completed successfully ({elapsed:.1f}s)")
             gc.collect()
@@ -395,14 +381,13 @@ class ListenerWorker:
             job.ended_at = datetime.now(UTC)
             job.save()
 
-            # Move job from StartedJobRegistry to FailedJobRegistry
+            # Add job to FailedJobRegistry
+            # Note: StartedJobRegistry.add/remove raises NotImplementedError in RQ 2.x
             try:
-                started_registry = StartedJobRegistry(queue_name, connection=self.connection)
-                started_registry.remove(job)
                 failed_registry = FailedJobRegistry(queue_name, connection=self.connection)
                 failed_registry.add(job, -1)
             except Exception as reg_error:
-                logger.warning(f"Failed to update job registries on failure: {reg_error}")
+                logger.warning(f"Failed to add job to FailedJobRegistry: {reg_error}")
 
             logger.error(
                 f"✗ Job {job.id} failed after {elapsed:.1f}s: {e}",

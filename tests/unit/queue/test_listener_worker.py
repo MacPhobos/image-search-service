@@ -1,13 +1,13 @@
 """Tests for ListenerWorker registration and job registry management.
 
 Tests worker registration with Redis, heartbeat updates, state transitions,
-and job registry tracking (Started/Finished/Failed).
+and job registry tracking (Finished/Failed).
 
 Coverage targets:
 - Worker registration (birth/death)
 - Heartbeat mechanism
 - Worker state management (idle/busy)
-- Job registry tracking
+- Job registry tracking (Finished/Failed only — StartedJobRegistry removed in RQ 2.x)
 - Cleanup on shutdown
 """
 
@@ -17,7 +17,7 @@ from uuid import uuid4
 import pytest
 from rq import Queue
 from rq.job import Job, JobStatus
-from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
+from rq.registry import FailedJobRegistry, FinishedJobRegistry  # noqa: F401
 from rq.worker import Worker as RQWorker
 
 from image_search_service.queue.listener_worker import ListenerWorker
@@ -220,105 +220,82 @@ class TestCurrentJobTracking:
 
 
 class TestJobRegistryManagement:
-    """Tests for job registry tracking (Started/Finished/Failed)."""
+    """Tests for job registry tracking (Finished/Failed only — RQ 2.x removed Started ops)."""
 
-    def test_process_job_adds_to_started_registry(self, listener_worker, mock_job, mock_redis):
-        """process_job should add job to StartedJobRegistry."""
-        # Mock successful job execution
+    def test_process_job_success_adds_to_finished_registry(
+        self, listener_worker, mock_job, mock_redis
+    ):
+        """Successful job should be added to FinishedJobRegistry."""
         mock_job.func = Mock(return_value="success")
 
         with patch(
-            "image_search_service.queue.listener_worker.StartedJobRegistry"
-        ) as MockStartedRegistry:
-            mock_started = MagicMock()
-            MockStartedRegistry.return_value = mock_started
-
-            listener_worker.process_job(mock_job)
-
-            # Verify job was added to StartedJobRegistry
-            mock_started.add.assert_called_once_with(mock_job, -1)
-
-    def test_process_job_success_moves_to_finished_registry(
-        self, listener_worker, mock_job, mock_redis
-    ):
-        """Successful job should be moved from Started to Finished registry."""
-        # Mock successful job execution
-        mock_job.func = Mock(return_value="success")
-
-        with (
-            patch(
-                "image_search_service.queue.listener_worker.StartedJobRegistry"
-            ) as MockStartedRegistry,
-            patch(
-                "image_search_service.queue.listener_worker.FinishedJobRegistry"
-            ) as MockFinishedRegistry,
-        ):
-            mock_started = MagicMock()
+            "image_search_service.queue.listener_worker.FinishedJobRegistry"
+        ) as mock_finished_cls:
             mock_finished = MagicMock()
-            MockStartedRegistry.return_value = mock_started
-            MockFinishedRegistry.return_value = mock_finished
+            mock_finished_cls.return_value = mock_finished
 
             result = listener_worker.process_job(mock_job)
 
             assert result is True
-            # Verify job was removed from Started and added to Finished
-            mock_started.remove.assert_called_once_with(mock_job)
             mock_finished.add.assert_called_once_with(mock_job, -1)
 
-    def test_process_job_failure_moves_to_failed_registry(
+    def test_process_job_failure_adds_to_failed_registry(
         self, listener_worker, mock_job, mock_redis
     ):
-        """Failed job should be moved from Started to Failed registry."""
-        # Mock failing job execution
+        """Failed job should be added to FailedJobRegistry."""
         mock_job.func = Mock(side_effect=RuntimeError("Job failed"))
 
-        with (
-            patch(
-                "image_search_service.queue.listener_worker.StartedJobRegistry"
-            ) as MockStartedRegistry,
-            patch(
-                "image_search_service.queue.listener_worker.FailedJobRegistry"
-            ) as MockFailedRegistry,
-        ):
-            mock_started = MagicMock()
+        with patch(
+            "image_search_service.queue.listener_worker.FailedJobRegistry"
+        ) as mock_failed_cls:
             mock_failed = MagicMock()
-            MockStartedRegistry.return_value = mock_started
-            MockFailedRegistry.return_value = mock_failed
+            mock_failed_cls.return_value = mock_failed
 
             result = listener_worker.process_job(mock_job)
 
             assert result is False
-            # Verify job was removed from Started and added to Failed
-            mock_started.remove.assert_called_once()
             mock_failed.add.assert_called_once_with(mock_job, -1)
 
-    def test_cleanup_job_from_registries_removes_from_started(
+    def test_process_job_success_continues_when_finished_registry_fails(
         self, listener_worker, mock_job, mock_redis
     ):
-        """_cleanup_job_from_registries should remove job from StartedJobRegistry."""
+        """process_job should return True even if FinishedJobRegistry.add() raises."""
+        mock_job.func = Mock(return_value="success")
+
         with patch(
-            "image_search_service.queue.listener_worker.StartedJobRegistry"
-        ) as MockStartedRegistry:
-            mock_started = MagicMock()
-            MockStartedRegistry.return_value = mock_started
+            "image_search_service.queue.listener_worker.FinishedJobRegistry"
+        ) as mock_finished_cls:
+            mock_finished = MagicMock()
+            mock_finished.add.side_effect = Exception("Registry error")
+            mock_finished_cls.return_value = mock_finished
 
-            listener_worker._cleanup_job_from_registries(mock_job)
+            result = listener_worker.process_job(mock_job)
 
-            mock_started.remove.assert_called_once_with(mock_job)
+            assert result is True
 
-    def test_cleanup_job_from_registries_is_idempotent(
+    def test_process_job_failure_continues_when_failed_registry_fails(
         self, listener_worker, mock_job, mock_redis
     ):
-        """_cleanup_job_from_registries should not raise if job not in registry."""
-        with patch(
-            "image_search_service.queue.listener_worker.StartedJobRegistry"
-        ) as MockStartedRegistry:
-            mock_started = MagicMock()
-            mock_started.remove.side_effect = Exception("Job not found")
-            MockStartedRegistry.return_value = mock_started
+        """process_job should return False even if FailedJobRegistry.add() raises."""
+        mock_job.func = Mock(side_effect=RuntimeError("Job failed"))
 
-            # Should not raise
-            listener_worker._cleanup_job_from_registries(mock_job)
+        with patch(
+            "image_search_service.queue.listener_worker.FailedJobRegistry"
+        ) as mock_failed_cls:
+            mock_failed = MagicMock()
+            mock_failed.add.side_effect = Exception("Registry error")
+            mock_failed_cls.return_value = mock_failed
+
+            result = listener_worker.process_job(mock_job)
+
+            assert result is False
+
+    def test_cleanup_job_from_registries_is_noop_and_does_not_raise(
+        self, listener_worker, mock_job
+    ):
+        """_cleanup_job_from_registries should be a no-op in RQ 2.x and never raise."""
+        # Should not raise — StartedJobRegistry operations removed in RQ 2.x
+        listener_worker._cleanup_job_from_registries(mock_job)
 
 
 class TestWorkerStateTransitions:
@@ -340,7 +317,6 @@ class TestWorkerStateTransitions:
 
         with (
             patch.object(listener_worker._rq_worker, "set_state", side_effect=track_set_state),
-            patch("image_search_service.queue.listener_worker.StartedJobRegistry"),
             patch("image_search_service.queue.listener_worker.FinishedJobRegistry"),
         ):
             listener_worker.process_job(mock_job)
@@ -356,10 +332,7 @@ class TestWorkerStateTransitions:
         """Worker should clear current job after processing."""
         mock_job.func = Mock(return_value="success")
 
-        with (
-            patch("image_search_service.queue.listener_worker.StartedJobRegistry"),
-            patch("image_search_service.queue.listener_worker.FinishedJobRegistry"),
-        ):
+        with patch("image_search_service.queue.listener_worker.FinishedJobRegistry"):
             listener_worker.process_job(mock_job)
 
             assert listener_worker._current_job is None
@@ -384,20 +357,12 @@ class TestListenLifecycle:
             listener_worker._register_death()
             mock_unregister.assert_called_once()
 
-    def test_listen_cleanup_flow_with_interrupted_job(self, listener_worker, mock_job):
-        """Cleanup flow should handle interrupted job in finally block."""
+    def test_listen_cleanup_flow_with_interrupted_job_does_not_raise(
+        self, listener_worker, mock_job
+    ):
+        """Cleanup flow should handle interrupted job gracefully (no-op in RQ 2.x)."""
         # Set current job (simulating interrupted job)
         listener_worker._current_job = mock_job
 
-        # Mock registry removal
-        with patch(
-            "image_search_service.queue.listener_worker.StartedJobRegistry"
-        ) as MockStartedRegistry:
-            mock_started = MagicMock()
-            MockStartedRegistry.return_value = mock_started
-
-            # Call cleanup directly (avoiding full listen() loop)
-            listener_worker._cleanup_job_from_registries(mock_job)
-
-            # Verify cleanup was attempted
-            mock_started.remove.assert_called_once_with(mock_job)
+        # Should not raise — StartedJobRegistry operations removed in RQ 2.x
+        listener_worker._cleanup_job_from_registries(mock_job)
