@@ -78,9 +78,7 @@ async def face_with_person(
 
 
 @pytest.fixture
-async def face_without_person(
-    db_session: AsyncSession, test_asset: ImageAsset
-) -> FaceInstance:
+async def face_without_person(db_session: AsyncSession, test_asset: ImageAsset) -> FaceInstance:
     """Create face instance without person assignment."""
     face = FaceInstance(
         id=uuid.uuid4(),
@@ -107,14 +105,10 @@ async def face_without_person(
 class TestClusterDualEndpoint:
     """Tests for POST /api/v1/faces/cluster/dual endpoint."""
 
-    async def test_cluster_dual_enqueues_job_with_defaults(
-        self, test_client: AsyncClient
-    ):
+    async def test_cluster_dual_enqueues_job_with_defaults(self, test_client: AsyncClient):
         """POST /cluster/dual enqueues background job with default parameters."""
         # Patch Redis and Queue at their import location within the route function
-        with patch("redis.Redis"), \
-             patch("rq.Queue") as mock_queue_cls:
-
+        with patch("redis.Redis"), patch("rq.Queue") as mock_queue_cls:
             # Setup mock queue
             mock_job = MagicMock()
             mock_job.id = "test-job-123"
@@ -122,10 +116,7 @@ class TestClusterDualEndpoint:
             mock_queue.enqueue.return_value = mock_job
             mock_queue_cls.return_value = mock_queue
 
-            response = await test_client.post(
-                "/api/v1/faces/cluster/dual",
-                json={"queue": True}
-            )
+            response = await test_client.post("/api/v1/faces/cluster/dual", json={"queue": True})
 
             assert response.status_code == 200
             data = response.json()
@@ -139,9 +130,7 @@ class TestClusterDualEndpoint:
 
     async def test_cluster_dual_with_custom_params(self, test_client: AsyncClient):
         """POST /cluster/dual with custom thresholds and method."""
-        with patch("redis.Redis"), \
-             patch("rq.Queue") as mock_queue_cls:
-
+        with patch("redis.Redis"), patch("rq.Queue") as mock_queue_cls:
             mock_job = MagicMock()
             mock_job.id = "test-job-456"
             mock_queue = MagicMock()
@@ -157,7 +146,7 @@ class TestClusterDualEndpoint:
                     "unknownEps": 0.6,
                     "maxFaces": 1000,
                     "queue": True,
-                }
+                },
             )
 
             assert response.status_code == 200
@@ -179,7 +168,7 @@ class TestClusterDualEndpoint:
             json={
                 "unknownMethod": "invalid_method",
                 "queue": True,
-            }
+            },
         )
 
         assert response.status_code == 422
@@ -194,19 +183,14 @@ class TestTrainEndpoint:
 
     async def test_train_enqueues_job_with_defaults(self, test_client: AsyncClient):
         """POST /train enqueues training job with default parameters."""
-        with patch("redis.Redis"), \
-             patch("rq.Queue") as mock_queue_cls:
-
+        with patch("redis.Redis"), patch("rq.Queue") as mock_queue_cls:
             mock_job = MagicMock()
             mock_job.id = "train-job-789"
             mock_queue = MagicMock()
             mock_queue.enqueue.return_value = mock_job
             mock_queue_cls.return_value = mock_queue
 
-            response = await test_client.post(
-                "/api/v1/faces/train",
-                json={"queue": True}
-            )
+            response = await test_client.post("/api/v1/faces/train", json={"queue": True})
 
             assert response.status_code == 200
             data = response.json()
@@ -217,9 +201,7 @@ class TestTrainEndpoint:
 
     async def test_train_with_custom_params(self, test_client: AsyncClient):
         """POST /train with custom training hyperparameters."""
-        with patch("redis.Redis"), \
-             patch("rq.Queue") as mock_queue_cls:
-
+        with patch("redis.Redis"), patch("rq.Queue") as mock_queue_cls:
             mock_job = MagicMock()
             mock_job.id = "train-job-custom"
             mock_queue = MagicMock()
@@ -236,7 +218,7 @@ class TestTrainEndpoint:
                     "minFaces": 10,
                     "checkpointPath": "/tmp/checkpoint.pth",
                     "queue": True,
-                }
+                },
             )
 
             assert response.status_code == 200
@@ -257,7 +239,7 @@ class TestTrainEndpoint:
             json={
                 "epochs": 0,  # Invalid: must be >= 1
                 "queue": True,
-            }
+            },
         )
 
         assert response.status_code == 422
@@ -308,18 +290,20 @@ class TestMergePersons:
         db_session.add(face2)
         await db_session.commit()
 
-        # Mock Redis, Queue, and Qdrant client
+        # Mock enqueue helper and Qdrant client
         mock_qdrant_client = MagicMock()
         mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
         qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        with patch("redis.Redis"), \
-             patch("rq.Queue"), \
-             patch(qdrant_patch, return_value=mock_qdrant_client):
-
+        enqueue_patch = "image_search_service.queue.worker.enqueue_person_ids_update"
+        mock_enqueue = MagicMock(return_value=2)
+        with (
+            patch(enqueue_patch, mock_enqueue),
+            patch(qdrant_patch, return_value=mock_qdrant_client),
+        ):
             response = await test_client.post(
                 f"/api/v1/faces/persons/{person_a.id}/merge",
-                json={"intoPersonId": str(person_b.id)}
+                json={"intoPersonId": str(person_b.id)},
             )
 
         assert response.status_code == 200
@@ -327,6 +311,11 @@ class TestMergePersons:
         assert data["sourcePersonId"] == str(person_a.id)
         assert data["targetPersonId"] == str(person_b.id)
         assert data["facesMoved"] == 2
+
+        # Verify enqueue was called with the affected asset IDs
+        mock_enqueue.assert_called_once()
+        enqueued_ids = mock_enqueue.call_args[0][0]
+        assert test_asset.id in enqueued_ids
 
         # Verify person A is marked as merged
         await db_session.refresh(person_a)
@@ -339,39 +328,30 @@ class TestMergePersons:
         assert face1.person_id == person_b.id
         assert face2.person_id == person_b.id
 
-    async def test_merge_persons_source_not_found(
-        self, test_client: AsyncClient, person_b: Person
-    ):
+    async def test_merge_persons_source_not_found(self, test_client: AsyncClient, person_b: Person):
         """POST /persons/{id}/merge returns 404 when source person not found."""
         fake_id = uuid.uuid4()
         response = await test_client.post(
-            f"/api/v1/faces/persons/{fake_id}/merge",
-            json={"intoPersonId": str(person_b.id)}
+            f"/api/v1/faces/persons/{fake_id}/merge", json={"intoPersonId": str(person_b.id)}
         )
 
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
-    async def test_merge_persons_target_not_found(
-        self, test_client: AsyncClient, person_a: Person
-    ):
+    async def test_merge_persons_target_not_found(self, test_client: AsyncClient, person_a: Person):
         """POST /persons/{id}/merge returns 404 when target person not found."""
         fake_id = uuid.uuid4()
         response = await test_client.post(
-            f"/api/v1/faces/persons/{person_a.id}/merge",
-            json={"intoPersonId": str(fake_id)}
+            f"/api/v1/faces/persons/{person_a.id}/merge", json={"intoPersonId": str(fake_id)}
         )
 
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
-    async def test_merge_persons_self_merge(
-        self, test_client: AsyncClient, person_a: Person
-    ):
+    async def test_merge_persons_self_merge(self, test_client: AsyncClient, person_a: Person):
         """POST /persons/{id}/merge returns 400 when trying to merge person into itself."""
         response = await test_client.post(
-            f"/api/v1/faces/persons/{person_a.id}/merge",
-            json={"intoPersonId": str(person_a.id)}
+            f"/api/v1/faces/persons/{person_a.id}/merge", json={"intoPersonId": str(person_a.id)}
         )
 
         assert response.status_code == 400
@@ -430,7 +410,7 @@ class TestBulkFaceOperations:
         with patch(qdrant_patch, return_value=mock_qdrant_client):
             response = await test_client.post(
                 f"/api/v1/faces/persons/{person_a.id}/photos/bulk-remove",
-                json={"photoIds": [test_asset.id]}
+                json={"photoIds": [test_asset.id]},
             )
 
         assert response.status_code == 200
@@ -444,13 +424,10 @@ class TestBulkFaceOperations:
         assert face1.person_id is None
         assert face2.person_id is None
 
-    async def test_bulk_remove_faces_empty_list(
-        self, test_client: AsyncClient, person_a: Person
-    ):
+    async def test_bulk_remove_faces_empty_list(self, test_client: AsyncClient, person_a: Person):
         """POST /persons/{id}/photos/bulk-remove with empty photo list returns 0 updates."""
         response = await test_client.post(
-            f"/api/v1/faces/persons/{person_a.id}/photos/bulk-remove",
-            json={"photoIds": []}
+            f"/api/v1/faces/persons/{person_a.id}/photos/bulk-remove", json={"photoIds": []}
         )
 
         assert response.status_code == 200
@@ -463,8 +440,7 @@ class TestBulkFaceOperations:
         """POST /persons/{id}/photos/bulk-remove returns 404 for missing person."""
         fake_id = uuid.uuid4()
         response = await test_client.post(
-            f"/api/v1/faces/persons/{fake_id}/photos/bulk-remove",
-            json={"photoIds": [1, 2, 3]}
+            f"/api/v1/faces/persons/{fake_id}/photos/bulk-remove", json={"photoIds": [1, 2, 3]}
         )
 
         assert response.status_code == 404
@@ -494,23 +470,21 @@ class TestBulkFaceOperations:
         db_session.add(face)
         await db_session.commit()
 
-        # Mock Redis, Queue, and Qdrant operations
-        with patch("redis.Redis"), \
-             patch("rq.Queue"):
+        # Mock enqueue helper and Qdrant operations
+        mock_qdrant_client = MagicMock()
+        mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
-            # Mock the update_person_ids method to be a no-op
-            mock_qdrant_client = MagicMock()
-            mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
-
-            qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-            with patch(qdrant_patch, return_value=mock_qdrant_client):
-                response = await test_client.post(
-                    f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
-                    json={
-                        "photoIds": [test_asset.id],
-                        "toPersonId": str(person_b.id)
-                    }
-                )
+        qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        enqueue_patch = "image_search_service.queue.worker.enqueue_person_ids_update"
+        mock_enqueue = MagicMock(return_value=1)
+        with (
+            patch(enqueue_patch, mock_enqueue),
+            patch(qdrant_patch, return_value=mock_qdrant_client),
+        ):
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
+                json={"photoIds": [test_asset.id], "toPersonId": str(person_b.id)},
+            )
 
         assert response.status_code == 200
         data = response.json()
@@ -519,6 +493,11 @@ class TestBulkFaceOperations:
         assert data["updatedFaces"] == 1
         assert data["updatedPhotos"] == 1
         assert data["personCreated"] is False
+
+        # Verify enqueue was called with the affected asset IDs
+        mock_enqueue.assert_called_once()
+        enqueued_ids = mock_enqueue.call_args[0][0]
+        assert test_asset.id in enqueued_ids
 
         # Verify face was moved
         await db_session.refresh(face)
@@ -548,23 +527,21 @@ class TestBulkFaceOperations:
         db_session.add(face)
         await db_session.commit()
 
-        # Mock Redis, Queue, and Qdrant operations
-        with patch("redis.Redis"), \
-             patch("rq.Queue"):
+        # Mock enqueue helper and Qdrant operations
+        mock_qdrant_client = MagicMock()
+        mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
 
-            # Mock the update_person_ids method to be a no-op
-            mock_qdrant_client = MagicMock()
-            mock_qdrant_client.update_person_ids = MagicMock(return_value=None)
-
-            qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-            with patch(qdrant_patch, return_value=mock_qdrant_client):
-                response = await test_client.post(
-                    f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
-                    json={
-                        "photoIds": [test_asset.id],
-                        "toPersonName": "New Person"
-                    }
-                )
+        qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
+        enqueue_patch = "image_search_service.queue.worker.enqueue_person_ids_update"
+        mock_enqueue = MagicMock(return_value=1)
+        with (
+            patch(enqueue_patch, mock_enqueue),
+            patch(qdrant_patch, return_value=mock_qdrant_client),
+        ):
+            response = await test_client.post(
+                f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
+                json={"photoIds": [test_asset.id], "toPersonName": "New Person"},
+            )
 
         assert response.status_code == 200
         data = response.json()
@@ -582,21 +559,16 @@ class TestBulkFaceOperations:
         fake_target_id = uuid.uuid4()
         response = await test_client.post(
             f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
-            json={
-                "photoIds": [1, 2],
-                "toPersonId": str(fake_target_id)
-            }
+            json={"photoIds": [1, 2], "toPersonId": str(fake_target_id)},
         )
 
         assert response.status_code == 404
 
-    async def test_bulk_move_missing_destination(
-        self, test_client: AsyncClient, person_a: Person
-    ):
+    async def test_bulk_move_missing_destination(self, test_client: AsyncClient, person_a: Person):
         """POST /persons/{id}/photos/bulk-move returns 422 without destination."""
         response = await test_client.post(
             f"/api/v1/faces/persons/{person_a.id}/photos/bulk-move",
-            json={"photoIds": [1, 2]}  # Missing both toPersonId and toPersonName
+            json={"photoIds": [1, 2]},  # Missing both toPersonId and toPersonName
         )
 
         assert response.status_code == 422
@@ -623,9 +595,7 @@ class TestUnassignFace:
 
         qdrant_patch = "image_search_service.vector.face_qdrant.get_face_qdrant_client"
         with patch(qdrant_patch, return_value=mock_qdrant_client):
-            response = await test_client.delete(
-                f"/api/v1/faces/faces/{face_with_person.id}/person"
-            )
+            response = await test_client.delete(f"/api/v1/faces/faces/{face_with_person.id}/person")
 
         assert response.status_code == 200
         data = response.json()
@@ -640,9 +610,7 @@ class TestUnassignFace:
     async def test_unassign_face_not_found(self, test_client: AsyncClient):
         """DELETE /faces/{id}/person returns 404 for missing face."""
         fake_id = uuid.uuid4()
-        response = await test_client.delete(
-            f"/api/v1/faces/faces/{fake_id}/person"
-        )
+        response = await test_client.delete(f"/api/v1/faces/faces/{fake_id}/person")
 
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
@@ -653,9 +621,7 @@ class TestUnassignFace:
         face_without_person: FaceInstance,
     ):
         """DELETE /faces/{id}/person returns 400 when face has no person."""
-        response = await test_client.delete(
-            f"/api/v1/faces/faces/{face_without_person.id}/person"
-        )
+        response = await test_client.delete(f"/api/v1/faces/faces/{face_without_person.id}/person")
 
         assert response.status_code == 400
         assert "not assigned" in response.json()["detail"].lower()
@@ -677,9 +643,7 @@ class TestDetectSingleAsset:
         # Mock face service and sync session context manager
         sync_patch = "image_search_service.db.sync_operations.get_sync_session"
         service_patch = "image_search_service.faces.service.get_face_service"
-        with patch(sync_patch) as mock_sync_session_func, \
-             patch(service_patch) as mock_service_func:
-
+        with patch(sync_patch) as mock_sync_session_func, patch(service_patch) as mock_service_func:
             # Setup mock face instances
             mock_face1 = MagicMock()
             mock_face1.id = uuid.uuid4()
@@ -700,7 +664,7 @@ class TestDetectSingleAsset:
 
             response = await test_client.post(
                 f"/api/v1/faces/detect/{test_asset.id}",
-                json={"minConfidence": 0.8, "minFaceSize": 30}
+                json={"minConfidence": 0.8, "minFaceSize": 30},
             )
 
             assert response.status_code == 200
@@ -713,8 +677,7 @@ class TestDetectSingleAsset:
         """POST /detect/{asset_id} returns 404 for missing asset."""
         fake_id = 999999
         response = await test_client.post(
-            f"/api/v1/faces/detect/{fake_id}",
-            json={"minConfidence": 0.5}
+            f"/api/v1/faces/detect/{fake_id}", json={"minConfidence": 0.5}
         )
 
         assert response.status_code == 404
@@ -725,7 +688,7 @@ class TestDetectSingleAsset:
         """POST /detect/{asset_id} returns 422 for invalid confidence."""
         response = await test_client.post(
             f"/api/v1/faces/detect/{test_asset.id}",
-            json={"minConfidence": 1.5}  # Invalid: > 1.0
+            json={"minConfidence": 1.5},  # Invalid: > 1.0
         )
 
         assert response.status_code == 422
@@ -744,8 +707,7 @@ class TestClusterBasic:
     ):
         """POST /cluster triggers clustering with default params."""
         response = await test_client.post(
-            "/api/v1/faces/cluster",
-            json={"minClusterSize": 5, "qualityThreshold": 0.6}
+            "/api/v1/faces/cluster", json={"minClusterSize": 5, "qualityThreshold": 0.6}
         )
 
         assert response.status_code == 200
@@ -761,11 +723,7 @@ class TestClusterBasic:
         """POST /cluster with custom clustering parameters."""
         response = await test_client.post(
             "/api/v1/faces/cluster",
-            json={
-                "minClusterSize": 3,
-                "qualityThreshold": 0.7,
-                "maxFaces": 1000
-            }
+            json={"minClusterSize": 3, "qualityThreshold": 0.7, "maxFaces": 1000},
         )
 
         assert response.status_code == 200
@@ -774,7 +732,7 @@ class TestClusterBasic:
         """POST /cluster returns 422 for invalid parameters."""
         response = await test_client.post(
             "/api/v1/faces/cluster",
-            json={"minClusterSize": -1}  # Invalid: negative
+            json={"minClusterSize": -1},  # Invalid: negative
         )
 
         assert response.status_code == 422
@@ -822,7 +780,7 @@ class TestPersonPhotos:
         # Get first page with page_size=2
         response = await test_client.get(
             f"/api/v1/faces/persons/{person_a.id}/photos",
-            params={"page": 1, "page_size": 2}  # Use snake_case parameter name
+            params={"page": 1, "page_size": 2},  # Use snake_case parameter name
         )
 
         assert response.status_code == 200
@@ -838,7 +796,7 @@ class TestPersonPhotos:
         # Get second page - just verify it returns successfully
         response = await test_client.get(
             f"/api/v1/faces/persons/{person_a.id}/photos",
-            params={"page": 2, "page_size": 2}  # Use snake_case parameter name
+            params={"page": 2, "page_size": 2},  # Use snake_case parameter name
         )
 
         assert response.status_code == 200
@@ -846,13 +804,9 @@ class TestPersonPhotos:
         assert data["total"] == 3
         assert data["page"] == 2
 
-    async def test_person_photos_empty(
-        self, test_client: AsyncClient, person_a: Person
-    ):
+    async def test_person_photos_empty(self, test_client: AsyncClient, person_a: Person):
         """GET /persons/{id}/photos returns empty list for person with no faces."""
-        response = await test_client.get(
-            f"/api/v1/faces/persons/{person_a.id}/photos"
-        )
+        response = await test_client.get(f"/api/v1/faces/persons/{person_a.id}/photos")
 
         assert response.status_code == 200
         data = response.json()
@@ -865,9 +819,7 @@ class TestPersonPhotos:
     async def test_person_photos_not_found(self, test_client: AsyncClient):
         """GET /persons/{id}/photos returns 404 for missing person."""
         fake_id = uuid.uuid4()
-        response = await test_client.get(
-            f"/api/v1/faces/persons/{fake_id}/photos"
-        )
+        response = await test_client.get(f"/api/v1/faces/persons/{fake_id}/photos")
 
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()

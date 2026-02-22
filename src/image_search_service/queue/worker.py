@@ -7,6 +7,8 @@ The queue management functions (get_queue, get_redis, etc.) are preserved for
 backward compatibility with existing code.
 """
 
+from collections.abc import Collection
+
 from redis import Redis
 from rq import Queue
 
@@ -59,6 +61,45 @@ def get_queue(priority: str = QUEUE_NORMAL) -> Queue:
         logger.info(f"RQ queue '{priority}' initialized")
 
     return _queues[priority]
+
+
+def enqueue_person_ids_update(asset_ids: Collection[int]) -> int:
+    """Enqueue person_ids update jobs for the given asset IDs.
+
+    Each asset gets a separate job that refreshes the person_ids payload
+    in the Qdrant image_assets collection. The job is idempotent, so
+    duplicate enqueues are harmless.
+
+    This helper swallows all exceptions so that a queueing failure never
+    breaks the caller's HTTP response.
+
+    Args:
+        asset_ids: Asset IDs whose person_ids payloads need refreshing.
+
+    Returns:
+        Number of jobs successfully enqueued (0 on failure).
+    """
+    if not asset_ids:
+        return 0
+
+    try:
+        from image_search_service.queue.jobs import update_asset_person_ids_job
+
+        queue = get_queue(QUEUE_DEFAULT)
+        for asset_id in asset_ids:
+            queue.enqueue(
+                update_asset_person_ids_job,
+                asset_id=asset_id,
+                job_timeout="5m",
+            )
+        logger.info(
+            "Enqueued %d person_ids update job(s)",
+            len(asset_ids),
+        )
+        return len(asset_ids)
+    except Exception as e:
+        logger.warning("Failed to enqueue person_ids update jobs: %s", e)
+        return 0
 
 
 if __name__ == "__main__":

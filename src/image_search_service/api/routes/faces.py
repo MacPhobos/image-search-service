@@ -132,9 +132,9 @@ async def list_clusters(
     if is_sqlite:
         # SQLite doesn't have bool_or, use MAX with CAST to integer
         # CAST(person_id IS NOT NULL AS INTEGER) gives 1 or 0
-        has_person_expr = func.max(
-            func.cast(FaceInstance.person_id.isnot(None), Integer)
-        ).label("has_person")
+        has_person_expr = func.max(func.cast(FaceInstance.person_id.isnot(None), Integer)).label(
+            "has_person"
+        )
         # SQLite: get any person_id using array aggregation
         # group_concat returns string, we'll handle conversion later
         person_id_expr = func.group_concat(FaceInstance.person_id).label("person_id_concat")
@@ -144,9 +144,7 @@ async def list_clusters(
         # Get any person_id from the cluster (for display)
         # array_agg returns array, we'll extract first element later
         # Filter out NULLs to only get actual person_ids
-        person_id_expr = func.array_agg(
-            FaceInstance.person_id
-        ).label("person_ids_array")
+        person_id_expr = func.array_agg(FaceInstance.person_id).label("person_ids_array")
 
     cluster_query = (
         select(
@@ -166,9 +164,7 @@ async def list_clusters(
         # has_person will be FALSE or NULL for fully unlabeled clusters
         if is_sqlite:
             # SQLite: has_person is 0 or NULL for unlabeled
-            cluster_query = cluster_query.having(
-                func.coalesce(has_person_expr, False).is_(False)
-            )
+            cluster_query = cluster_query.having(func.coalesce(has_person_expr, False).is_(False))
         else:
             # PostgreSQL: bool_or returns NULL if all inputs are NULL
             # We want clusters where has_person IS NOT TRUE (NULL or FALSE)
@@ -176,9 +172,7 @@ async def list_clusters(
 
     # Filter by minimum cluster size (SQL-level filtering)
     if min_cluster_size is not None:
-        cluster_query = cluster_query.having(
-            func.count(FaceInstance.id) >= min_cluster_size
-        )
+        cluster_query = cluster_query.having(func.count(FaceInstance.id) >= min_cluster_size)
 
     # Note: min_confidence filtering is done post-query since it requires
     # fetching embeddings from Qdrant for similarity calculation
@@ -217,9 +211,9 @@ async def list_clusters(
         person_id = None
         if is_sqlite:
             # SQLite: person_id_concat is comma-separated string or None
-            if hasattr(row, 'person_id_concat') and row.person_id_concat:
+            if hasattr(row, "person_id_concat") and row.person_id_concat:
                 # Get first person_id from concatenated string
-                first_id_str = row.person_id_concat.split(',')[0].strip()
+                first_id_str = row.person_id_concat.split(",")[0].strip()
                 if first_id_str:
                     try:
                         person_id = UUID(first_id_str)
@@ -227,7 +221,7 @@ async def list_clusters(
                         pass
         else:
             # PostgreSQL: person_ids_array is array of UUIDs
-            if hasattr(row, 'person_ids_array') and row.person_ids_array:
+            if hasattr(row, "person_ids_array") and row.person_ids_array:
                 # Filter out None values and get first
                 non_null_ids = [pid for pid in row.person_ids_array if pid is not None]
                 if non_null_ids:
@@ -273,9 +267,7 @@ async def list_clusters(
                     )
                     continue
         except Exception as e:
-            logger.warning(
-                f"Failed to calculate confidence for cluster {row.cluster_id}: {e}"
-            )
+            logger.warning(f"Failed to calculate confidence for cluster {row.cluster_id}: {e}")
             # Don't filter out clusters with calculation errors
             cluster_confidence = None
 
@@ -554,9 +546,8 @@ async def get_person(
     face_count = (await db.execute(face_count_query)).scalar() or 0
 
     # Count distinct photos (assets) containing this person's faces
-    photo_count_query = (
-        select(func.count(func.distinct(FaceInstance.asset_id)))
-        .where(FaceInstance.person_id == person_id)
+    photo_count_query = select(func.count(func.distinct(FaceInstance.asset_id))).where(
+        FaceInstance.person_id == person_id
     )
     photo_count = (await db.execute(photo_count_query)).scalar() or 0
 
@@ -671,9 +662,7 @@ async def update_person(
     await db.commit()
     await db.refresh(person)
 
-    logger.info(
-        f"Updated person {person_id}: name={person.name}, birth_date={person.birth_date}"
-    )
+    logger.info(f"Updated person {person_id}: name={person.name}, birth_date={person.birth_date}")
 
     return UpdatePersonResponse(
         id=person.id,
@@ -942,11 +931,7 @@ async def get_person_assignment_history(
     total = await db.scalar(count_query) or 0
 
     # Apply pagination and ordering
-    query = (
-        query.order_by(FaceAssignmentEvent.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
+    query = query.order_by(FaceAssignmentEvent.created_at.desc()).offset(offset).limit(limit)
 
     result = await db.execute(query)
     events = result.scalars().all()
@@ -991,9 +976,7 @@ async def get_person_assignment_history(
                 from_person_name=persons_map.get(event.from_person_id)
                 if event.from_person_id
                 else None,
-                to_person_name=persons_map.get(event.to_person_id)
-                if event.to_person_id
-                else None,
+                to_person_name=persons_map.get(event.to_person_id) if event.to_person_id else None,
                 note=event.note,
             )
         )
@@ -1053,35 +1036,12 @@ async def merge_persons(
 
     logger.info(f"Merged person {source.name} into {target.name} ({len(faces)} faces)")
 
-    # Trigger background jobs to update person_ids for all affected assets
-    # Get unique asset IDs from the moved faces
+    # Update person_ids in Qdrant for all affected assets
     affected_asset_ids = {face.asset_id for face in faces}
     if affected_asset_ids:
-        try:
-            from redis import Redis
-            from rq import Queue
+        from image_search_service.queue.worker import enqueue_person_ids_update
 
-            from image_search_service.core.config import get_settings
-            from image_search_service.queue.jobs import update_asset_person_ids_job
-
-            settings = get_settings()
-            redis_conn = Redis.from_url(settings.redis_url)
-            queue = Queue("default", connection=redis_conn)
-
-            for asset_id in affected_asset_ids:
-                queue.enqueue(
-                    update_asset_person_ids_job,
-                    asset_id=asset_id,
-                    job_timeout="5m",
-                )
-
-            logger.info(
-                f"Queued {len(affected_asset_ids)} person_ids update jobs for merge "
-                f"{source.name} → {target.name}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to enqueue person_ids update jobs: {e}")
-            # Don't fail the request if job queueing fails
+        enqueue_person_ids_update(affected_asset_ids)
 
     return MergePersonsResponse(
         source_person_id=person_id,
@@ -1192,33 +1152,11 @@ async def bulk_remove_from_person(
             f"in {len(affected_photo_ids)} photos"
         )
 
-        # Trigger background jobs to update person_ids for all affected assets
+        # Update person_ids in Qdrant for all affected assets
         if affected_photo_ids:
-            try:
-                from redis import Redis
-                from rq import Queue
+            from image_search_service.queue.worker import enqueue_person_ids_update
 
-                from image_search_service.core.config import get_settings
-                from image_search_service.queue.jobs import update_asset_person_ids_job
-
-                settings = get_settings()
-                redis_conn = Redis.from_url(settings.redis_url)
-                queue = Queue("default", connection=redis_conn)
-
-                for asset_id in affected_photo_ids:
-                    queue.enqueue(
-                        update_asset_person_ids_job,
-                        asset_id=asset_id,
-                        job_timeout="5m",
-                    )
-
-                logger.info(
-                    f"Queued {len(affected_photo_ids)} person_ids update jobs for bulk remove "
-                    f"from person {person.name}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to enqueue person_ids update jobs: {e}")
-                # Don't fail the request if job queueing fails
+            enqueue_person_ids_update(affected_photo_ids)
 
         return BulkRemoveResponse(
             updated_faces=len(faces),
@@ -1416,33 +1354,11 @@ async def bulk_move_to_person(
             f"in {len(affected_photo_ids)} photos"
         )
 
-        # Trigger background jobs to update person_ids for all affected assets
+        # Update person_ids in Qdrant for all affected assets
         if affected_photo_ids:
-            try:
-                from redis import Redis
-                from rq import Queue
+            from image_search_service.queue.worker import enqueue_person_ids_update
 
-                from image_search_service.core.config import get_settings
-                from image_search_service.queue.jobs import update_asset_person_ids_job
-
-                settings = get_settings()
-                redis_conn = Redis.from_url(settings.redis_url)
-                queue = Queue("default", connection=redis_conn)
-
-                for asset_id in affected_photo_ids:
-                    queue.enqueue(
-                        update_asset_person_ids_job,
-                        asset_id=asset_id,
-                        job_timeout="5m",
-                    )
-
-                logger.info(
-                    f"Queued {len(affected_photo_ids)} person_ids update jobs for bulk move "
-                    f"{source_person.name} → {target_person.name}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to enqueue person_ids update jobs: {e}")
-                # Don't fail the request if job queueing fails
+            enqueue_person_ids_update(affected_photo_ids)
 
         # Trigger propagation job using the first face as source
         if faces:
@@ -1656,27 +1572,10 @@ async def assign_face_to_person(
 
         logger.info(f"Assigned face {face_id} to person {person.name} ({person.id})")
 
-        # Trigger background job to update asset's person_ids in Qdrant
-        try:
-            from redis import Redis
-            from rq import Queue
+        # Update person_ids in Qdrant for the affected asset
+        from image_search_service.queue.worker import enqueue_person_ids_update
 
-            from image_search_service.core.config import get_settings
-            from image_search_service.queue.jobs import update_asset_person_ids_job
-
-            settings = get_settings()
-            redis_conn = Redis.from_url(settings.redis_url)
-            queue = Queue("default", connection=redis_conn)
-
-            queue.enqueue(
-                update_asset_person_ids_job,
-                asset_id=face.asset_id,
-                job_timeout="5m",
-            )
-            logger.info(f"Queued person_ids update job for asset {face.asset_id}")
-        except Exception as e:
-            logger.warning(f"Failed to enqueue person_ids update job: {e}")
-            # Don't fail the request if job queueing fails
+        enqueue_person_ids_update({face.asset_id})
 
         # Trigger propagation job using the assigned face as source
         try:
@@ -1772,9 +1671,7 @@ async def unassign_face_from_person(
         expired_count = expire_result.rowcount  # type: ignore[attr-defined]
 
         if expired_count > 0:
-            logger.info(
-                f"Expired {expired_count} pending suggestions based on face {face_id}"
-            )
+            logger.info(f"Expired {expired_count} pending suggestions based on face {face_id}")
 
         # Create audit event
         event = FaceAssignmentEvent(
@@ -1796,27 +1693,10 @@ async def unassign_face_from_person(
             f"Unassigned face {face_id} from person {previous_person_name} ({previous_person_id})"
         )
 
-        # Trigger background job to update asset's person_ids in Qdrant
-        try:
-            from redis import Redis
-            from rq import Queue
+        # Update person_ids in Qdrant for the affected asset
+        from image_search_service.queue.worker import enqueue_person_ids_update
 
-            from image_search_service.core.config import get_settings
-            from image_search_service.queue.jobs import update_asset_person_ids_job
-
-            settings = get_settings()
-            redis_conn = Redis.from_url(settings.redis_url)
-            queue = Queue("default", connection=redis_conn)
-
-            queue.enqueue(
-                update_asset_person_ids_job,
-                asset_id=face.asset_id,
-                job_timeout="5m",
-            )
-            logger.info(f"Queued person_ids update job for asset {face.asset_id}")
-        except Exception as e:
-            logger.warning(f"Failed to enqueue person_ids update job: {e}")
-            # Don't fail the request if job queueing fails
+        enqueue_person_ids_update({face.asset_id})
 
         return UnassignFaceResponse(
             face_id=face.id,
@@ -1874,7 +1754,7 @@ async def undo_assignment_event(
         raise HTTPException(
             status_code=400,
             detail=f"Cannot undo operation type '{event.operation}'. "
-                   f"Only ASSIGN_TO_PERSON events can be undone.",
+            f"Only ASSIGN_TO_PERSON events can be undone.",
         )
 
     # 3. Check if already undone (look for a reversal event referencing this one)
@@ -1895,7 +1775,7 @@ async def undo_assignment_event(
         raise HTTPException(
             status_code=400,
             detail="Cannot undo assignments older than 1 hour. "
-                   "Use bulk-remove from person detail view instead.",
+            "Use bulk-remove from person detail view instead.",
         )
 
     # 5. Look up affected faces
@@ -1942,12 +1822,9 @@ async def undo_assignment_event(
     person_name = person.name if person else "Unknown"
 
     # 10. Expire any pending suggestions for these faces
-    suggestion_query = (
-        select(FaceSuggestion)
-        .where(
-            FaceSuggestion.face_instance_id.in_(revertable_face_ids),
-            FaceSuggestion.status == FaceSuggestionStatus.PENDING,
-        )
+    suggestion_query = select(FaceSuggestion).where(
+        FaceSuggestion.face_instance_id.in_(revertable_face_ids),
+        FaceSuggestion.status == FaceSuggestionStatus.PENDING,
     )
     suggestion_result = await db.execute(suggestion_query)
     for suggestion in suggestion_result.scalars().all():
@@ -1963,7 +1840,7 @@ async def undo_assignment_event(
         face_count=len(revertable_face_ids),
         photo_count=len(set(f.asset_id for f in revertable_faces)),
         note=f"Undo of event {event_id}: reverted {len(revertable_face_ids)} faces "
-             f"from {person_name}",
+        f"from {person_name}",
     )
     db.add(undo_event)
 
@@ -1974,6 +1851,14 @@ async def undo_assignment_event(
         f"Undid assignment event {event_id}: "
         f"reverted {len(revertable_face_ids)} faces from {person_name}"
     )
+
+    # Update person_ids in Qdrant for all affected assets
+    affected_asset_ids = {f.asset_id for f in revertable_faces}
+    if affected_asset_ids:
+        from image_search_service.queue.worker import enqueue_person_ids_update
+
+        enqueued = enqueue_person_ids_update(affected_asset_ids)
+        logger.info("Queued %d person_ids update jobs after undo", enqueued)
 
     return UndoAssignmentResponse(
         event_id=event_id,
@@ -2020,8 +1905,7 @@ async def get_face_suggestions(
         raise HTTPException(
             status_code=404,
             detail=(
-                "Face embedding not found in vector database. "
-                "The face may need to be re-detected."
+                "Face embedding not found in vector database. The face may need to be re-detected."
             ),
         )
 
