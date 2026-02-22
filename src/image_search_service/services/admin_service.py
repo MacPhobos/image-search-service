@@ -1,6 +1,7 @@
 """Admin service for destructive operations."""
 
 import os
+import uuid
 from datetime import UTC, datetime
 from math import sqrt
 from pathlib import Path
@@ -25,8 +26,10 @@ from image_search_service.api.admin_schemas import (
 from image_search_service.core.logging import get_logger
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 from image_search_service.faces.detector import detect_faces_from_path
+from image_search_service.services.centroid_service import compute_centroids_for_person
 from image_search_service.services.embedding import get_embedding_service
 from image_search_service.vector import qdrant
+from image_search_service.vector.centroid_qdrant import CentroidQdrantClient
 from image_search_service.vector.face_qdrant import FaceQdrantClient, get_face_qdrant_client
 
 logger = get_logger(__name__)
@@ -562,22 +565,31 @@ async def import_person_metadata(
        - If exists but not in DB and auto_ingest_images=True: ingest it
        - Find faces already in database for image
        - Match face by bounding box
+       - Check for reassignment conflicts (R-3)
        - Assign face to person (if not dry_run)
+
+    After all persons are processed:
+    3. Commit DB changes first (R-2)
+    4. Apply deferred Qdrant updates (R-2)
+    5. Compute centroids for all persons that had faces assigned (R-1)
 
     Args:
         db: Database session
         import_data: PersonMetadataExport with persons and face mappings
-        options: Import options (dry_run, tolerance, skip_missing_images, auto_ingest_images)
+        options: Import options (dry_run, tolerance, skip_missing_images,
+                 auto_ingest_images, force_reassign)
         face_qdrant: FaceQdrantClient for updating Qdrant vectors
 
     Returns:
         ImportResponse with import results and statistics
     """
     logger.info(
-        "Starting person metadata import: %d persons, dry_run=%s, tolerance=%d",
+        "Starting person metadata import: %d persons, dry_run=%s, tolerance=%d, "
+        "force_reassign=%s",
         len(import_data.persons),
         options.dry_run,
         options.tolerance_pixels,
+        options.force_reassign,
     )
 
     person_results: list[PersonImportResult] = []
@@ -587,6 +599,13 @@ async def import_person_metadata(
     total_faces_matched = 0
     total_faces_not_found = 0
     total_images_missing = 0
+    total_skipped_conflicts = 0
+
+    # R-2: Collect Qdrant updates to apply AFTER the DB commit.
+    # Maps: list of (qdrant_point_id, person_id) tuples.
+    # Applying Qdrant updates before DB commit risks phantom assignments if the
+    # commit fails (Qdrant cannot be rolled back).
+    qdrant_updates: list[tuple[uuid.UUID, uuid.UUID]] = []
 
     # Process each person
     for person_data in import_data.persons:
@@ -629,6 +648,7 @@ async def import_person_metadata(
             faces_matched = 0
             faces_not_found = 0
             images_missing = 0
+            skipped_conflicts = 0
             face_mapping_results: list[FaceMappingResult] = []
 
             # Step 2: Process each face mapping for this person
@@ -776,14 +796,55 @@ async def import_person_metadata(
 
                 # Step 7: Assign face to person (if not dry_run and person exists)
                 if not options.dry_run and person is not None:
-                    # Update database
+                    # R-3: Check for reassignment conflict before overwriting.
+                    # If the face is already assigned to a DIFFERENT person, skip
+                    # the assignment by default to preserve existing curation.
+                    # Use force_reassign=True to override this protection.
+                    if (
+                        matched_face.person_id is not None
+                        and matched_face.person_id != person.id
+                    ):
+                        if not options.force_reassign:
+                            # Skip: preserve existing assignment, record conflict
+                            skipped_conflicts += 1
+                            logger.warning(
+                                "Face %s already assigned to person %s, "
+                                "skipping reassignment to %s (%s). "
+                                "Use force_reassign=True to override.",
+                                matched_face.id,
+                                matched_face.person_id,
+                                person.name,
+                                person.id,
+                            )
+                            face_mapping_results.append(
+                                FaceMappingResult(
+                                    image_path=image_path,
+                                    status="conflict",
+                                    matched_face_id=str(matched_face.id),
+                                    error=(
+                                        f"Face already assigned to person "
+                                        f"{matched_face.person_id}; "
+                                        f"skipped to preserve existing assignment"
+                                    ),
+                                )
+                            )
+                            continue
+                        else:
+                            # force_reassign: log and proceed with overwrite
+                            logger.warning(
+                                "Face %s force-reassigned from person %s to %s (%s)",
+                                matched_face.id,
+                                matched_face.person_id,
+                                person.name,
+                                person.id,
+                            )
+
+                    # Update database assignment
                     matched_face.person_id = person.id
 
-                    # Update Qdrant
-                    face_qdrant.update_person_ids(
-                        point_ids=[matched_face.qdrant_point_id],
-                        person_id=person.id,
-                    )
+                    # R-2: Defer Qdrant update until after DB commit.
+                    # Collecting here; applied in batch below after db.commit().
+                    qdrant_updates.append((matched_face.qdrant_point_id, person.id))
 
                     logger.debug(
                         "Assigned face %s to person %s (%s)",
@@ -817,6 +878,7 @@ async def import_person_metadata(
             total_faces_matched += faces_matched
             total_faces_not_found += faces_not_found
             total_images_missing += images_missing
+            total_skipped_conflicts += skipped_conflicts
 
         except Exception as e:
             error_msg = f"Error processing person '{person_data.name}': {str(e)}"
@@ -825,21 +887,106 @@ async def import_person_metadata(
             # Continue processing other persons
             continue
 
-    # Commit all changes (if not dry_run)
+    # R-2 + R-1: Apply changes in the correct order:
+    #   1. Commit DB (face assignments must be durable before Qdrant is touched)
+    #   2. Apply Qdrant updates in batch (safe because DB is already committed)
+    #   3. Compute centroids (requires both DB and Qdrant to be consistent)
+    qdrant_update_count = 0
+    centroids_computed = 0
+
     if not options.dry_run:
+        # Step 1: Commit DB first -- if this fails, Qdrant remains untouched
         await db.commit()
         logger.info("Import committed to database")
+
+        # Step 2: Apply deferred Qdrant updates in batches grouped by person_id.
+        # The update_person_ids() method accepts a list of point_ids, so we
+        # group them to minimise the number of Qdrant API calls.
+        if qdrant_updates:
+            updates_by_person: dict[uuid.UUID, list[uuid.UUID]] = {}
+            for point_id, person_id in qdrant_updates:
+                updates_by_person.setdefault(person_id, []).append(point_id)
+
+            for person_id, point_ids in updates_by_person.items():
+                try:
+                    face_qdrant.update_person_ids(
+                        point_ids=point_ids,
+                        person_id=person_id,
+                    )
+                    qdrant_update_count += len(point_ids)
+                except Exception as e:
+                    # Qdrant is eventually consistent -- log but don't rollback DB.
+                    # The DB assignment is the source of truth; Qdrant will be
+                    # corrected the next time centroids/faces are reindexed.
+                    logger.warning(
+                        "Qdrant update failed for person %s (%d faces): %s",
+                        person_id,
+                        len(point_ids),
+                        e,
+                    )
+
+            logger.info(
+                "Applied Qdrant updates for %d faces across %d persons",
+                qdrant_update_count,
+                len(updates_by_person),
+            )
+
+        # Step 3: Compute centroids for all persons that had faces matched.
+        # Centroids must be computed AFTER the DB commit so the face assignments
+        # are visible to the centroid computation queries.
+        # Centroid failures are non-fatal: log a warning and continue.
+        try:
+            centroid_qdrant = CentroidQdrantClient.get_instance()
+
+            for person_result in person_results:
+                if person_result.faces_matched > 0 and person_result.person_id:
+                    try:
+                        person_uuid = uuid.UUID(person_result.person_id)
+                        centroid = await compute_centroids_for_person(
+                            db=db,
+                            face_qdrant=face_qdrant,
+                            centroid_qdrant=centroid_qdrant,
+                            person_id=person_uuid,
+                            force_rebuild=True,
+                        )
+                        if centroid:
+                            centroids_computed += 1
+                            logger.info(
+                                "Computed centroid for person %s (%s)",
+                                person_result.name,
+                                person_result.person_id,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Centroid computation failed for person %s (%s): %s",
+                            person_result.name,
+                            person_result.person_id,
+                            e,
+                        )
+
+            if centroids_computed > 0:
+                logger.info(
+                    "Post-import centroid computation complete: %d/%d persons",
+                    centroids_computed,
+                    len([r for r in person_results if r.faces_matched > 0]),
+                )
+        except Exception as e:
+            logger.error("Post-import centroid computation failed entirely: %s", e)
     else:
         logger.info("Dry run completed, no changes committed")
 
     logger.info(
         "Import completed: %d persons created, %d existing, "
-        "%d faces matched, %d not found, %d images missing",
+        "%d faces matched, %d not found, %d images missing, "
+        "%d conflicts skipped, %d qdrant updates, %d centroids computed",
         persons_created,
         persons_existing,
         total_faces_matched,
         total_faces_not_found,
         total_images_missing,
+        total_skipped_conflicts,
+        qdrant_update_count,
+        centroids_computed,
     )
 
     return ImportResponse(
@@ -850,6 +997,9 @@ async def import_person_metadata(
         total_faces_matched=total_faces_matched,
         total_faces_not_found=total_faces_not_found,
         total_images_missing=total_images_missing,
+        skipped_conflicts=total_skipped_conflicts,
+        centroids_computed=centroids_computed,
+        qdrant_updates=qdrant_update_count,
         person_results=person_results,
         errors=errors,
         timestamp=datetime.now(UTC),

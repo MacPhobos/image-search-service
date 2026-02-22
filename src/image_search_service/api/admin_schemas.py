@@ -135,6 +135,13 @@ class ImportOptions(CamelCaseModel):
         default=True,
         description="Automatically ingest images that exist on filesystem but not in database",
     )
+    force_reassign: bool = Field(
+        default=False,
+        description=(
+            "If true, allow reassigning faces already assigned to a different person. "
+            "By default (false), conflicting assignments are skipped and logged."
+        ),
+    )
 
 
 class ImportRequest(CamelCaseModel):
@@ -148,7 +155,7 @@ class FaceMappingResult(CamelCaseModel):
     """Result of attempting to match a single face mapping."""
 
     image_path: str
-    status: str  # "matched", "not_found", "image_missing", "detection_failed"
+    status: str  # "matched", "not_found", "image_missing", "detection_failed", "conflict"
     matched_face_id: str | None = None
     error: str | None = None
 
@@ -175,6 +182,20 @@ class ImportResponse(CamelCaseModel):
     total_faces_matched: int = Field(default=0)
     total_faces_not_found: int = Field(default=0)
     total_images_missing: int = Field(default=0)
+    skipped_conflicts: int = Field(
+        default=0,
+        description=(
+            "Number of faces skipped because they were already assigned to a different person"
+        ),
+    )
+    centroids_computed: int = Field(
+        default=0,
+        description="Number of persons that had centroids computed after import",
+    )
+    qdrant_updates: int = Field(
+        default=0,
+        description="Number of Qdrant face vectors updated with person assignments",
+    )
     person_results: list[PersonImportResult] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     timestamp: datetime
