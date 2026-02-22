@@ -88,6 +88,21 @@ def update_asset_person_ids_job(asset_id: int) -> dict[str, str | int]:
 
     engine = get_sync_engine()
     with Session(engine) as session:
+        # Verify asset still exists before doing any work
+        asset = session.execute(
+            select(ImageAsset).where(ImageAsset.id == asset_id)
+        ).scalar_one_or_none()
+
+        if not asset:
+            logger.info(
+                f"Asset {asset_id} not found in database, skipping person_ids update"
+            )
+            return {
+                "status": "skipped",
+                "asset_id": str(asset_id),
+                "message": "Asset not found in database",
+            }
+
         # Get all distinct person_ids for faces on this asset
         # Only include non-NULL person_ids
         result = session.execute(
