@@ -1,7 +1,48 @@
-.PHONY: help dev api lint format typecheck test test-serial test-fast test-failed-first test-profile test-affected test-cov db-up db-down migrate makemigrations worker ingest \
+.PHONY: help dev api lint format typecheck test test-serial test-fast test-failed-first test-profile test-affected test-cov db-up db-down db-status migrate makemigrations worker ingest \
 	bootstrap-qdrant verify-qdrant exif-backfill backfill-hashes \
 	faces-backfill faces-cluster faces-assign faces-centroids faces-stats faces-ensure-collection \
 	faces-cluster-dual faces-train-matching faces-pipeline faces-pipeline-dual faces-pipeline-full
+
+# ---- Load .env file ----
+# The `-` prefix makes this non-fatal if .env does not exist.
+# This project's .env uses plain KEY=VALUE format (no `export`, no quotes),
+# which Make parses natively as recursive variable assignments (VAR = value).
+# These assignments override later `?=` conditional defaults below.
+-include .env
+
+# ---- Docker Profile Construction ----
+# Build comma-separated COMPOSE_PROFILES from DOCKER_* env vars.
+# Default: all services enabled (DOCKER_POSTGRES=true, DOCKER_REDIS=true, DOCKER_QDRANT=true)
+#
+# Variable Precedence (verified empirically with GNU Make):
+#   1. Make command-line args (highest) ... make db-up DOCKER_POSTGRES=false
+#   2. .env file values (via -include)  ... DOCKER_POSTGRES=false in .env
+#   3. Shell-exported env vars          ... export DOCKER_POSTGRES=false
+#   4. Makefile ?= defaults (lowest)    ... true
+#
+# NOTE: -include .env performs a full `=` assignment, which overrides `?=`.
+# This means .env values beat shell exports. If you need a one-time override
+# while .env has a value set, use command-line args: make db-up DOCKER_POSTGRES=true
+DOCKER_POSTGRES ?= true
+DOCKER_REDIS    ?= true
+DOCKER_QDRANT   ?= true
+
+_PROFILES :=
+ifneq ($(DOCKER_POSTGRES),false)
+  _PROFILES += postgres
+endif
+ifneq ($(DOCKER_REDIS),false)
+  _PROFILES += redis
+endif
+ifneq ($(DOCKER_QDRANT),false)
+  _PROFILES += qdrant
+endif
+
+# Convert space-separated list to comma-separated for COMPOSE_PROFILES
+_EMPTY :=
+_SPACE := $(_EMPTY) $(_EMPTY)
+_COMMA := ,
+COMPOSE_PROFILES := $(subst $(_SPACE),$(_COMMA),$(strip $(_PROFILES)))
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -48,11 +89,24 @@ test-all: ## Run all tests (SQLite + PostgreSQL)
 	@echo "Running all tests..."
 	uv run pytest tests/ -m "" -v --tb=short
 
-db-up: ## Start Postgres and Redis containers
-	docker compose -f docker-compose.dev.yml up -d
+db-up: ## Start Docker containers (disable with DOCKER_POSTGRES=false, DOCKER_REDIS=false, DOCKER_QDRANT=false)
+	@if [ -z "$(COMPOSE_PROFILES)" ]; then \
+		echo "All Docker services disabled. Nothing to start."; \
+	else \
+		echo "Starting Docker services: $(COMPOSE_PROFILES)"; \
+		COMPOSE_PROFILES=$(COMPOSE_PROFILES) docker compose -f docker-compose.dev.yml up -d; \
+	fi
 
-db-down: ## Stop Postgres and Redis containers
-	docker compose -f docker-compose.dev.yml down
+db-down: ## Stop Docker containers (respects DOCKER_* settings)
+	@if [ -z "$(COMPOSE_PROFILES)" ]; then \
+		echo "All Docker services disabled. Nothing to stop."; \
+	else \
+		echo "Stopping Docker services: $(COMPOSE_PROFILES)"; \
+		COMPOSE_PROFILES=$(COMPOSE_PROFILES) docker compose -f docker-compose.dev.yml down; \
+	fi
+
+db-status: ## Show status of Docker containers
+	@docker compose -f docker-compose.dev.yml ps 2>/dev/null || echo "No containers running"
 
 migrate: ## Run database migrations
 	uv run alembic upgrade head
