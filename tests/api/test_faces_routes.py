@@ -105,10 +105,7 @@ class TestClusterEndpoints:
         await db_session.commit()
 
         # Test with include_labeled=True (should see cluster once with all 3 faces)
-        response = await test_client.get(
-            "/api/v1/faces/clusters",
-            params={"include_labeled": True}
-        )
+        response = await test_client.get("/api/v1/faces/clusters", params={"include_labeled": True})
 
         assert response.status_code == 200
         data = response.json()
@@ -117,13 +114,14 @@ class TestClusterEndpoints:
         cluster = data["items"][0]
         assert cluster["clusterId"] == cluster_id
         assert cluster["faceCount"] == 3, "Should aggregate all 3 faces in the cluster"
-        assert cluster["personId"] == str(mock_person.id), "Should use MAX person_id (labeled over unlabeled)"  # noqa: E501
+        assert cluster["personId"] == str(
+            mock_person.id
+        ), "Should use MAX person_id (labeled over unlabeled)"  # noqa: E501
         assert cluster["personName"] == mock_person.name
 
         # Test with include_labeled=False (should NOT see this cluster since it has labeled faces)
         response = await test_client.get(
-            "/api/v1/faces/clusters",
-            params={"include_labeled": False}
+            "/api/v1/faces/clusters", params={"include_labeled": False}
         )
 
         assert response.status_code == 200
@@ -134,8 +132,7 @@ class TestClusterEndpoints:
     async def test_list_clusters_pagination(self, test_client, db_session):
         """Test cluster listing with pagination parameters."""
         response = await test_client.get(
-            "/api/v1/faces/clusters",
-            params={"page": 2, "page_size": 10}
+            "/api/v1/faces/clusters", params={"page": 2, "page_size": 10}
         )
 
         assert response.status_code == 200
@@ -146,10 +143,7 @@ class TestClusterEndpoints:
     @pytest.mark.asyncio
     async def test_list_clusters_invalid_page(self, test_client, db_session):
         """Test listing clusters with invalid page number."""
-        response = await test_client.get(
-            "/api/v1/faces/clusters",
-            params={"page": 0}
-        )
+        response = await test_client.get("/api/v1/faces/clusters", params={"page": 0})
 
         # Should return validation error
         assert response.status_code == 422
@@ -181,8 +175,7 @@ class TestClusterEndpoints:
     async def test_label_cluster_not_found(self, test_client):
         """Test labeling non-existent cluster."""
         response = await test_client.post(
-            "/api/v1/faces/clusters/nonexistent/label",
-            json={"name": "John Doe"}
+            "/api/v1/faces/clusters/nonexistent/label", json={"name": "John Doe"}
         )
 
         assert response.status_code == 404
@@ -191,8 +184,7 @@ class TestClusterEndpoints:
     async def test_split_cluster_not_found(self, test_client):
         """Test splitting non-existent cluster returns 400 (cluster too small)."""
         response = await test_client.post(
-            "/api/v1/faces/clusters/nonexistent/split",
-            json={"minClusterSize": 3}
+            "/api/v1/faces/clusters/nonexistent/split", json={"minClusterSize": 3}
         )
 
         # Non-existent cluster returns 400 (cluster too small to split)
@@ -217,8 +209,7 @@ class TestPersonEndpoints:
     async def test_list_persons_pagination(self, test_client, db_session):
         """Test person listing with pagination."""
         response = await test_client.get(
-            "/api/v1/faces/persons",
-            params={"page": 1, "page_size": 20}
+            "/api/v1/faces/persons", params={"page": 1, "page_size": 20}
         )
 
         assert response.status_code == 200
@@ -325,7 +316,9 @@ class TestPersonEndpoints:
         assert data["photoCount"] == 2  # 2 distinct photos
 
     @pytest.mark.asyncio
-    async def test_get_person_with_thumbnail(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
+    async def test_get_person_with_thumbnail(
+        self, test_client, db_session, mock_person, mock_image_asset
+    ):  # noqa: E501
         """Test getting person with thumbnail URL from highest quality face."""
         from image_search_service.db.models import FaceInstance
 
@@ -393,6 +386,7 @@ class TestPersonEndpoints:
         assert "updatedAt" in data
         # Validate ISO format (basic check)
         from datetime import datetime
+
         datetime.fromisoformat(data["createdAt"].replace("Z", "+00:00"))
         datetime.fromisoformat(data["updatedAt"].replace("Z", "+00:00"))
 
@@ -401,8 +395,7 @@ class TestPersonEndpoints:
         """Test updating non-existent person."""
         fake_id = str(uuid.uuid4())
         response = await test_client.patch(
-            f"/api/v1/faces/persons/{fake_id}",
-            json={"name": "New Name"}
+            f"/api/v1/faces/persons/{fake_id}", json={"name": "New Name"}
         )
 
         assert response.status_code == 404
@@ -412,8 +405,7 @@ class TestPersonEndpoints:
         """Test merging when source person doesn't exist."""
         fake_id = str(uuid.uuid4())
         response = await test_client.post(
-            f"/api/v1/faces/persons/{fake_id}/merge",
-            json={"intoPersonId": str(mock_person.id)}
+            f"/api/v1/faces/persons/{fake_id}/merge", json={"intoPersonId": str(mock_person.id)}
         )
 
         assert response.status_code == 404
@@ -423,8 +415,7 @@ class TestPersonEndpoints:
         """Test merging when target person doesn't exist."""
         fake_id = str(uuid.uuid4())
         response = await test_client.post(
-            f"/api/v1/faces/persons/{mock_person.id}/merge",
-            json={"intoPersonId": fake_id}
+            f"/api/v1/faces/persons/{mock_person.id}/merge", json={"intoPersonId": fake_id}
         )
 
         assert response.status_code == 404
@@ -452,7 +443,9 @@ class TestPersonEndpoints:
         assert data["personName"] == mock_person.name
 
     @pytest.mark.asyncio
-    async def test_get_person_photos_success(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
+    async def test_get_person_photos_success(
+        self, test_client, db_session, mock_person, mock_image_asset
+    ):  # noqa: E501
         """Test getting photos for person with faces."""
         from image_search_service.db.models import FaceInstance
 
@@ -533,8 +526,7 @@ class TestPersonEndpoints:
 
         # Get first page with page_size=2
         response = await test_client.get(
-            f"/api/v1/faces/persons/{mock_person.id}/photos",
-            params={"page": 1, "page_size": 2}
+            f"/api/v1/faces/persons/{mock_person.id}/photos", params={"page": 1, "page_size": 2}
         )
 
         assert response.status_code == 200
@@ -546,8 +538,7 @@ class TestPersonEndpoints:
 
         # Get second page
         response = await test_client.get(
-            f"/api/v1/faces/persons/{mock_person.id}/photos",
-            params={"page": 2, "page_size": 2}
+            f"/api/v1/faces/persons/{mock_person.id}/photos", params={"page": 2, "page_size": 2}
         )
 
         assert response.status_code == 200
@@ -565,8 +556,7 @@ class TestFaceDetectionEndpoints:
         """Test detecting faces for non-existent asset."""
         fake_id = 999999
         response = await test_client.post(
-            f"/api/v1/faces/detect/{fake_id}",
-            json={"minConfidence": 0.5}
+            f"/api/v1/faces/detect/{fake_id}", json={"minConfidence": 0.5}
         )
 
         assert response.status_code == 404
@@ -576,7 +566,7 @@ class TestFaceDetectionEndpoints:
         """Test face detection with invalid confidence value."""
         response = await test_client.post(
             f"/api/v1/faces/detect/{mock_image_asset.id}",
-            json={"minConfidence": 1.5}  # Invalid: > 1.0
+            json={"minConfidence": 1.5},  # Invalid: > 1.0
         )
 
         # Should return validation error
@@ -587,80 +577,7 @@ class TestFaceDetectionEndpoints:
         """Test triggering clustering with invalid parameters."""
         response = await test_client.post(
             "/api/v1/faces/cluster",
-            json={"minClusterSize": -1}  # Invalid: negative
-        )
-
-        # Should return validation error
-        assert response.status_code == 422
-
-    @pytest.mark.skip(reason="Endpoint GET /faces/instances not implemented")
-    @pytest.mark.asyncio
-    async def test_list_face_instances_empty(self, test_client, db_session):
-        """Test listing face instances when none exist."""
-        response = await test_client.get("/api/v1/faces/instances")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["items"] == []
-        assert data["total"] == 0
-
-    @pytest.mark.skip(reason="Endpoint GET /faces/instances not implemented")
-    @pytest.mark.asyncio
-    async def test_list_face_instances_pagination(self, test_client):
-        """Test face instances listing with pagination."""
-        response = await test_client.get(
-            "/api/v1/faces/instances",
-            params={"page": 1, "page_size": 50}
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["page"] == 1
-        assert data["pageSize"] == 50
-
-    @pytest.mark.skip(reason="Endpoint GET /faces/instances/{id} not implemented")
-    @pytest.mark.asyncio
-    async def test_get_face_instance_not_found(self, test_client):
-        """Test getting non-existent face instance."""
-        fake_id = str(uuid.uuid4())
-        response = await test_client.get(f"/api/v1/faces/instances/{fake_id}")
-
-        assert response.status_code == 404
-
-    @pytest.mark.skip(reason="Endpoint GET /faces/instances/{id} not implemented")
-    @pytest.mark.asyncio
-    async def test_get_face_instance_success(self, test_client, db_session, mock_face_instance):
-        """Test getting existing face instance."""
-        response = await test_client.get(f"/api/v1/faces/instances/{mock_face_instance.id}")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["id"] == str(mock_face_instance.id)
-        assert data["asset_id"] == mock_face_instance.asset_id
-
-
-class TestAssignmentEndpoints:
-    """Tests for face assignment API endpoints."""
-
-    @pytest.mark.skip(reason="Endpoint POST /faces/assign not implemented")
-    @pytest.mark.asyncio
-    async def test_trigger_assignment_success(self, test_client):
-        """Test triggering face assignment."""
-        response = await test_client.post(
-            "/api/v1/faces/assign",
-            json={"maxFaces": 100}
-        )
-
-        # Should accept the request (even if no faces to assign)
-        assert response.status_code in [200, 202]
-
-    @pytest.mark.skip(reason="Endpoint POST /faces/assign not implemented")
-    @pytest.mark.asyncio
-    async def test_trigger_assignment_invalid_params(self, test_client):
-        """Test triggering assignment with invalid parameters."""
-        response = await test_client.post(
-            "/api/v1/faces/assign",
-            json={"maxFaces": -10}  # Invalid: negative
+            json={"minClusterSize": -1},  # Invalid: negative
         )
 
         # Should return validation error
@@ -689,9 +606,7 @@ class TestUnassignFaceEndpoint:
         mock_face_instance.person_id = None
         await db_session.commit()
 
-        response = await test_client.delete(
-            f"/api/v1/faces/faces/{mock_face_instance.id}/person"
-        )
+        response = await test_client.delete(f"/api/v1/faces/faces/{mock_face_instance.id}/person")
 
         assert response.status_code == 400
         data = response.json()
@@ -706,9 +621,7 @@ class TestUnassignFaceEndpoint:
         mock_face_instance.person_id = mock_person.id
         await db_session.commit()
 
-        response = await test_client.delete(
-            f"/api/v1/faces/faces/{mock_face_instance.id}/person"
-        )
+        response = await test_client.delete(f"/api/v1/faces/faces/{mock_face_instance.id}/person")
 
         assert response.status_code == 200
         data = response.json()
@@ -728,30 +641,6 @@ class TestUnassignFaceEndpoint:
 
 class TestPrototypeEndpoints:
     """Tests for person prototype endpoints."""
-
-    @pytest.mark.skip(reason="Endpoint removed - prototypes created via /prototypes/pin. See test_prototype_endpoints.py::test_pin_face_not_found")
-    @pytest.mark.asyncio
-    async def test_create_prototype_person_not_found(self, test_client):
-        """Test creating prototype for non-existent person."""
-        fake_id = str(uuid.uuid4())
-        fake_face_id = str(uuid.uuid4())
-
-        response = await test_client.post(
-            f"/api/v1/faces/persons/{fake_id}/prototypes",
-            json={"faceInstanceId": fake_face_id, "role": "exemplar"}
-        )
-
-        assert response.status_code == 404
-
-    @pytest.mark.skip(reason="Endpoint behavior changed - returns empty list for non-existent person. See test_prototype_endpoints.py::test_list_empty")
-    @pytest.mark.asyncio
-    async def test_list_prototypes_person_not_found(self, test_client):
-        """Test listing prototypes for non-existent person."""
-        fake_id = str(uuid.uuid4())
-
-        response = await test_client.get(f"/api/v1/faces/persons/{fake_id}/prototypes")
-
-        assert response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_delete_prototype_not_found(self, test_client):
@@ -774,8 +663,7 @@ class TestBulkOperations:
         """Test bulk remove with non-existent person."""
         fake_id = str(uuid.uuid4())
         response = await test_client.post(
-            f"/api/v1/faces/persons/{fake_id}/photos/bulk-remove",
-            json={"photoIds": [1, 2, 3]}
+            f"/api/v1/faces/persons/{fake_id}/photos/bulk-remove", json={"photoIds": [1, 2, 3]}
         )
 
         assert response.status_code == 404
@@ -784,8 +672,7 @@ class TestBulkOperations:
     async def test_bulk_remove_empty_photo_ids(self, test_client, db_session, mock_person):
         """Test bulk remove with empty photo list."""
         response = await test_client.post(
-            f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-remove",
-            json={"photoIds": []}
+            f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-remove", json={"photoIds": []}
         )
 
         assert response.status_code == 200
@@ -795,12 +682,14 @@ class TestBulkOperations:
         assert data["skippedFaces"] == 0
 
     @pytest.mark.asyncio
-    async def test_bulk_remove_no_matching_faces(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
+    async def test_bulk_remove_no_matching_faces(
+        self, test_client, db_session, mock_person, mock_image_asset
+    ):  # noqa: E501
         """Test bulk remove when no faces match."""
         # Photo exists but has no faces from this person
         response = await test_client.post(
             f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-remove",
-            json={"photoIds": [mock_image_asset.id]}
+            json={"photoIds": [mock_image_asset.id]},
         )
 
         assert response.status_code == 200
@@ -809,7 +698,9 @@ class TestBulkOperations:
         assert data["updatedPhotos"] == 0
 
     @pytest.mark.asyncio
-    async def test_bulk_remove_success(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
+    async def test_bulk_remove_success(
+        self, test_client, db_session, mock_person, mock_image_asset
+    ):  # noqa: E501
         """Test successful bulk remove operation."""
 
         from image_search_service.db.models import FaceInstance
@@ -849,7 +740,7 @@ class TestBulkOperations:
 
             response = await test_client.post(
                 f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-remove",
-                json={"photoIds": [mock_image_asset.id]}
+                json={"photoIds": [mock_image_asset.id]},
             )
 
             assert response.status_code == 200
@@ -868,7 +759,7 @@ class TestBulkOperations:
         fake_id = str(uuid.uuid4())
         response = await test_client.post(
             f"/api/v1/faces/persons/{fake_id}/photos/bulk-move",
-            json={"photoIds": [1, 2], "toPersonName": "New Person"}
+            json={"photoIds": [1, 2], "toPersonName": "New Person"},
         )
 
         assert response.status_code == 404
@@ -878,7 +769,7 @@ class TestBulkOperations:
         """Test bulk move without destination person."""
         response = await test_client.post(
             f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
-            json={"photoIds": [1, 2]}  # Missing both toPersonId and toPersonName
+            json={"photoIds": [1, 2]},  # Missing both toPersonId and toPersonName
         )
 
         # Should return validation error
@@ -892,8 +783,8 @@ class TestBulkOperations:
             json={
                 "photoIds": [1, 2],
                 "toPersonId": str(uuid.uuid4()),
-                "toPersonName": "New Person"
-            }
+                "toPersonName": "New Person",
+            },
         )
 
         # Should return validation error
@@ -905,13 +796,15 @@ class TestBulkOperations:
         fake_target_id = str(uuid.uuid4())
         response = await test_client.post(
             f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
-            json={"photoIds": [1, 2], "toPersonId": fake_target_id}
+            json={"photoIds": [1, 2], "toPersonId": fake_target_id},
         )
 
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_bulk_move_create_new_person(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
+    async def test_bulk_move_create_new_person(
+        self, test_client, db_session, mock_person, mock_image_asset
+    ):  # noqa: E501
         """Test bulk move creating a new person."""
 
         from image_search_service.db.models import FaceInstance
@@ -938,7 +831,7 @@ class TestBulkOperations:
 
             response = await test_client.post(
                 f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
-                json={"photoIds": [mock_image_asset.id], "toPersonName": "New Person"}
+                json={"photoIds": [mock_image_asset.id], "toPersonName": "New Person"},
             )
 
             assert response.status_code == 200
@@ -949,7 +842,9 @@ class TestBulkOperations:
             assert data["personCreated"] is True
 
     @pytest.mark.asyncio
-    async def test_bulk_move_to_existing_person(self, test_client, db_session, mock_person, mock_image_asset):  # noqa: E501
+    async def test_bulk_move_to_existing_person(
+        self, test_client, db_session, mock_person, mock_image_asset
+    ):  # noqa: E501
         """Test bulk move to existing person."""
 
         from image_search_service.db.models import FaceInstance, Person
@@ -981,7 +876,7 @@ class TestBulkOperations:
 
             response = await test_client.post(
                 f"/api/v1/faces/persons/{mock_person.id}/photos/bulk-move",
-                json={"photoIds": [mock_image_asset.id], "toPersonId": str(target_person.id)}
+                json={"photoIds": [mock_image_asset.id], "toPersonId": str(target_person.id)},
             )
 
             assert response.status_code == 200
@@ -1001,8 +896,7 @@ class TestClusteringWorkflow:
         """Test clustering workflow when no faces exist."""
         # Trigger clustering
         response = await test_client.post(
-            "/api/v1/faces/cluster",
-            json={"minClusterSize": 5, "qualityThreshold": 0.5}
+            "/api/v1/faces/cluster", json={"minClusterSize": 5, "qualityThreshold": 0.5}
         )
 
         # Should complete without error (0 clusters found)

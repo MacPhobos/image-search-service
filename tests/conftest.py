@@ -398,53 +398,6 @@ class SemanticMockEmbeddingService:
         return [self.embed_image_from_pil(img) for img in images]
 
 
-class LegacyMockEmbeddingService:
-    """Legacy mock embedding service that returns deterministic vectors without loading OpenCLIP.
-
-    DEPRECATED: Use SemanticMockEmbeddingService for tests requiring semantic similarity.
-    This class is kept for backward compatibility during migration.
-    """
-
-    @property
-    def embedding_dim(self) -> int:
-        """Return fixed embedding dimension."""
-        return FACE_EMBEDDING_DIM
-
-    def embed_text(self, text: str) -> list[float]:
-        """Generate deterministic vector from text using hash.
-
-        Args:
-            text: Text to embed
-
-        Returns:
-            Deterministic FACE_EMBEDDING_DIM-dim vector normalized to [0, 1]
-        """
-        # Use MD5 hash to generate deterministic values
-        h = hashlib.md5(text.encode()).hexdigest()
-
-        # Generate FACE_EMBEDDING_DIM values from repeating the 32 hex characters
-        vector = []
-        for i in range(FACE_EMBEDDING_DIM):
-            # Take 2 hex chars, convert to int, normalize to [0, 1]
-            idx = (i * 2) % len(h)
-            val = int(h[idx : idx + 2], 16) / 255.0
-            vector.append(val)
-
-        return vector
-
-    def embed_image(self, image_path: str | Path) -> list[float]:
-        """Generate deterministic vector from image path.
-
-        Args:
-            image_path: Path to image (unused, uses path string for hash)
-
-        Returns:
-            Deterministic FACE_EMBEDDING_DIM-dim vector
-        """
-        # Use path as seed for deterministic embedding
-        return self.embed_text(str(image_path))
-
-
 # Alias for backward compatibility during migration
 MockEmbeddingService = SemanticMockEmbeddingService
 

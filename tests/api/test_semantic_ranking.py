@@ -25,9 +25,9 @@ async def test_search_ranks_semantically_similar_higher(
     3. Searching with a nature-related query
     4. Asserting nature images rank higher than food images
 
-    The test works with both LegacyMockEmbeddingService (512-dim) and
-    SemanticMockEmbeddingService (768-dim). With semantic mocks, the
-    ranking differences are more pronounced.
+    The test works with SemanticMockEmbeddingService (768-dim) which provides
+    semantic similarity-aware mock embeddings for more pronounced ranking
+    differences.
     """
     # Create test assets with semantic filenames that trigger concept clusters
     # Nature cluster images

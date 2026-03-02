@@ -411,9 +411,7 @@ async def test_export_person_metadata_verify_paths_skips_missing(
 
     # Export with verify_paths=True (should skip both faces since files don't exist)
     options = ExportOptions(verify_paths=True)
-    result = await export_person_metadata(
-        db_session, max_faces_per_person=100, options=options
-    )
+    result = await export_person_metadata(db_session, max_faces_per_person=100, options=options)
 
     # No persons should be exported (person has no valid face mappings)
     assert result.metadata.total_persons == 0
@@ -455,9 +453,7 @@ async def test_export_person_metadata_verify_paths_false_includes_all(
 
     # Export with verify_paths=False (default)
     options = ExportOptions(verify_paths=False)
-    result = await export_person_metadata(
-        db_session, max_faces_per_person=100, options=options
-    )
+    result = await export_person_metadata(db_session, max_faces_per_person=100, options=options)
 
     # Person and face should be exported even though file doesn't exist
     assert result.metadata.total_persons == 1
@@ -818,7 +814,9 @@ async def test_import_person_metadata_face_matching_success(
                 face_mappings=[
                     FaceMappingExport(
                         image_path="/photos/group.jpg",
-                        bounding_box=BoundingBoxExport(x=105, y=205, width=48, height=62),  # Close to face1  # noqa: E501
+                        bounding_box=BoundingBoxExport(
+                            x=105, y=205, width=48, height=62
+                        ),  # Close to face1  # noqa: E501
                         detection_confidence=0.95,
                         quality_score=0.85,
                     )
@@ -930,7 +928,9 @@ async def test_import_person_metadata_tolerance_parameter(
                 face_mappings=[
                     FaceMappingExport(
                         image_path="/photos/alice.jpg",
-                        bounding_box=BoundingBoxExport(x=108, y=200, width=50, height=60),  # 8px off in x  # noqa: E501
+                        bounding_box=BoundingBoxExport(
+                            x=108, y=200, width=50, height=60
+                        ),  # 8px off in x  # noqa: E501
                         detection_confidence=0.95,
                         quality_score=0.85,
                     )
@@ -945,7 +945,9 @@ async def test_import_person_metadata_tolerance_parameter(
 
     # Test with tolerance=5 (should NOT match)
     options_strict = ImportOptions(dry_run=False, tolerance_pixels=5, skip_missing_images=False)
-    result_strict = await import_person_metadata(db_session, import_data, options_strict, mock_face_qdrant)  # noqa: E501
+    result_strict = await import_person_metadata(
+        db_session, import_data, options_strict, mock_face_qdrant
+    )  # noqa: E501
 
     assert result_strict.total_faces_matched == 0
     assert result_strict.total_faces_not_found == 1
@@ -960,7 +962,9 @@ async def test_import_person_metadata_tolerance_parameter(
     await db_session.commit()
 
     options_loose = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
-    result_loose = await import_person_metadata(db_session, import_data, options_loose, mock_face_qdrant)  # noqa: E501
+    result_loose = await import_person_metadata(
+        db_session, import_data, options_loose, mock_face_qdrant
+    )  # noqa: E501
 
     assert result_loose.total_faces_matched == 1
     assert result_loose.total_faces_not_found == 0
@@ -1568,9 +1572,7 @@ async def test_import_person_metadata_centroids_computed_after_import(
         mock_centroid_client_cls.get_instance.return_value = mock_centroid_qdrant
 
         options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
-        result = await import_person_metadata(
-            db_session, import_data, options, mock_face_qdrant
-        )
+        result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
 
     # The import should report 1 centroid computed
     assert result.centroids_computed == 1
@@ -1608,9 +1610,7 @@ async def test_import_person_metadata_centroids_not_computed_in_dry_run(
         new=AsyncMock(return_value=MagicMock()),
     ):
         options = ImportOptions(dry_run=True, tolerance_pixels=10, skip_missing_images=True)
-        result = await import_person_metadata(
-            db_session, import_data, options, mock_face_qdrant
-        )
+        result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
 
     # No centroids computed in dry run
     assert result.centroids_computed == 0
@@ -1676,39 +1676,10 @@ async def test_import_person_metadata_centroid_failure_does_not_fail_import(
         mock_centroid_client_cls.get_instance.return_value = MagicMock()
 
         options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
-        result = await import_person_metadata(
-            db_session, import_data, options, mock_face_qdrant
-        )
+        result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
 
     # Import itself succeeded despite centroid failure
     assert result.success is True
     assert result.total_faces_matched == 1
     # Centroid failed -> 0 computed
     assert result.centroids_computed == 0
-
-
-# ============ Batch Embedding Check Tests ============
-
-
-@pytest.mark.skip(reason="_batch_check_missing_embeddings function not implemented")
-def test_batch_check_missing_embeddings_empty_list() -> None:
-    """Test batch check with empty list returns empty set."""
-    pass
-
-
-@pytest.mark.skip(reason="_batch_check_missing_embeddings function not implemented")
-def test_batch_check_missing_embeddings_all_exist() -> None:
-    """Test batch check when all embeddings exist in Qdrant."""
-    pass
-
-
-@pytest.mark.skip(reason="_batch_check_missing_embeddings function not implemented")
-def test_batch_check_missing_embeddings_some_missing() -> None:
-    """Test batch check when some embeddings are missing."""
-    pass
-
-
-@pytest.mark.skip(reason="_batch_check_missing_embeddings function not implemented")
-def test_batch_check_missing_embeddings_multiple_batches() -> None:
-    """Test batch check processes multiple batches correctly."""
-    pass

@@ -4,7 +4,6 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
 
 from image_search_service.db.models import (
@@ -40,39 +39,11 @@ def mock_get_sync_session(sync_db_session):
 
 
 @pytest.fixture
-def mock_qdrant_client():
-    """Mock Qdrant client with in-memory storage."""
-    from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, VectorParams
-
-    client = QdrantClient(":memory:")
-    client.create_collection(
-        "test_faces",
-        VectorParams(size=FACE_EMBEDDING_DIM, distance=Distance.COSINE),
-    )
-    return client
-
-
-@pytest.fixture
 def mock_face_qdrant():
     """Mock FaceQdrantClient."""
     mock = MagicMock()
     mock.get_embedding_by_point_id = MagicMock(return_value=[0.1] * FACE_EMBEDDING_DIM)
     mock.search_similar_faces = MagicMock(return_value=[])
-    return mock
-
-
-@pytest.fixture
-def mock_face_detector():
-    """Mock InsightFace detector."""
-    mock = MagicMock()
-    mock.detect_faces.return_value = [
-        {
-            "bbox": [10, 20, 60, 70],
-            "det_score": 0.95,
-            "embedding": np.random.randn(FACE_EMBEDDING_DIM).tolist(),
-        },
-    ]
     return mock
 
 
