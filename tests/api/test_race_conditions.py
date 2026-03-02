@@ -23,6 +23,11 @@ from image_search_service.db.models import (
 )
 
 
+@pytest.mark.xfail(
+    reason="Known race condition: two concurrent accepts on the same PENDING "
+    "suggestion both succeed with 200 due to missing SELECT FOR UPDATE. "
+    "Fix: add row-level locking so the second accept gets 409 Conflict.",
+)
 @pytest.mark.asyncio
 async def test_accept_suggestion_when_concurrent_accepts_then_both_succeed_no_locking(
     test_client: AsyncClient,
@@ -132,6 +137,11 @@ async def test_accept_suggestion_when_concurrent_accepts_then_both_succeed_no_lo
     assert len(suggestion_reads) == 2, "Both requests read the suggestion"
 
 
+@pytest.mark.xfail(
+    reason="Known race condition: overlapping bulk-accept requests process "
+    "shared suggestions twice without conflict detection. "
+    "Fix: add row-level locking or deduplication logic for bulk operations.",
+)
 @pytest.mark.asyncio
 async def test_bulk_action_when_overlapping_sets_then_no_conflict_detection(
     test_client: AsyncClient,
@@ -158,9 +168,7 @@ async def test_bulk_action_when_overlapping_sets_then_no_conflict_detection(
         suggestion.status = FaceSuggestionStatus.PENDING.value
         face_uuid = UUID(f"00000000-0000-0000-0000-0000000000{sid:02x}")
         suggestion.face_instance_id = face_uuid
-        suggestion.suggested_person_id = UUID(
-            f"{sid:08x}-0000-0000-0000-000000000000"
-        )
+        suggestion.suggested_person_id = UUID(f"{sid:08x}-0000-0000-0000-000000000000")
         mock_suggestions[sid] = suggestion
 
         face = MagicMock(spec=FaceInstance)
@@ -174,9 +182,7 @@ async def test_bulk_action_when_overlapping_sets_then_no_conflict_detection(
 
     async def tracked_get(model: type, pk: Any, **kwargs: Any) -> Any:
         if model == FaceSuggestion and pk in mock_suggestions:
-            status_changes.append(
-                f"read_suggestion_{pk}_status={mock_suggestions[pk].status}"
-            )
+            status_changes.append(f"read_suggestion_{pk}_status={mock_suggestions[pk].status}")
             return mock_suggestions[pk]
         if model == FaceInstance and pk in mock_faces:
             return mock_faces[pk]
@@ -206,21 +212,13 @@ async def test_bulk_action_when_overlapping_sets_then_no_conflict_detection(
         )
 
     # Count how many times overlapping suggestions (2, 3) were read as PENDING
-    pending_reads_for_2 = [
-        e for e in status_changes if "read_suggestion_2_status=pending" in e
-    ]
-    pending_reads_for_3 = [
-        e for e in status_changes if "read_suggestion_3_status=pending" in e
-    ]
+    pending_reads_for_2 = [e for e in status_changes if "read_suggestion_2_status=pending" in e]
+    pending_reads_for_3 = [e for e in status_changes if "read_suggestion_3_status=pending" in e]
 
     # BUG DOCUMENTATION: Both requests read overlapping suggestions as PENDING
     # because there is no row-level locking
-    assert (
-        len(pending_reads_for_2) >= 1
-    ), "Suggestion 2 was read at least once as PENDING"
-    assert (
-        len(pending_reads_for_3) >= 1
-    ), "Suggestion 3 was read at least once as PENDING"
+    assert len(pending_reads_for_2) >= 1, "Suggestion 2 was read at least once as PENDING"
+    assert len(pending_reads_for_3) >= 1, "Suggestion 3 was read at least once as PENDING"
 
     # Both requests succeeded
     success_count = sum(
@@ -231,6 +229,12 @@ async def test_bulk_action_when_overlapping_sets_then_no_conflict_detection(
     assert success_count == 2, "Both bulk actions succeeded"
 
 
+@pytest.mark.xfail(
+    reason="Known transactional gap: accept returns 200 even when Qdrant sync "
+    "fails after DB commit, leaving DB and Qdrant out of sync. "
+    "Fix: rollback DB on Qdrant failure, return 207 Multi-Status, "
+    "or enqueue a reconciliation job.",
+)
 @pytest.mark.asyncio
 async def test_accept_suggestion_when_qdrant_fails_then_db_not_rolled_back(
     test_client: AsyncClient,
@@ -282,9 +286,7 @@ async def test_accept_suggestion_when_qdrant_fails_then_db_not_rolled_back(
 
     # Mock Qdrant to fail
     mock_qdrant = MagicMock()
-    mock_qdrant.update_person_ids.side_effect = ConnectionError(
-        "Qdrant cluster unavailable"
-    )
+    mock_qdrant.update_person_ids.side_effect = ConnectionError("Qdrant cluster unavailable")
 
     with patch(
         "image_search_service.api.routes.face_suggestions.get_face_qdrant_client",
@@ -296,9 +298,7 @@ async def test_accept_suggestion_when_qdrant_fails_then_db_not_rolled_back(
         )
 
     # BUG DOCUMENTATION: API returns 200 despite Qdrant failure
-    assert response.status_code == 200, (
-        "Accept returns success even though Qdrant is out of sync"
-    )
+    assert response.status_code == 200, "Accept returns success even though Qdrant is out of sync"
 
     # DB was committed (face.person_id changed)
     db_session.commit.assert_called_once()
@@ -313,6 +313,12 @@ async def test_accept_suggestion_when_qdrant_fails_then_db_not_rolled_back(
     # 3. A reconciliation job should be enqueued
 
 
+@pytest.mark.xfail(
+    reason="Known transactional gap: bulk accept returns 200 with processed=3 "
+    "even when Qdrant sync partially fails, leaving some faces desynced. "
+    "Fix: return 207 Multi-Status indicating partial failure, "
+    "or enqueue per-person reconciliation jobs.",
+)
 @pytest.mark.asyncio
 async def test_bulk_action_when_partial_qdrant_sync_failure_then_desync_accepted(
     test_client: AsyncClient,
@@ -365,9 +371,7 @@ async def test_bulk_action_when_partial_qdrant_sync_failure_then_desync_accepted
     # Qdrant fails for person-b, succeeds for person-a
     call_count = 0
 
-    def qdrant_update_with_failure(
-        point_ids: list[UUID], person_id: UUID
-    ) -> None:
+    def qdrant_update_with_failure(point_ids: list[UUID], person_id: UUID) -> None:
         nonlocal call_count
         call_count += 1
         if person_id == person_b:

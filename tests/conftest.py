@@ -39,6 +39,7 @@ from tests.conftest_postgres import (  # noqa: F401
     pg_sync_session,
     postgres_container,
 )
+from tests.constants import CLIP_EMBEDDING_DIM, FACE_EMBEDDING_DIM
 
 # Use SQLite for tests (no external dependencies)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -171,7 +172,7 @@ def clear_embedding_cache(monkeypatch):
         return semantic_mock.embed_images_batch(images)
 
     def mock_embedding_dim(self) -> int:
-        """Return 768-dim to match semantic mock."""
+        """Return CLIP_EMBEDDING_DIM-dim to match semantic mock."""
         return semantic_mock.embedding_dim
 
     monkeypatch.setattr(EmbeddingService, "embed_text", mock_embed_text)
@@ -194,24 +195,24 @@ def validate_embedding_dimensions():
     mismatch between test and production embedding services.
 
     Expected dimensions:
-    - Image search (CLIP/SigLIP): 768
-    - Face recognition (InsightFace/ArcFace): 512
+    - Image search (CLIP/SigLIP): {CLIP_EMBEDDING_DIM}
+    - Face recognition (InsightFace/ArcFace): {FACE_EMBEDDING_DIM}
 
     Session-scoped: only runs once per session (or once per xdist worker).
     These are compile-time constants that cannot change between tests.
     """
     # Pre-test validation - check class constant
-    assert MockEmbeddingService.EMBEDDING_DIM == 768, (
+    assert MockEmbeddingService.EMBEDDING_DIM == CLIP_EMBEDDING_DIM, (
         f"Mock embedding service dimension mismatch: "
-        f"got {MockEmbeddingService.EMBEDDING_DIM}, expected 768 (CLIP/SigLIP). "
+        f"got {MockEmbeddingService.EMBEDDING_DIM}, expected {CLIP_EMBEDDING_DIM} (CLIP/SigLIP). "
         f"Make sure MockEmbeddingService = SemanticMockEmbeddingService in conftest.py"
     )
 
     # Also verify instance dimension property
     test_instance = MockEmbeddingService()
-    assert test_instance.embedding_dim == 768, (
+    assert test_instance.embedding_dim == CLIP_EMBEDDING_DIM, (
         f"Mock embedding instance dimension mismatch: "
-        f"got {test_instance.embedding_dim}, expected 768 (CLIP/SigLIP)"
+        f"got {test_instance.embedding_dim}, expected {CLIP_EMBEDDING_DIM} (CLIP/SigLIP)"
     )
 
     yield
@@ -228,7 +229,7 @@ class SemanticMockEmbeddingService:
     - Results are deterministic (same input always produces same output)
     - Vectors are L2-normalized (matches production CLIP/SigLIP behavior)
 
-    Dimension: 768 to match production CLIP/SigLIP model output.
+    Dimension: CLIP_EMBEDDING_DIM (768) to match production CLIP/SigLIP model output.
     """
 
     CONCEPT_CLUSTERS = {
@@ -297,7 +298,7 @@ class SemanticMockEmbeddingService:
         ],
     }
 
-    EMBEDDING_DIM = 768
+    EMBEDDING_DIM = CLIP_EMBEDDING_DIM
 
     def __init__(self, seed: int = 42):
         self._rng = np.random.RandomState(seed)
@@ -407,7 +408,7 @@ class LegacyMockEmbeddingService:
     @property
     def embedding_dim(self) -> int:
         """Return fixed embedding dimension."""
-        return 512
+        return FACE_EMBEDDING_DIM
 
     def embed_text(self, text: str) -> list[float]:
         """Generate deterministic vector from text using hash.
@@ -416,14 +417,14 @@ class LegacyMockEmbeddingService:
             text: Text to embed
 
         Returns:
-            Deterministic 512-dim vector normalized to [0, 1]
+            Deterministic FACE_EMBEDDING_DIM-dim vector normalized to [0, 1]
         """
         # Use MD5 hash to generate deterministic values
         h = hashlib.md5(text.encode()).hexdigest()
 
-        # Generate 512 values from repeating the 32 hex characters
+        # Generate FACE_EMBEDDING_DIM values from repeating the 32 hex characters
         vector = []
-        for i in range(512):
+        for i in range(FACE_EMBEDDING_DIM):
             # Take 2 hex chars, convert to int, normalize to [0, 1]
             idx = (i * 2) % len(h)
             val = int(h[idx : idx + 2], 16) / 255.0
@@ -438,7 +439,7 @@ class LegacyMockEmbeddingService:
             image_path: Path to image (unused, uses path string for hash)
 
         Returns:
-            Deterministic 512-dim vector
+            Deterministic FACE_EMBEDDING_DIM-dim vector
         """
         # Use path as seed for deterministic embedding
         return self.embed_text(str(image_path))
@@ -521,19 +522,20 @@ def qdrant_client() -> QdrantClient:
     """
     client = QdrantClient(":memory:")
 
-    # Create test collections with 768-dim vectors for images, 512-dim for faces
+    # Create test collections with CLIP_EMBEDDING_DIM vectors for images,
+    # FACE_EMBEDDING_DIM for faces
     settings = get_settings()
 
-    # Main image assets collection (768-dim for CLIP/SigLIP)
+    # Main image assets collection (CLIP/SigLIP)
     client.create_collection(
         collection_name=settings.qdrant_collection,
-        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=CLIP_EMBEDDING_DIM, distance=Distance.COSINE),
     )
 
     # Face embeddings collection with payload indexes (mirrors production)
     client.create_collection(
         collection_name=settings.qdrant_face_collection,
-        vectors_config=VectorParams(size=512, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=FACE_EMBEDDING_DIM, distance=Distance.COSINE),
     )
 
     # Add payload indexes for face collection (same as production bootstrap)

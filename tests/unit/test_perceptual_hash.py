@@ -11,6 +11,7 @@ from image_search_service.services.perceptual_hash import (
     compute_perceptual_hash,
     compute_perceptual_hash_from_pil,
 )
+from tests.constants import PERCEPTUAL_HASH_LENGTH
 
 
 class TestPerceptualHashComputation:
@@ -25,7 +26,7 @@ class TestPerceptualHashComputation:
 
         hash_value = compute_perceptual_hash(str(img_path))
 
-        assert len(hash_value) == 16
+        assert len(hash_value) == PERCEPTUAL_HASH_LENGTH
         assert all(c in "0123456789abcdef" for c in hash_value)
 
     def test_identical_images_produce_identical_hashes(self, tmp_path: Path) -> None:
@@ -100,7 +101,7 @@ class TestPerceptualHashComputation:
 
         hash_value = compute_perceptual_hash_from_pil(img)
 
-        assert len(hash_value) == 16
+        assert len(hash_value) == PERCEPTUAL_HASH_LENGTH
         assert all(c in "0123456789abcdef" for c in hash_value)
 
     def test_file_not_found_raises_error(self, tmp_path: Path) -> None:

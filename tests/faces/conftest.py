@@ -5,13 +5,15 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from tests.constants import FACE_EMBEDDING_DIM
+
 # mock_image_asset, mock_face_instance, mock_person from root conftest.py
 
 
 @pytest.fixture
 def mock_face_embedding():
-    """Generate a random 512-dim normalized embedding."""
-    embedding = np.random.randn(512).astype(np.float32)
+    """Generate a random FACE_EMBEDDING_DIM-dim normalized embedding."""
+    embedding = np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32)
     return (embedding / np.linalg.norm(embedding)).tolist()
 
 

@@ -353,68 +353,71 @@ class TestGetStorageOAuthMode:
         assert result is not None
         assert isinstance(result, GoogleDriveV3Storage)  # subclass
 
-    def test_oauth_mode_missing_client_id_raises_config_error(self) -> None:
-        """get_storage raises ConfigurationError when client_id is missing."""
+    @pytest.mark.parametrize(
+        "missing_field,settings_override,expected_match",
+        [
+            pytest.param(
+                "client_id",
+                {
+                    "client_id": "",
+                    "client_secret": "secret",
+                    "refresh_token": "token",
+                    "root_id": "root-id",
+                },
+                "GOOGLE_DRIVE_CLIENT_ID",
+                id="missing-client-id",
+            ),
+            pytest.param(
+                "client_secret",
+                {
+                    "client_id": "id",
+                    "client_secret": "",
+                    "refresh_token": "token",
+                    "root_id": "root-id",
+                },
+                "GOOGLE_DRIVE_CLIENT_SECRET",
+                id="missing-client-secret",
+            ),
+            pytest.param(
+                "refresh_token",
+                {
+                    "client_id": "id",
+                    "client_secret": "secret",
+                    "refresh_token": "",
+                    "root_id": "root-id",
+                },
+                "GOOGLE_DRIVE_REFRESH_TOKEN",
+                id="missing-refresh-token",
+            ),
+            pytest.param(
+                "root_id",
+                {
+                    "client_id": "id",
+                    "client_secret": "secret",
+                    "refresh_token": "token",
+                    "root_id": "",
+                },
+                "GOOGLE_DRIVE_ROOT_ID",
+                id="missing-root-id",
+            ),
+        ],
+    )
+    def test_oauth_mode_missing_field_raises_config_error(
+        self,
+        missing_field: str,
+        settings_override: dict[str, str],
+        expected_match: str,
+    ) -> None:
+        """get_storage raises ConfigurationError when a required OAuth field is missing."""
         with patch(
             "image_search_service.core.config.get_settings",
             return_value=_make_settings(
                 enabled=True,
                 auth_mode="oauth",
-                root_id="root-id",
-                client_id="",  # missing
-                client_secret="secret",
-                refresh_token="token",
+                **settings_override,
             ),
         ):
-            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_CLIENT_ID"):
-                get_storage()
-
-    def test_oauth_mode_missing_client_secret_raises_config_error(self) -> None:
-        """get_storage raises ConfigurationError when client_secret is missing."""
-        with patch(
-            "image_search_service.core.config.get_settings",
-            return_value=_make_settings(
-                enabled=True,
-                auth_mode="oauth",
-                root_id="root-id",
-                client_id="id",
-                client_secret="",  # missing
-                refresh_token="token",
-            ),
-        ):
-            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_CLIENT_SECRET"):
-                get_storage()
-
-    def test_oauth_mode_missing_refresh_token_raises_config_error(self) -> None:
-        """get_storage raises ConfigurationError when refresh_token is missing."""
-        with patch(
-            "image_search_service.core.config.get_settings",
-            return_value=_make_settings(
-                enabled=True,
-                auth_mode="oauth",
-                root_id="root-id",
-                client_id="id",
-                client_secret="secret",
-                refresh_token="",  # missing
-            ),
-        ):
-            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_REFRESH_TOKEN"):
-                get_storage()
-
-    def test_oauth_mode_missing_root_id_raises_config_error(self) -> None:
-        """get_storage raises ConfigurationError when root_id is missing in oauth mode."""
-        with patch(
-            "image_search_service.core.config.get_settings",
-            return_value=_make_settings(
-                enabled=True,
-                auth_mode="oauth",
-                root_id="",  # missing
-                client_id="id",
-                client_secret="secret",
-                refresh_token="token",
-            ),
-        ):
-            with pytest.raises(ConfigurationError, match="GOOGLE_DRIVE_ROOT_ID"):
+            with pytest.raises(ConfigurationError, match=expected_match):
                 get_storage()
 
     def test_service_account_mode_still_works_after_adding_oauth_support(self) -> None:

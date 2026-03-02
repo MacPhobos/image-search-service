@@ -17,6 +17,7 @@ from image_search_service.vector.centroid_qdrant import (
     CENTROID_VECTOR_DIM,
     CentroidQdrantClient,
 )
+from tests.constants import FACE_EMBEDDING_DIM
 
 # Use settings value for collection name to match runtime behavior
 CENTROID_COLLECTION_NAME = get_settings().qdrant_centroid_collection
@@ -107,7 +108,7 @@ class TestCentroidQdrantClient:
 
         # Perform upsert
         centroid_id = uuid.uuid4()
-        vector = np.random.rand(512).astype(np.float32).tolist()
+        vector = np.random.rand(FACE_EMBEDDING_DIM).astype(np.float32).tolist()
         payload = {
             "person_id": str(uuid.uuid4()),
             "centroid_type": "global",
@@ -135,7 +136,7 @@ class TestCentroidQdrantClient:
 
         centroid_id = uuid.uuid4()
         person_id = uuid.uuid4()
-        vector = np.random.rand(512).astype(np.float32).tolist()
+        vector = np.random.rand(FACE_EMBEDDING_DIM).astype(np.float32).tolist()
         payload: dict[str, Any] = {
             "person_id": person_id,
             "centroid_type": "global",
@@ -177,7 +178,7 @@ class TestCentroidQdrantClient:
 
         centroid_id = uuid.uuid4()
         person_id = uuid.uuid4()
-        vector = [0.1] * 512
+        vector = [0.1] * FACE_EMBEDDING_DIM
         payload: dict[str, Any] = {
             "person_id": person_id,  # UUID object, not string
             "centroid_type": "global",
@@ -199,7 +200,7 @@ class TestCentroidQdrantClient:
     ) -> None:
         """Test retrieving a centroid vector."""
         centroid_id = uuid.uuid4()
-        expected_vector = [0.1] * 512
+        expected_vector = [0.1] * FACE_EMBEDDING_DIM
 
         # Mock the retrieve response
         mock_point = MagicMock()
@@ -234,7 +235,7 @@ class TestCentroidQdrantClient:
     ) -> None:
         """Test handling named vector format (dict)."""
         centroid_id = uuid.uuid4()
-        expected_vector = [0.1] * 512
+        expected_vector = [0.1] * FACE_EMBEDDING_DIM
 
         # Mock: named vector response (dict format)
         mock_point = MagicMock()
@@ -300,7 +301,7 @@ class TestCentroidQdrantClient:
         assert result is not None
         assert result["name"] == CENTROID_COLLECTION_NAME
         assert result["points_count"] == 42
-        assert result["vector_dim"] == 512
+        assert result["vector_dim"] == FACE_EMBEDDING_DIM
         assert result["distance"] == "cosine"
 
     def test_get_collection_info_not_found(
@@ -351,7 +352,7 @@ class TestCentroidQdrantClient:
         self, centroid_qdrant: CentroidQdrantClient, mock_qdrant_client: MagicMock
     ) -> None:
         """Test searching faces collection using a centroid vector."""
-        centroid_vector = [0.1] * 512
+        centroid_vector = [0.1] * FACE_EMBEDDING_DIM
 
         # Mock query_points response
         mock_result = MagicMock()

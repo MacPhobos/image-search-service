@@ -9,10 +9,11 @@ from qdrant_client.models import PointStruct
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 from image_search_service.faces.dual_clusterer import DualModeClusterer
 from image_search_service.vector.face_qdrant import FaceQdrantClient
+from tests.constants import FACE_EMBEDDING_DIM
 
 
 def make_clustered_embeddings(
-    n_per_cluster: int = 5, n_clusters: int = 3, dim: int = 512, seed: int = 42
+    n_per_cluster: int = 5, n_clusters: int = 3, dim: int = FACE_EMBEDDING_DIM, seed: int = 42
 ) -> tuple[list[np.ndarray], list[int]]:
     """Generate embeddings with known cluster structure.
 
@@ -159,7 +160,7 @@ class TestClusterAllFaces:
             sync_db_session.add(face)
 
             # Add to Qdrant
-            embedding = np.random.randn(512)
+            embedding = np.random.randn(FACE_EMBEDDING_DIM)
             embedding = embedding / np.linalg.norm(embedding)
             qdrant_client.upsert(
                 collection_name=settings.qdrant_face_collection,
@@ -301,14 +302,14 @@ class TestAssignToKnownPeople:
 
         # Create labeled faces for person (3 faces very similar)
         labeled_faces = []
-        base_embedding = np.random.randn(512)
+        base_embedding = np.random.randn(FACE_EMBEDDING_DIM)
         base_embedding = base_embedding / np.linalg.norm(base_embedding)
 
         for i in range(3):
             point_id = uuid.uuid4()
 
             # Small noise around base embedding
-            embedding = base_embedding + np.random.randn(512) * 0.01
+            embedding = base_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
             embedding = embedding / np.linalg.norm(embedding)
 
             # Add to Qdrant
@@ -334,7 +335,7 @@ class TestAssignToKnownPeople:
 
         # Create unlabeled face very similar to person's embeddings
         unlabeled_point_id = uuid.uuid4()
-        unlabeled_embedding = base_embedding + np.random.randn(512) * 0.01
+        unlabeled_embedding = base_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
         unlabeled_embedding = unlabeled_embedding / np.linalg.norm(unlabeled_embedding)
 
         qdrant_client.upsert(
@@ -357,9 +358,7 @@ class TestAssignToKnownPeople:
             }
         ]
 
-        clusterer = DualModeClusterer(
-            db_session=sync_db_session, person_match_threshold=0.7
-        )
+        clusterer = DualModeClusterer(db_session=sync_db_session, person_match_threshold=0.7)
 
         assigned, still_unknown = clusterer.assign_to_known_people(
             unlabeled_faces=unlabeled_faces, labeled_faces=labeled_faces
@@ -381,7 +380,7 @@ class TestAssignToKnownPeople:
 
         # Create labeled face for person
         labeled_point_id = uuid.uuid4()
-        labeled_embedding = np.random.randn(512)
+        labeled_embedding = np.random.randn(FACE_EMBEDDING_DIM)
         labeled_embedding = labeled_embedding / np.linalg.norm(labeled_embedding)
 
         qdrant_client.upsert(
@@ -429,9 +428,7 @@ class TestAssignToKnownPeople:
             }
         ]
 
-        clusterer = DualModeClusterer(
-            db_session=sync_db_session, person_match_threshold=0.7
-        )
+        clusterer = DualModeClusterer(db_session=sync_db_session, person_match_threshold=0.7)
 
         assigned, still_unknown = clusterer.assign_to_known_people(
             unlabeled_faces=unlabeled_faces, labeled_faces=labeled_faces
@@ -441,9 +438,7 @@ class TestAssignToKnownPeople:
         assert len(assigned) == 0
         assert len(still_unknown) == 1
 
-    def test_assign_to_known_people_no_embedding(
-        self, sync_db_session, mock_qdrant_for_clusterer
-    ):
+    def test_assign_to_known_people_no_embedding(self, sync_db_session, mock_qdrant_for_clusterer):
         """Test that face with missing embedding goes to still_unknown."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_clusterer
 
@@ -451,7 +446,7 @@ class TestAssignToKnownPeople:
 
         # Create labeled face
         labeled_point_id = uuid.uuid4()
-        labeled_embedding = np.random.randn(512)
+        labeled_embedding = np.random.randn(FACE_EMBEDDING_DIM)
         labeled_embedding = labeled_embedding / np.linalg.norm(labeled_embedding)
 
         qdrant_client.upsert(
@@ -520,9 +515,7 @@ class TestAssignToKnownPeople:
 class TestClusterUnknownFaces:
     """Tests for cluster_unknown_faces method."""
 
-    def test_cluster_unknown_faces_hdbscan(
-        self, sync_db_session, mock_qdrant_for_clusterer
-    ):
+    def test_cluster_unknown_faces_hdbscan(self, sync_db_session, mock_qdrant_for_clusterer):
         """Test clustering with HDBSCAN finds natural clusters."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_clusterer
 
@@ -570,9 +563,7 @@ class TestClusterUnknownFaces:
         non_noise_clusters = [c for c in unique_clusters if "noise" not in c]
         assert len(non_noise_clusters) >= 2
 
-    def test_cluster_unknown_faces_dbscan(
-        self, sync_db_session, mock_qdrant_for_clusterer
-    ):
+    def test_cluster_unknown_faces_dbscan(self, sync_db_session, mock_qdrant_for_clusterer):
         """Test clustering with DBSCAN."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_clusterer
 
@@ -618,9 +609,7 @@ class TestClusterUnknownFaces:
         unique_clusters = set(clusters.values())
         assert len(unique_clusters) >= 1  # At least 1 cluster
 
-    def test_cluster_unknown_faces_agglomerative(
-        self, sync_db_session, mock_qdrant_for_clusterer
-    ):
+    def test_cluster_unknown_faces_agglomerative(self, sync_db_session, mock_qdrant_for_clusterer):
         """Test clustering with Agglomerative Clustering."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_clusterer
 
@@ -666,9 +655,7 @@ class TestClusterUnknownFaces:
         unique_clusters = set(clusters.values())
         assert len(unique_clusters) >= 1
 
-    def test_cluster_unknown_faces_too_few(
-        self, sync_db_session, mock_qdrant_for_clusterer
-    ):
+    def test_cluster_unknown_faces_too_few(self, sync_db_session, mock_qdrant_for_clusterer):
         """Test that fewer faces than min_cluster_size labels all as noise."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_clusterer
 
@@ -677,7 +664,7 @@ class TestClusterUnknownFaces:
         for _ in range(2):
             point_id = uuid.uuid4()
             face_id = uuid.uuid4()
-            embedding = np.random.randn(512)
+            embedding = np.random.randn(FACE_EMBEDDING_DIM)
             embedding = embedding / np.linalg.norm(embedding)
 
             qdrant_client.upsert(
@@ -700,9 +687,7 @@ class TestClusterUnknownFaces:
                 }
             )
 
-        clusterer = DualModeClusterer(
-            db_session=sync_db_session, unknown_min_cluster_size=3
-        )
+        clusterer = DualModeClusterer(db_session=sync_db_session, unknown_min_cluster_size=3)
 
         clusters = clusterer.cluster_unknown_faces(unknown_faces)
 
@@ -713,22 +698,17 @@ class TestClusterUnknownFaces:
 
     def test_cluster_unknown_faces_invalid_method(self, sync_db_session):
         """Test that invalid clustering method raises ValueError."""
-        clusterer = DualModeClusterer(
-            db_session=sync_db_session, unknown_method="invalid"
-        )
+        clusterer = DualModeClusterer(db_session=sync_db_session, unknown_method="invalid")
 
         # Need at least min_cluster_size faces to trigger clustering
         point_ids = [uuid.uuid4() for _ in range(5)]
-        unknown_faces = [
-            {"id": uuid.uuid4(), "qdrant_point_id": pid}
-            for pid in point_ids
-        ]
+        unknown_faces = [{"id": uuid.uuid4(), "qdrant_point_id": pid} for pid in point_ids]
 
         # Mock _get_face_embeddings_batch to return valid embeddings
         def mock_get_embeddings_batch(point_id_list, batch_size=100):
             result = {}
             for pid in point_id_list:
-                emb = np.random.randn(512)
+                emb = np.random.randn(FACE_EMBEDDING_DIM)
                 result[pid] = emb / np.linalg.norm(emb)
             return result
 
@@ -784,7 +764,7 @@ class TestSaveDualModeResults:
             sync_db_session.add(face)
 
             # Add to Qdrant
-            embedding = np.random.randn(512)
+            embedding = np.random.randn(FACE_EMBEDDING_DIM)
             embedding = embedding / np.linalg.norm(embedding)
             qdrant_client.upsert(
                 collection_name=settings.qdrant_face_collection,
@@ -809,9 +789,7 @@ class TestSaveDualModeResults:
         sync_db_session.commit()
 
         clusterer = DualModeClusterer(db_session=sync_db_session)
-        clusterer.save_dual_mode_results(
-            assigned_faces=assigned_faces, unknown_clusters={}
-        )
+        clusterer.save_dual_mode_results(assigned_faces=assigned_faces, unknown_clusters={})
 
         # Verify DB updated
         for face_data in assigned_faces:
@@ -868,7 +846,7 @@ class TestSaveDualModeResults:
             sync_db_session.add(face)
 
             # Add to Qdrant
-            embedding = np.random.randn(512)
+            embedding = np.random.randn(FACE_EMBEDDING_DIM)
             embedding = embedding / np.linalg.norm(embedding)
             qdrant_client.upsert(
                 collection_name=settings.qdrant_face_collection,
@@ -896,9 +874,7 @@ class TestSaveDualModeResults:
         }
 
         clusterer = DualModeClusterer(db_session=sync_db_session)
-        clusterer.save_dual_mode_results(
-            assigned_faces=[], unknown_clusters=unknown_clusters
-        )
+        clusterer.save_dual_mode_results(assigned_faces=[], unknown_clusters=unknown_clusters)
 
         # Verify DB updated
         for face_id, expected_cluster in unknown_clusters.items():
@@ -907,9 +883,7 @@ class TestSaveDualModeResults:
             assert face.cluster_id == expected_cluster
 
         # Verify Qdrant updated
-        for point_id, (face_id, expected_cluster) in zip(
-            point_ids, unknown_clusters.items()
-        ):
+        for point_id, (face_id, expected_cluster) in zip(point_ids, unknown_clusters.items()):
             points = qdrant_client.retrieve(
                 collection_name=settings.qdrant_face_collection,
                 ids=[str(point_id)],
@@ -957,7 +931,7 @@ class TestSaveDualModeResults:
         sync_db_session.commit()
 
         # Add to Qdrant
-        embedding = np.random.randn(512)
+        embedding = np.random.randn(FACE_EMBEDDING_DIM)
         embedding = embedding / np.linalg.norm(embedding)
         qdrant_client.upsert(
             collection_name=settings.qdrant_face_collection,
@@ -980,9 +954,7 @@ class TestSaveDualModeResults:
         ]
 
         clusterer = DualModeClusterer(db_session=sync_db_session)
-        clusterer.save_dual_mode_results(
-            assigned_faces=assigned_faces, unknown_clusters={}
-        )
+        clusterer.save_dual_mode_results(assigned_faces=assigned_faces, unknown_clusters={})
 
         # Create NEW session to verify commit
         from sqlalchemy.orm import Session
@@ -1026,12 +998,12 @@ class TestFullDualModePipeline:
         sync_db_session.commit()
 
         # Create labeled faces for person1 (3 faces)
-        person1_embedding = np.random.randn(512)
+        person1_embedding = np.random.randn(FACE_EMBEDDING_DIM)
         person1_embedding = person1_embedding / np.linalg.norm(person1_embedding)
 
         for i in range(3):
             point_id = uuid.uuid4()
-            embedding = person1_embedding + np.random.randn(512) * 0.01
+            embedding = person1_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
             embedding = embedding / np.linalg.norm(embedding)
 
             face = FaceInstance(
@@ -1061,7 +1033,7 @@ class TestFullDualModePipeline:
         # Create unlabeled face similar to person1 (should be assigned)
         similar_point_id = uuid.uuid4()
         similar_face_id = uuid.uuid4()
-        similar_embedding = person1_embedding + np.random.randn(512) * 0.01
+        similar_embedding = person1_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
         similar_embedding = similar_embedding / np.linalg.norm(similar_embedding)
 
         similar_face = FaceInstance(
@@ -1089,9 +1061,7 @@ class TestFullDualModePipeline:
         )
 
         # Create unlabeled faces for unknown cluster (5 faces, different from person1)
-        unknown_embeddings, _ = make_clustered_embeddings(
-            n_per_cluster=5, n_clusters=1, seed=99
-        )
+        unknown_embeddings, _ = make_clustered_embeddings(n_per_cluster=5, n_clusters=1, seed=99)
 
         unknown_face_ids = []
         for idx, embedding in enumerate(unknown_embeddings):

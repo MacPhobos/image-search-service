@@ -8,6 +8,7 @@ from qdrant_client.models import PointStruct
 
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 from image_search_service.faces.dual_clusterer import DualModeClusterer
+from tests.constants import FACE_EMBEDDING_DIM
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def mock_qdrant_for_batch(monkeypatch, use_test_settings, qdrant_client):
     return qdrant_client, face_qdrant, settings
 
 
-def make_test_embeddings(n: int, dim: int = 512, seed: int = 42) -> list[np.ndarray]:
+def make_test_embeddings(n: int, dim: int = FACE_EMBEDDING_DIM, seed: int = 42) -> list[np.ndarray]:
     """Generate random normalized embeddings for testing.
 
     Args:
@@ -64,15 +65,13 @@ class TestBatchEmbeddingRetrieval:
 
         assert result == {}
 
-    def test_batch_retrieval_single_embedding(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_batch_retrieval_single_embedding(self, sync_db_session, mock_qdrant_for_batch):
         """Test batch retrieval with single embedding works correctly."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
         # Create single embedding in Qdrant
         point_id = uuid.uuid4()
-        embedding = np.random.randn(512)
+        embedding = np.random.randn(FACE_EMBEDDING_DIM)
         embedding = embedding / np.linalg.norm(embedding)
 
         qdrant_client.upsert(
@@ -95,9 +94,7 @@ class TestBatchEmbeddingRetrieval:
         # Check embedding is close to original (allow floating point error)
         np.testing.assert_allclose(result[point_id], embedding, rtol=1e-5)
 
-    def test_batch_retrieval_multiple_embeddings(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_batch_retrieval_multiple_embeddings(self, sync_db_session, mock_qdrant_for_batch):
         """Test batch retrieval with multiple embeddings (less than batch size)."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
@@ -130,9 +127,7 @@ class TestBatchEmbeddingRetrieval:
             assert point_id in result
             np.testing.assert_allclose(result[point_id], expected_embedding, rtol=1e-5)
 
-    def test_batch_retrieval_exact_batch_size(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_batch_retrieval_exact_batch_size(self, sync_db_session, mock_qdrant_for_batch):
         """Test batch retrieval when input equals batch size."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
@@ -165,9 +160,7 @@ class TestBatchEmbeddingRetrieval:
             assert point_id in result
             np.testing.assert_allclose(result[point_id], expected_embedding, rtol=1e-5)
 
-    def test_batch_retrieval_multiple_batches(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_batch_retrieval_multiple_batches(self, sync_db_session, mock_qdrant_for_batch):
         """Test batch retrieval when input requires multiple batches."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
@@ -200,9 +193,7 @@ class TestBatchEmbeddingRetrieval:
             assert point_id in result
             np.testing.assert_allclose(result[point_id], expected_embedding, rtol=1e-5)
 
-    def test_batch_retrieval_custom_batch_size(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_batch_retrieval_custom_batch_size(self, sync_db_session, mock_qdrant_for_batch):
         """Test batch retrieval with custom batch size."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
@@ -236,9 +227,7 @@ class TestBatchEmbeddingRetrieval:
             assert point_id in result
             np.testing.assert_allclose(result[point_id], expected_embedding, rtol=1e-5)
 
-    def test_batch_retrieval_missing_ids(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_batch_retrieval_missing_ids(self, sync_db_session, mock_qdrant_for_batch):
         """Test batch retrieval when some IDs don't exist in Qdrant."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
@@ -275,9 +264,7 @@ class TestBatchEmbeddingRetrieval:
         assert point_ids[3] not in result
         assert point_ids[4] not in result
 
-    def test_batch_retrieval_preserves_order(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_batch_retrieval_preserves_order(self, sync_db_session, mock_qdrant_for_batch):
         """Test batch retrieval returns correct embeddings even if order differs."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
@@ -348,14 +335,14 @@ class TestBatchIntegrationWithClustering:
 
         # Create 50 labeled faces (to test batch retrieval)
         labeled_faces = []
-        base_embedding = np.random.randn(512)
+        base_embedding = np.random.randn(FACE_EMBEDDING_DIM)
         base_embedding = base_embedding / np.linalg.norm(base_embedding)
 
         for i in range(50):
             point_id = uuid.uuid4()
 
             # Small noise around base embedding
-            embedding = base_embedding + np.random.randn(512) * 0.01
+            embedding = base_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
             embedding = embedding / np.linalg.norm(embedding)
 
             # Add to Qdrant
@@ -383,7 +370,7 @@ class TestBatchIntegrationWithClustering:
         unlabeled_faces = []
         for i in range(10):
             point_id = uuid.uuid4()
-            embedding = base_embedding + np.random.randn(512) * 0.01
+            embedding = base_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
             embedding = embedding / np.linalg.norm(embedding)
 
             qdrant_client.upsert(
@@ -406,9 +393,7 @@ class TestBatchIntegrationWithClustering:
                 }
             )
 
-        clusterer = DualModeClusterer(
-            db_session=sync_db_session, person_match_threshold=0.7
-        )
+        clusterer = DualModeClusterer(db_session=sync_db_session, person_match_threshold=0.7)
 
         assigned, still_unknown = clusterer.assign_to_known_people(
             unlabeled_faces=unlabeled_faces, labeled_faces=labeled_faces
@@ -421,14 +406,12 @@ class TestBatchIntegrationWithClustering:
             assert assignment["person_id"] == person_id
             assert assignment["similarity"] >= 0.7
 
-    def test_cluster_unknown_faces_uses_batch(
-        self, sync_db_session, mock_qdrant_for_batch
-    ):
+    def test_cluster_unknown_faces_uses_batch(self, sync_db_session, mock_qdrant_for_batch):
         """Test that cluster_unknown_faces uses batch retrieval correctly."""
         qdrant_client, face_qdrant, settings = mock_qdrant_for_batch
 
         # Create 100 embeddings with 2 clear clusters (50 each)
-        cluster1_center = np.random.randn(512)
+        cluster1_center = np.random.randn(FACE_EMBEDDING_DIM)
         cluster1_center = cluster1_center / np.linalg.norm(cluster1_center)
 
         cluster2_center = -cluster1_center  # Opposite direction
@@ -438,7 +421,7 @@ class TestBatchIntegrationWithClustering:
         # Cluster 1: 50 faces
         for i in range(50):
             point_id = uuid.uuid4()
-            embedding = cluster1_center + np.random.randn(512) * 0.05
+            embedding = cluster1_center + np.random.randn(FACE_EMBEDDING_DIM) * 0.05
             embedding = embedding / np.linalg.norm(embedding)
 
             qdrant_client.upsert(
@@ -464,7 +447,7 @@ class TestBatchIntegrationWithClustering:
         # Cluster 2: 50 faces
         for i in range(50):
             point_id = uuid.uuid4()
-            embedding = cluster2_center + np.random.randn(512) * 0.05
+            embedding = cluster2_center + np.random.randn(FACE_EMBEDDING_DIM) * 0.05
             embedding = embedding / np.linalg.norm(embedding)
 
             qdrant_client.upsert(
@@ -528,12 +511,12 @@ class TestBatchIntegrationWithClustering:
         sync_db_session.commit()
 
         # Create 30 labeled faces for person
-        person_embedding = np.random.randn(512)
+        person_embedding = np.random.randn(FACE_EMBEDDING_DIM)
         person_embedding = person_embedding / np.linalg.norm(person_embedding)
 
         for i in range(30):
             point_id = uuid.uuid4()
-            embedding = person_embedding + np.random.randn(512) * 0.01
+            embedding = person_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
             embedding = embedding / np.linalg.norm(embedding)
 
             face = FaceInstance(
@@ -565,7 +548,7 @@ class TestBatchIntegrationWithClustering:
         for i in range(20):
             point_id = uuid.uuid4()
             face_id = uuid.uuid4()
-            embedding = person_embedding + np.random.randn(512) * 0.01
+            embedding = person_embedding + np.random.randn(FACE_EMBEDDING_DIM) * 0.01
             embedding = embedding / np.linalg.norm(embedding)
 
             face = FaceInstance(
@@ -600,7 +583,7 @@ class TestBatchIntegrationWithClustering:
         for i in range(50):
             point_id = uuid.uuid4()
             face_id = uuid.uuid4()
-            embedding = unknown_center + np.random.randn(512) * 0.05
+            embedding = unknown_center + np.random.randn(FACE_EMBEDDING_DIM) * 0.05
             embedding = embedding / np.linalg.norm(embedding)
 
             face = FaceInstance(

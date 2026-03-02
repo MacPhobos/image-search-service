@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from tests.constants import FACE_EMBEDDING_DIM
+
 
 class TestFaceClusterer:
     """Tests for FaceClusterer."""
@@ -31,9 +33,13 @@ class TestFaceClusterer:
         from image_search_service.faces.clusterer import FaceClusterer
 
         # Create synthetic embeddings with 2 clear clusters
-        np.random.seed(42)
-        cluster1 = np.random.randn(10, 512) + np.array([1.0] * 512)
-        cluster2 = np.random.randn(10, 512) + np.array([-1.0] * 512)
+        rng = np.random.default_rng(42)
+        cluster1 = rng.standard_normal((10, FACE_EMBEDDING_DIM)) + np.array(
+            [1.0] * FACE_EMBEDDING_DIM
+        )
+        cluster2 = rng.standard_normal((10, FACE_EMBEDDING_DIM)) + np.array(
+            [-1.0] * FACE_EMBEDDING_DIM
+        )
 
         # Normalize
         cluster1 = cluster1 / np.linalg.norm(cluster1, axis=1, keepdims=True)
@@ -42,7 +48,9 @@ class TestFaceClusterer:
         embeddings_array = np.vstack([cluster1, cluster2])
 
         mock_session = MagicMock()
-        clusterer = FaceClusterer(mock_session, mock_qdrant_client, min_cluster_size=3, min_samples=2)
+        clusterer = FaceClusterer(
+            mock_session, mock_qdrant_client, min_cluster_size=3, min_samples=2
+        )
         labels = clusterer._run_hdbscan(embeddings_array)
 
         # Should find 2 clusters (labels 0 and 1, plus possibly -1 for noise)
@@ -57,14 +65,16 @@ class TestFaceClusterer:
         from image_search_service.faces.clusterer import FaceClusterer
 
         # Create one tight cluster and some truly random/scattered points
-        np.random.seed(42)
-        tight_cluster = np.random.randn(10, 512) * 0.01 + np.array([1.0] * 512)
+        rng = np.random.default_rng(42)
+        tight_cluster = rng.standard_normal((10, FACE_EMBEDDING_DIM)) * 0.01 + np.array(
+            [1.0] * FACE_EMBEDDING_DIM
+        )
         # Create individually scattered points far from each other
         noise_points = []
         for i in range(5):
             # Each noise point in a very different direction
-            noise = np.zeros(512)
-            noise[i * 100:(i + 1) * 100] = 1.0  # Sparse in different dimensions
+            noise = np.zeros(FACE_EMBEDDING_DIM)
+            noise[i * 100 : (i + 1) * 100] = 1.0  # Sparse in different dimensions
             noise_points.append(noise)
         noise = np.array(noise_points)
 
@@ -75,7 +85,9 @@ class TestFaceClusterer:
         embeddings_array = np.vstack([tight_cluster, noise])
 
         mock_session = MagicMock()
-        clusterer = FaceClusterer(mock_session, mock_qdrant_client, min_cluster_size=3, min_samples=2)
+        clusterer = FaceClusterer(
+            mock_session, mock_qdrant_client, min_cluster_size=3, min_samples=2
+        )
         labels = clusterer._run_hdbscan(embeddings_array)
 
         # Should have at least one cluster (the tight cluster)
@@ -96,16 +108,15 @@ class TestFaceClusterer:
             return record
 
         # Generate synthetic clusters
-        np.random.seed(42)
-        cluster1_emb = (np.random.randn(6, 512) + 1.0).tolist()
-        cluster2_emb = (np.random.randn(6, 512) - 1.0).tolist()
+        rng = np.random.default_rng(42)
+        cluster1_emb = (rng.standard_normal((6, FACE_EMBEDDING_DIM)) + 1.0).tolist()
+        cluster2_emb = (rng.standard_normal((6, FACE_EMBEDDING_DIM)) - 1.0).tolist()
 
         all_face_ids = [uuid.uuid4() for _ in range(12)]
         all_embeddings = cluster1_emb + cluster2_emb
 
         mock_records = [
-            create_mock_record(fid, emb)
-            for fid, emb in zip(all_face_ids, all_embeddings)
+            create_mock_record(fid, emb) for fid, emb in zip(all_face_ids, all_embeddings)
         ]
 
         mock_client = MagicMock()
@@ -153,12 +164,10 @@ class TestFaceClusterer:
             record.payload = {"face_instance_id": str(face_id)}
             return record
 
-        np.random.seed(42)
-        embeddings = (np.random.randn(10, 512) + 1.0).tolist()
+        rng = np.random.default_rng(42)
+        embeddings = (rng.standard_normal((10, FACE_EMBEDDING_DIM)) + 1.0).tolist()
         face_ids = [uuid.uuid4() for _ in range(10)]
-        mock_records = [
-            create_mock_record(fid, emb) for fid, emb in zip(face_ids, embeddings)
-        ]
+        mock_records = [create_mock_record(fid, emb) for fid, emb in zip(face_ids, embeddings)]
 
         mock_client = MagicMock()
         mock_client.client.scroll.return_value = (mock_records, None)
@@ -200,7 +209,9 @@ class TestFaceClusterer:
         from image_search_service.faces.clusterer import get_face_clusterer
 
         mock_session = MagicMock()
-        clusterer = get_face_clusterer(mock_session, mock_qdrant_client, min_cluster_size=7, min_samples=4)
+        clusterer = get_face_clusterer(
+            mock_session, mock_qdrant_client, min_cluster_size=7, min_samples=4
+        )
 
         assert clusterer.min_cluster_size == 7
         assert clusterer.min_samples == 4

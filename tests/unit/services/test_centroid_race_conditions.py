@@ -18,7 +18,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from tests.constants import FACE_EMBEDDING_DIM
 
+
+@pytest.mark.xfail(
+    reason="Known race condition: concurrent centroid computation causes double "
+    "deprecation and duplicate Qdrant upserts without row locking. "
+    "Fix: add SELECT FOR UPDATE on person_id during centroid computation.",
+)
 @pytest.mark.asyncio
 async def test_compute_centroids_when_concurrent_same_person_then_double_deprecation() -> None:
     """Two concurrent centroid computations for the same person.
@@ -47,7 +54,7 @@ async def test_compute_centroids_when_concurrent_same_person_then_double_depreca
     mock_centroid_qdrant = MagicMock()
 
     # Mock embeddings retrieval (5 faces, sufficient for centroid)
-    fake_embeddings = np.random.randn(5, 512).astype(np.float32).tolist()
+    fake_embeddings = np.random.randn(5, FACE_EMBEDDING_DIM).astype(np.float32).tolist()
     fake_face_ids = [uuid.uuid4() for _ in range(5)]
 
     # Track deprecation calls
@@ -61,15 +68,19 @@ async def test_compute_centroids_when_concurrent_same_person_then_double_depreca
         # Simulate deprecating 1 existing centroid
         return 1
 
-    with patch(
-        "image_search_service.services.centroid_service.get_person_face_embeddings",
-        return_value=(fake_face_ids, fake_embeddings),
-    ), patch(
-        "image_search_service.services.centroid_service.deprecate_centroids",
-        side_effect=mock_deprecate_centroids,
-    ), patch(
-        "image_search_service.services.centroid_service.get_settings",
-    ) as mock_settings:
+    with (
+        patch(
+            "image_search_service.services.centroid_service.get_person_face_embeddings",
+            return_value=(fake_face_ids, fake_embeddings),
+        ),
+        patch(
+            "image_search_service.services.centroid_service.deprecate_centroids",
+            side_effect=mock_deprecate_centroids,
+        ),
+        patch(
+            "image_search_service.services.centroid_service.get_settings",
+        ) as mock_settings,
+    ):
         # Mock settings
         settings_mock = MagicMock()
         settings_mock.centroid_min_faces = 3
@@ -81,9 +92,7 @@ async def test_compute_centroids_when_concurrent_same_person_then_double_depreca
 
         # Mock database operations
         db_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=None)
-            )
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         )
         db_session.flush = AsyncMock()
 
@@ -117,30 +126,30 @@ async def test_compute_centroids_when_concurrent_same_person_then_double_depreca
         )
 
     # BUG DOCUMENTATION: Both calls deprecated centroids (double-deprecation)
-    assert deprecation_count == 2, (
-        f"Expected 2 deprecation calls (race condition), got {deprecation_count}"
-    )
+    assert (
+        deprecation_count == 2
+    ), f"Expected 2 deprecation calls (race condition), got {deprecation_count}"
 
     # Both calls attempted to create new centroids
-    assert db_session.add.call_count == 2, (
-        f"Expected 2 centroid additions (race condition), got {db_session.add.call_count}"
-    )
+    assert (
+        db_session.add.call_count == 2
+    ), f"Expected 2 centroid additions (race condition), got {db_session.add.call_count}"
 
     # Both calls attempted Qdrant upserts
     upsert_count = mock_centroid_qdrant.upsert_centroid.call_count
-    assert upsert_count == 2, (
-        f"Expected 2 Qdrant upserts (race condition), got {upsert_count}"
-    )
+    assert upsert_count == 2, f"Expected 2 Qdrant upserts (race condition), got {upsert_count}"
 
     # Both results should be PersonCentroid objects (not exceptions)
-    assert not isinstance(
-        results[0], Exception
-    ), f"First computation failed: {results[0]}"
-    assert not isinstance(
-        results[1], Exception
-    ), f"Second computation failed: {results[1]}"
+    assert not isinstance(results[0], Exception), f"First computation failed: {results[0]}"
+    assert not isinstance(results[1], Exception), f"Second computation failed: {results[1]}"
 
 
+@pytest.mark.xfail(
+    reason="Known transactional gap: old centroid is deprecated before Qdrant upsert, "
+    "so if Qdrant fails the person has no active centroid. "
+    "Fix: defer deprecation until after Qdrant upsert succeeds, or implement "
+    "two-phase commit / background repair job.",
+)
 @pytest.mark.asyncio
 async def test_centroid_computation_when_qdrant_fails_then_no_active_centroid() -> None:
     """Centroid computation: DB flush succeeds, Qdrant upsert fails.
@@ -168,24 +177,26 @@ async def test_centroid_computation_when_qdrant_fails_then_no_active_centroid() 
     # Mock Qdrant clients
     mock_face_qdrant = MagicMock()
     mock_centroid_qdrant = MagicMock()
-    mock_centroid_qdrant.upsert_centroid.side_effect = ConnectionError(
-        "Qdrant down"
-    )
+    mock_centroid_qdrant.upsert_centroid.side_effect = ConnectionError("Qdrant down")
 
     # Mock embeddings retrieval
-    fake_embeddings = np.random.randn(5, 512).astype(np.float32).tolist()
+    fake_embeddings = np.random.randn(5, FACE_EMBEDDING_DIM).astype(np.float32).tolist()
     fake_face_ids = [uuid.uuid4() for _ in range(5)]
 
     added_objects: list[MagicMock] = []
 
-    with patch(
-        "image_search_service.services.centroid_service.get_person_face_embeddings",
-        return_value=(fake_face_ids, fake_embeddings),
-    ), patch(
-        "image_search_service.services.centroid_service.deprecate_centroids",
-    ) as mock_deprecate, patch(
-        "image_search_service.services.centroid_service.get_settings",
-    ) as mock_settings:
+    with (
+        patch(
+            "image_search_service.services.centroid_service.get_person_face_embeddings",
+            return_value=(fake_face_ids, fake_embeddings),
+        ),
+        patch(
+            "image_search_service.services.centroid_service.deprecate_centroids",
+        ) as mock_deprecate,
+        patch(
+            "image_search_service.services.centroid_service.get_settings",
+        ) as mock_settings,
+    ):
         # Mock settings
         settings_mock = MagicMock()
         settings_mock.centroid_min_faces = 3
@@ -197,9 +208,7 @@ async def test_centroid_computation_when_qdrant_fails_then_no_active_centroid() 
 
         # Mock database operations
         db_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=None)
-            )
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         )
         db_session.flush = AsyncMock()
 
@@ -222,9 +231,7 @@ async def test_centroid_computation_when_qdrant_fails_then_no_active_centroid() 
             )
 
     # Old centroid was deprecated BEFORE the failure
-    mock_deprecate.assert_called_once_with(
-        db_session, mock_centroid_qdrant, person_id
-    )
+    mock_deprecate.assert_called_once_with(db_session, mock_centroid_qdrant, person_id)
 
     # New centroid was added to DB
     assert len(added_objects) == 1

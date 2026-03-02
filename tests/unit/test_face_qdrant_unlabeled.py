@@ -12,6 +12,7 @@ from qdrant_client.models import (
 )
 
 from image_search_service.vector.face_qdrant import FaceQdrantClient
+from tests.constants import FACE_EMBEDDING_DIM
 
 
 class TestGetUnlabeledFacesWithEmbeddings:
@@ -108,7 +109,7 @@ class TestGetUnlabeledFacesWithEmbeddings:
             record.payload = {
                 "face_instance_id": str(uuid.uuid4()),
             }
-            record.vector = [0.1] * 512  # Mock embedding
+            record.vector = [0.1] * FACE_EMBEDDING_DIM  # Mock embedding
             mock_records.append(record)
 
         # Return records in batches
@@ -130,7 +131,7 @@ class TestGetUnlabeledFacesWithEmbeddings:
         face_client._client = MagicMock()
 
         face_id = uuid.uuid4()
-        embedding = [0.5] * 512
+        embedding = [0.5] * FACE_EMBEDDING_DIM
 
         # Create mock record
         record = MagicMock(spec=Record)
@@ -198,14 +199,11 @@ class TestBackfillIsAssigned:
         assigned_id = "assigned-1"
         unassigned_id = "unassigned-1"
 
-        assigned_record = SimpleNamespace(
-            id=assigned_id,
-            payload={"person_id": str(uuid.uuid4())}
-        )
+        assigned_record = SimpleNamespace(id=assigned_id, payload={"person_id": str(uuid.uuid4())})
 
         unassigned_record = SimpleNamespace(
             id=unassigned_id,
-            payload={}  # No person_id
+            payload={},  # No person_id
         )
 
         # Return records in one batch
@@ -225,7 +223,9 @@ class TestBackfillIsAssigned:
 
         # Verify assigned faces got is_assigned=True
         assigned_call = [
-            call for call in mock_client.set_payload.call_args_list if assigned_id in call.kwargs["points"]
+            call
+            for call in mock_client.set_payload.call_args_list
+            if assigned_id in call.kwargs["points"]
         ]
         assert len(assigned_call) == 1
         assert assigned_call[0].kwargs["payload"] == {"is_assigned": True}
@@ -247,15 +247,9 @@ class TestBackfillIsAssigned:
         face_client._client = mock_client
 
         # Create multiple batches of records with SimpleNamespace
-        batch1 = [
-            SimpleNamespace(id=f"id-{i}", payload={})
-            for i in range(10)
-        ]
+        batch1 = [SimpleNamespace(id=f"id-{i}", payload={}) for i in range(10)]
 
-        batch2 = [
-            SimpleNamespace(id=f"id-{i + 10}", payload={})
-            for i in range(10)
-        ]
+        batch2 = [SimpleNamespace(id=f"id-{i + 10}", payload={}) for i in range(10)]
 
         mock_client.scroll.side_effect = [
             (batch1, "offset1"),
@@ -278,10 +272,7 @@ class TestBackfillIsAssigned:
         face_client._client = mock_client
 
         # Create records with SimpleNamespace
-        records = [
-            SimpleNamespace(id=f"id-{i}", payload={})
-            for i in range(5)
-        ]
+        records = [SimpleNamespace(id=f"id-{i}", payload={}) for i in range(5)]
 
         mock_client.scroll.return_value = (records, None)
 
@@ -352,7 +343,7 @@ class TestUpsertFaceWithIsAssigned:
         # Execute
         face_client.upsert_face(
             point_id=uuid.uuid4(),
-            embedding=[0.1] * 512,
+            embedding=[0.1] * FACE_EMBEDDING_DIM,
             asset_id=uuid.uuid4(),
             face_instance_id=uuid.uuid4(),
             detection_confidence=0.9,
@@ -376,7 +367,7 @@ class TestUpsertFaceWithIsAssigned:
         # Execute
         face_client.upsert_face(
             point_id=uuid.uuid4(),
-            embedding=[0.1] * 512,
+            embedding=[0.1] * FACE_EMBEDDING_DIM,
             asset_id=uuid.uuid4(),
             face_instance_id=uuid.uuid4(),
             detection_confidence=0.9,
@@ -403,7 +394,7 @@ class TestUpsertFacesBatchWithIsAssigned:
         faces = [
             {
                 "point_id": uuid.uuid4(),
-                "embedding": [0.1] * 512,
+                "embedding": [0.1] * FACE_EMBEDDING_DIM,
                 "asset_id": uuid.uuid4(),
                 "face_instance_id": uuid.uuid4(),
                 "detection_confidence": 0.9,
@@ -411,7 +402,7 @@ class TestUpsertFacesBatchWithIsAssigned:
             },
             {
                 "point_id": uuid.uuid4(),
-                "embedding": [0.1] * 512,
+                "embedding": [0.1] * FACE_EMBEDDING_DIM,
                 "asset_id": uuid.uuid4(),
                 "face_instance_id": uuid.uuid4(),
                 "detection_confidence": 0.9,

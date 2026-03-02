@@ -14,6 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.mark.xfail(
+    reason="Known race condition: concurrent start and cancel on same session "
+    "proceed without state machine protection. A cancelled session may still "
+    "have a running background job. "
+    "Fix: add SELECT FOR UPDATE or optimistic locking with version counter.",
+)
 @pytest.mark.asyncio
 async def test_training_when_concurrent_start_and_cancel_then_no_state_protection() -> None:
     """Concurrent start + cancel on same PENDING session.
@@ -53,9 +59,7 @@ async def test_training_when_concurrent_start_and_cancel_then_no_state_protectio
 
     state_log: list[str] = []
 
-    async def mock_get_session(
-        db: AsyncMock, sid: int
-    ) -> TrainingSession:
+    async def mock_get_session(db: AsyncMock, sid: int) -> TrainingSession:
         state_log.append(f"read_session_{sid}_status={mock_session.status}")
         # Both requests see the same status (no locking)
         return mock_session
@@ -68,13 +72,11 @@ async def test_training_when_concurrent_start_and_cancel_then_no_state_protectio
     db_session.refresh = AsyncMock()
 
     # Mock asset discovery and job creation for start_training
-    with patch.object(
-        service, "get_session", side_effect=mock_get_session
-    ), patch.object(
-        service, "enqueue_training", return_value="mock-rq-job-id"
-    ), patch(
-        "image_search_service.services.training_service.get_queue"
-    ) as mock_get_queue:
+    with (
+        patch.object(service, "get_session", side_effect=mock_get_session),
+        patch.object(service, "enqueue_training", return_value="mock-rq-job-id"),
+        patch("image_search_service.services.training_service.get_queue") as mock_get_queue,
+    ):
         # Mock RQ queue
         mock_queue = MagicMock()
         mock_rq_job = MagicMock()
@@ -104,9 +106,7 @@ async def test_training_when_concurrent_start_and_cancel_then_no_state_protectio
     if isinstance(cancel_result, ValueError):
         # Cancel failed because session was PENDING (valid outcome)
         assert "Cannot cancel session in state" in str(cancel_result)
-    elif not isinstance(start_result, Exception) and not isinstance(
-        cancel_result, Exception
-    ):
+    elif not isinstance(start_result, Exception) and not isinstance(cancel_result, Exception):
         # Both succeeded (race condition allowed this)
         # This means: start enqueued job, cancel set status to CANCELLED
         # Background job may still be running on a cancelled session
@@ -115,6 +115,12 @@ async def test_training_when_concurrent_start_and_cancel_then_no_state_protectio
     # The key issue: no SELECT ... FOR UPDATE prevents these concurrent mutations
 
 
+@pytest.mark.xfail(
+    reason="Known race condition: concurrent pause and start on same RUNNING "
+    "session can both read the session without locking, leading to "
+    "inconsistent state machine transitions. "
+    "Fix: add row-level locking or optimistic locking on session state.",
+)
 @pytest.mark.asyncio
 async def test_training_when_concurrent_pause_and_start_then_inconsistent_state() -> None:
     """Concurrent pause + start on RUNNING session.
@@ -148,9 +154,7 @@ async def test_training_when_concurrent_pause_and_start_then_inconsistent_state(
 
     operation_log: list[str] = []
 
-    async def mock_get_session(
-        db: AsyncMock, sid: int
-    ) -> TrainingSession:
+    async def mock_get_session(db: AsyncMock, sid: int) -> TrainingSession:
         operation_log.append(f"get_session_status={mock_session.status}")
         return mock_session
 
@@ -160,11 +164,10 @@ async def test_training_when_concurrent_pause_and_start_then_inconsistent_state(
     db_session.commit = mock_commit
     db_session.refresh = AsyncMock()
 
-    with patch.object(
-        service, "get_session", side_effect=mock_get_session
-    ), patch(
-        "image_search_service.services.training_service.get_queue"
-    ) as mock_get_queue:
+    with (
+        patch.object(service, "get_session", side_effect=mock_get_session),
+        patch("image_search_service.services.training_service.get_queue") as mock_get_queue,
+    ):
         # Mock RQ queue for start_training resume
         mock_queue = MagicMock()
         mock_rq_job = MagicMock()

@@ -12,6 +12,7 @@ from image_search_service.vector.qdrant import (
     upsert_vector,
 )
 from tests.conftest import MockEmbeddingService
+from tests.constants import CLIP_EMBEDDING_DIM
 
 
 def test_upsert_vector_stores_point(
@@ -78,7 +79,7 @@ def test_search_vectors_returns_results(
         assert "asset_id" in result
         assert "score" in result
         assert "payload" in result
-        assert isinstance(result["score"], (int, float))
+        assert isinstance(result["score"], int | float)
 
 
 def test_search_vectors_respects_limit(
@@ -158,7 +159,7 @@ def test_ensure_collection_creates_if_missing(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(qdrant_module, "get_qdrant_client", lambda: client)
 
     # ensure_collection must now create the collection (cache was empty)
-    ensure_collection(embedding_dim=768)  # Image search uses 768-dim
+    ensure_collection(embedding_dim=CLIP_EMBEDDING_DIM)
 
     # Verify collection was created in our test client
     collections = client.get_collections().collections
@@ -174,7 +175,7 @@ def test_ensure_collection_idempotent() -> None:
     # Manually create collection
     client.create_collection(
         collection_name=settings.qdrant_collection,
-        vectors_config=VectorParams(size=768, distance=Distance.COSINE),  # Image search uses 768-dim
+        vectors_config=VectorParams(size=CLIP_EMBEDDING_DIM, distance=Distance.COSINE),
     )
 
     # Patch get_qdrant_client
@@ -185,7 +186,7 @@ def test_ensure_collection_idempotent() -> None:
 
     try:
         # Should not raise error when collection already exists
-        ensure_collection(embedding_dim=768)  # Image search uses 768-dim
+        ensure_collection(embedding_dim=CLIP_EMBEDDING_DIM)
 
         # Collection should still exist
         collections = client.get_collections().collections

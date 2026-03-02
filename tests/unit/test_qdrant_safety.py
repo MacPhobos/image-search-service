@@ -53,14 +53,14 @@ def test_image_collection_name_respects_environment(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_reset_face_collection_blocked_for_production_during_tests():
+def test_reset_face_collection_blocked_for_production_during_tests(monkeypatch):
     """Verify safety guard prevents production deletion during tests.
 
     This test simulates attempting to reset the production "faces" collection
     while pytest is running, which should be blocked.
     """
     # Set environment to simulate production collection name
-    os.environ["QDRANT_FACE_COLLECTION"] = "faces"
+    monkeypatch.setenv("QDRANT_FACE_COLLECTION", "faces")
 
     # Ensure PYTEST_CURRENT_TEST is set (pytest sets this automatically)
     assert os.getenv("PYTEST_CURRENT_TEST") is not None, "This test must run under pytest"
@@ -78,18 +78,17 @@ def test_reset_face_collection_blocked_for_production_during_tests():
     with pytest.raises(RuntimeError, match="SAFETY GUARD.*production 'faces' collection"):
         client.reset_collection()
 
-    # Cleanup: restore test collection name
-    os.environ["QDRANT_FACE_COLLECTION"] = "test_faces"
+    # Cleanup is automatic via monkeypatch teardown
     get_settings.cache_clear()
 
 
-def test_reset_image_collection_blocked_for_production_during_tests():
+def test_reset_image_collection_blocked_for_production_during_tests(monkeypatch):
     """Verify safety guard prevents production image collection deletion during tests.
 
     Ensures the main qdrant.py module has similar protections as face_qdrant.py.
     """
     # Set environment to simulate production collection name
-    os.environ["QDRANT_COLLECTION"] = "image_assets"
+    monkeypatch.setenv("QDRANT_COLLECTION", "image_assets")
 
     # Ensure PYTEST_CURRENT_TEST is set
     assert os.getenv("PYTEST_CURRENT_TEST") is not None
@@ -105,8 +104,7 @@ def test_reset_image_collection_blocked_for_production_during_tests():
     with pytest.raises(RuntimeError, match="production collection.*during tests"):
         reset_collection()
 
-    # Cleanup
-    os.environ["QDRANT_COLLECTION"] = "test_image_assets"
+    # Cleanup is automatic via monkeypatch teardown
     get_settings.cache_clear()
 
 

@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.constants import FACE_EMBEDDING_DIM
+
 
 class TestFaceAssigner:
     """Tests for FaceAssigner."""
@@ -16,9 +18,10 @@ class TestFaceAssigner:
         from image_search_service.faces.assigner import FaceAssigner
 
         # Patch at the module where it's imported (inside the method)
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ), patch("image_search_service.services.config_service.SyncConfigService"):
+        with (
+            patch("image_search_service.vector.face_qdrant.get_face_qdrant_client"),
+            patch("image_search_service.services.config_service.SyncConfigService"),
+        ):
             mock_session = MagicMock()
             mock_session.execute = MagicMock(
                 return_value=MagicMock(scalars=lambda: MagicMock(all=lambda: []))
@@ -45,11 +48,12 @@ class TestFaceAssigner:
         db_session.add(prototype)
         await db_session.commit()
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ), patch(
-            "image_search_service.services.config_service.SyncConfigService"
-        ) as mock_config_cls:
+        with (
+            patch("image_search_service.vector.face_qdrant.get_face_qdrant_client"),
+            patch(
+                "image_search_service.services.config_service.SyncConfigService"
+            ) as mock_config_cls,
+        ):
             mock_config = MagicMock()
             mock_config.get_float.side_effect = lambda k: {
                 "face_auto_assign_threshold": 0.85,
@@ -91,11 +95,12 @@ class TestFaceAssigner:
             role=PrototypeRole.EXEMPLAR.value,
         )
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get, patch(
-            "image_search_service.services.config_service.SyncConfigService"
-        ) as mock_config_cls:
+        with (
+            patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get,
+            patch(
+                "image_search_service.services.config_service.SyncConfigService"
+            ) as mock_config_cls,
+        ):
             # Mock config service
             mock_config = MagicMock()
             mock_config.get_float.side_effect = lambda k: {
@@ -138,7 +143,7 @@ class TestFaceAssigner:
 
             # Mock _get_face_embedding
             with patch.object(assigner, "_get_face_embedding") as mock_get_emb:
-                mock_get_emb.return_value = [0.1] * 512
+                mock_get_emb.return_value = [0.1] * FACE_EMBEDDING_DIM
                 result = assigner.assign_new_faces()
 
         assert result["status"] == "completed"
@@ -159,11 +164,12 @@ class TestFaceAssigner:
 
         since_date = datetime.now(UTC) - timedelta(days=1)
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ), patch(
-            "image_search_service.services.config_service.SyncConfigService"
-        ) as mock_config_cls:
+        with (
+            patch("image_search_service.vector.face_qdrant.get_face_qdrant_client"),
+            patch(
+                "image_search_service.services.config_service.SyncConfigService"
+            ) as mock_config_cls,
+        ):
             mock_config = MagicMock()
             mock_config.get_float.side_effect = lambda k: {
                 "face_auto_assign_threshold": 0.85,
@@ -195,9 +201,7 @@ class TestFaceAssigner:
         """Test getting embedding for non-existent face."""
         from image_search_service.faces.assigner import FaceAssigner
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get:
             mock_qdrant = MagicMock()
             mock_qdrant.client.retrieve.return_value = []
             mock_get.return_value = mock_qdrant
@@ -213,11 +217,9 @@ class TestFaceAssigner:
         """Test successfully getting face embedding."""
         from image_search_service.faces.assigner import FaceAssigner
 
-        mock_embedding = [0.1] * 512
+        mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get:
             mock_qdrant = MagicMock()
             mock_point = MagicMock()
             mock_point.vector = mock_embedding
@@ -274,13 +276,11 @@ class TestFaceAssigner:
         face2.asset_id = face1.asset_id
 
         mock_embeddings = [
-            [0.1] * 512,
-            [0.2] * 512,
+            [0.1] * FACE_EMBEDDING_DIM,
+            [0.2] * FACE_EMBEDDING_DIM,
         ]
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_get:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_get:
             mock_qdrant = MagicMock()
             mock_qdrant.upsert_face = MagicMock()
             mock_get.return_value = mock_qdrant
@@ -323,9 +323,7 @@ class TestFaceAssigner:
         from image_search_service.faces.assigner import FaceAssigner
 
         mock_session = MagicMock()
-        assigner = FaceAssigner(
-            mock_session, similarity_threshold=0.75, max_matches_per_face=5
-        )
+        assigner = FaceAssigner(mock_session, similarity_threshold=0.75, max_matches_per_face=5)
 
         assert assigner.similarity_threshold == 0.75
         assert assigner.max_matches_per_face == 5

@@ -4,6 +4,8 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
+from tests.constants import FACE_EMBEDDING_DIM
+
 
 class TestDetectedFace:
     """Tests for DetectedFace class."""
@@ -39,7 +41,7 @@ class TestDetectedFace:
             bbox=(0, 0, 20, 20),  # Small face
             confidence=0.5,
             landmarks=np.zeros((5, 2)),
-            embedding=np.zeros(512),
+            embedding=np.zeros(FACE_EMBEDDING_DIM),
             aligned_face=None,
         )
 
@@ -47,7 +49,7 @@ class TestDetectedFace:
             bbox=(0, 0, 200, 200),  # Large face
             confidence=0.5,
             landmarks=np.zeros((5, 2)),
-            embedding=np.zeros(512),
+            embedding=np.zeros(FACE_EMBEDDING_DIM),
             aligned_face=None,
         )
 
@@ -61,7 +63,7 @@ class TestDetectedFace:
             bbox=(0, 0, 100, 100),
             confidence=0.3,
             landmarks=np.zeros((5, 2)),
-            embedding=np.zeros(512),
+            embedding=np.zeros(FACE_EMBEDDING_DIM),
             aligned_face=None,
         )
 
@@ -69,7 +71,7 @@ class TestDetectedFace:
             bbox=(0, 0, 100, 100),
             confidence=0.95,
             landmarks=np.zeros((5, 2)),
-            embedding=np.zeros(512),
+            embedding=np.zeros(FACE_EMBEDDING_DIM),
             aligned_face=None,
         )
 
@@ -88,7 +90,7 @@ class TestDetectFaces:
         mock_face.bbox = np.array([100, 150, 180, 230])  # x1, y1, x2, y2
         mock_face.det_score = 0.95
         mock_face.kps = np.zeros((5, 2))
-        mock_face.embedding = np.zeros(512)
+        mock_face.embedding = np.zeros(FACE_EMBEDDING_DIM)
 
         mock_insightface.get.return_value = [mock_face]
 
@@ -107,13 +109,13 @@ class TestDetectFaces:
         high_conf.bbox = np.array([100, 100, 200, 200])
         high_conf.det_score = 0.95
         high_conf.kps = np.zeros((5, 2))
-        high_conf.embedding = np.zeros(512)
+        high_conf.embedding = np.zeros(FACE_EMBEDDING_DIM)
 
         low_conf = MagicMock()
         low_conf.bbox = np.array([300, 300, 400, 400])
         low_conf.det_score = 0.3
         low_conf.kps = np.zeros((5, 2))
-        low_conf.embedding = np.zeros(512)
+        low_conf.embedding = np.zeros(FACE_EMBEDDING_DIM)
 
         mock_insightface.get.return_value = [high_conf, low_conf]
 
@@ -131,7 +133,7 @@ class TestDetectFaces:
         small_face.bbox = np.array([100, 100, 115, 115])  # 15x15 pixels
         small_face.det_score = 0.95
         small_face.kps = np.zeros((5, 2))
-        small_face.embedding = np.zeros(512)
+        small_face.embedding = np.zeros(FACE_EMBEDDING_DIM)
 
         mock_insightface.get.return_value = [small_face]
 
@@ -162,7 +164,7 @@ class TestDetectFaces:
             mock_face.bbox = np.array([100 * i, 100, 100 * i + 80, 180])
             mock_face.det_score = 0.9
             mock_face.kps = np.zeros((5, 2))
-            mock_face.embedding = np.zeros(512)
+            mock_face.embedding = np.zeros(FACE_EMBEDDING_DIM)
             faces_data.append(mock_face)
 
         mock_insightface.get.return_value = faces_data
@@ -182,7 +184,7 @@ class TestDetectFaces:
         mock_face.bbox = np.array([100, 150, 180, 230])
         mock_face.det_score = 0.95
         mock_face.kps = np.zeros((5, 2))
-        mock_face.embedding = np.zeros(512)
+        mock_face.embedding = np.zeros(FACE_EMBEDDING_DIM)
 
         mock_insightface.get.return_value = [mock_face]
 
@@ -220,7 +222,7 @@ class TestDetectFacesFromPath:
         mock_face.bbox = np.array([100, 150, 180, 230])
         mock_face.det_score = 0.95
         mock_face.kps = np.zeros((5, 2))
-        mock_face.embedding = np.zeros(512)
+        mock_face.embedding = np.zeros(FACE_EMBEDDING_DIM)
 
         mock_insightface.get.return_value = [mock_face]
 

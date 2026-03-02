@@ -11,6 +11,7 @@ import pytest
 from sklearn.decomposition import PCA
 
 from image_search_service.queue.face_jobs import discover_unknown_persons_job
+from tests.constants import FACE_EMBEDDING_DIM
 
 
 @pytest.fixture
@@ -26,8 +27,12 @@ def mock_dependencies() -> dict:
         patch("image_search_service.queue.face_jobs.get_sync_session") as mock_session,
         patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant,
         patch("image_search_service.queue.worker.get_redis") as mock_redis,
-        patch("image_search_service.services.face_clustering_service.compute_cluster_confidence_from_embeddings") as mock_confidence,  # noqa: E501
-        patch("image_search_service.services.unknown_person_service.compute_membership_hash") as mock_hash,  # noqa: E501
+        patch(
+            "image_search_service.services.face_clustering_service.compute_cluster_confidence_from_embeddings"
+        ) as mock_confidence,  # noqa: E501
+        patch(
+            "image_search_service.services.unknown_person_service.compute_membership_hash"
+        ) as mock_hash,  # noqa: E501
         patch.dict("sys.modules", {"hdbscan": mock_hdbscan_module}),
     ):
         # Setup mock job
@@ -61,7 +66,7 @@ def test_successful_clustering_with_multiple_clusters(mock_dependencies: dict) -
     """Test successful clustering with multiple qualifying clusters."""
     # Arrange: Create 3 clusters with 5 faces each
     face_ids = [uuid.uuid4() for _ in range(15)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(15)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(15)]
 
     # Mock Qdrant response
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
@@ -137,7 +142,7 @@ def test_insufficient_faces(mock_dependencies: dict) -> None:
     """Test job with too few faces (< min_cluster_size)."""
     # Arrange: Only 3 faces available
     face_ids = [uuid.uuid4() for _ in range(3)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(3)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(3)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -176,7 +181,7 @@ def test_memory_ceiling_exceeded(mock_dependencies: dict) -> None:
     # Arrange: Too many faces (would require >4GB memory WITHOUT PCA)
     # sqrt(4 * 1024^3 / 8) ~ 23170 faces for 4GB (O(N²) formula)
     face_ids = [uuid.uuid4() for _ in range(25000)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(25000)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(25000)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -204,7 +209,7 @@ def test_low_confidence_filtering(mock_dependencies: dict) -> None:
     """Test that low-confidence clusters are filtered out."""
     # Arrange: 2 clusters, one high confidence, one low
     face_ids = [uuid.uuid4() for _ in range(10)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(10)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(10)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -259,7 +264,7 @@ def test_noise_faces_labeled(mock_dependencies: dict) -> None:
     """Test that noise faces (label -1) get cluster_id = '-1'."""
     # Arrange: 7 faces, 5 in cluster, 2 noise
     face_ids = [uuid.uuid4() for _ in range(7)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(7)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(7)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -325,7 +330,7 @@ def test_cluster_id_namespace_prefix(mock_dependencies: dict) -> None:
     """Test that cluster IDs have 'unknown_' namespace prefix."""
     # Arrange
     face_ids = [uuid.uuid4() for _ in range(5)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(5)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(5)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -377,16 +382,16 @@ def test_cluster_id_namespace_prefix(mock_dependencies: dict) -> None:
     # Check Redis cache keys for namespace prefix
     cluster_keys = [call["key"] for call in redis_calls if "cluster:" in call["key"]]
     assert len(cluster_keys) >= 1
-    assert all("unknown_" in key for key in cluster_keys), (
-        "All cluster keys should have 'unknown_' namespace prefix"
-    )
+    assert all(
+        "unknown_" in key for key in cluster_keys
+    ), "All cluster keys should have 'unknown_' namespace prefix"
 
 
 def test_progress_reporting(mock_dependencies: dict) -> None:
     """Test that progress is reported to Redis throughout execution."""
     # Arrange
     face_ids = [uuid.uuid4() for _ in range(5)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(5)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(5)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -488,7 +493,7 @@ def test_redis_caching_with_metadata(mock_dependencies: dict) -> None:
     """Test that cluster metadata is cached in Redis with correct structure."""
     # Arrange
     face_ids = [uuid.uuid4() for _ in range(5)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(5)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(5)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -561,11 +566,11 @@ def test_pca_reduces_dimensions_when_embedding_dim_exceeds_target() -> None:
     # Simulate structured face embeddings: data lives on a low-rank subspace.
     # Generate embeddings as linear combinations of 10 latent factors + noise.
     n_latent = 10
-    latent_factors = rng.standard_normal((n_latent, 512)).astype(np.float32)
+    latent_factors = rng.standard_normal((n_latent, FACE_EMBEDDING_DIM)).astype(np.float32)
     latent_codes = rng.standard_normal((n_faces, n_latent)).astype(np.float32)
     # Signal + small noise (makes the data low-rank)
     embeddings_512d = latent_codes @ latent_factors + 0.1 * rng.standard_normal(
-        (n_faces, 512)
+        (n_faces, FACE_EMBEDDING_DIM)
     ).astype(np.float32)
     # Normalize to unit vectors
     norms = np.linalg.norm(embeddings_512d, axis=1, keepdims=True)
@@ -592,7 +597,9 @@ def test_pca_skipped_when_dimensions_below_target() -> None:
 
 def test_pca_skipped_when_target_is_zero() -> None:
     """Verify PCA is not applied when pca_target_dim=0 (disabled)."""
-    embeddings_512d = np.random.default_rng(0).standard_normal((100, 512)).astype(np.float32)
+    embeddings_512d = (
+        np.random.default_rng(0).standard_normal((100, FACE_EMBEDDING_DIM)).astype(np.float32)
+    )
     pca_target_dim = 0
 
     # Condition mirrors the implementation guard
@@ -604,7 +611,9 @@ def test_pca_skipped_when_target_is_zero() -> None:
 def test_pca_handles_fewer_samples_than_target_components() -> None:
     """Verify PCA reduces to min(target, n_samples-1) when samples < target."""
     n_faces = 20  # Less than pca_target_dim=50
-    embeddings = np.random.default_rng(0).standard_normal((n_faces, 512)).astype(np.float32)
+    embeddings = (
+        np.random.default_rng(0).standard_normal((n_faces, FACE_EMBEDDING_DIM)).astype(np.float32)
+    )
 
     # Implementation guard: cannot produce more components than n_samples - 1
     n_components = min(50, n_faces - 1)  # = 19
@@ -616,7 +625,9 @@ def test_pca_handles_fewer_samples_than_target_components() -> None:
 
 def test_pca_original_embeddings_not_modified() -> None:
     """Verify the original 512d embeddings are not modified by PCA fit_transform."""
-    embeddings = np.random.default_rng(0).standard_normal((100, 512)).astype(np.float32)
+    embeddings = (
+        np.random.default_rng(0).standard_normal((100, FACE_EMBEDDING_DIM)).astype(np.float32)
+    )
     original_copy = embeddings.copy()
 
     pca = PCA(n_components=50, random_state=42)
@@ -629,7 +640,7 @@ def test_pca_original_embeddings_not_modified() -> None:
 def test_discover_job_pca_disabled_passes_512d_to_hdbscan(mock_dependencies: dict) -> None:
     """When pca_target_dim=0, the full 512d embeddings are passed to HDBSCAN."""
     face_ids = [uuid.uuid4() for _ in range(10)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(10)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(10)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -662,9 +673,9 @@ def test_discover_job_pca_disabled_passes_512d_to_hdbscan(mock_dependencies: dic
     # Verify fit_predict received 512d embeddings (no PCA reduction)
     call_args = mock_dependencies["clusterer"].fit_predict.call_args
     passed_embeddings = call_args[0][0]
-    assert passed_embeddings.shape[1] == 512, (
-        f"Expected 512d embeddings when PCA disabled, got {passed_embeddings.shape[1]}d"
-    )
+    assert (
+        passed_embeddings.shape[1] == FACE_EMBEDDING_DIM
+    ), f"Expected 512d embeddings when PCA disabled, got {passed_embeddings.shape[1]}d"
 
     # When PCA is disabled, dimensions are unchanged so pca_was_applied=False.
     # HDBSCAN should use "best" (auto-selects Prim's at 512d) not "boruvka_kdtree",
@@ -682,7 +693,7 @@ def test_discover_job_pca_disabled_passes_512d_to_hdbscan(mock_dependencies: dic
 def test_discover_job_pca_applied_reduces_to_50d(mock_dependencies: dict) -> None:
     """When pca_target_dim=50 and embeddings are 512d, fit_predict receives 50d data."""
     face_ids = [uuid.uuid4() for _ in range(100)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(100)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(100)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -715,9 +726,9 @@ def test_discover_job_pca_applied_reduces_to_50d(mock_dependencies: dict) -> Non
     # Verify fit_predict received 50d PCA-reduced embeddings
     call_args = mock_dependencies["clusterer"].fit_predict.call_args
     passed_embeddings = call_args[0][0]
-    assert passed_embeddings.shape[1] == 50, (
-        f"Expected 50d embeddings after PCA reduction, got {passed_embeddings.shape[1]}d"
-    )
+    assert (
+        passed_embeddings.shape[1] == 50
+    ), f"Expected 50d embeddings after PCA reduction, got {passed_embeddings.shape[1]}d"
     assert passed_embeddings.shape[0] == 100
 
 
@@ -725,7 +736,9 @@ def test_discover_job_phase5_uses_original_512d_embeddings(mock_dependencies: di
     """Phase 5 confidence computation uses original 512d embeddings, not PCA-reduced."""
     n_faces = 100
     face_ids = [uuid.uuid4() for _ in range(n_faces)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(n_faces)]
+    embeddings_list = [
+        np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(n_faces)
+    ]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -765,9 +778,9 @@ def test_discover_job_phase5_uses_original_512d_embeddings(mock_dependencies: di
     assert len(captured_confidence_embeddings) == 1
 
     # Confidence was computed with 512d embeddings (not 50d PCA-reduced)
-    assert captured_confidence_embeddings[0].shape[1] == 512, (
-        "Phase 5 confidence computation must use original 512d embeddings"
-    )
+    assert (
+        captured_confidence_embeddings[0].shape[1] == FACE_EMBEDDING_DIM
+    ), "Phase 5 confidence computation must use original 512d embeddings"
 
 
 def test_discover_job_pca_applied_uses_boruvka_algorithm(mock_dependencies: dict) -> None:
@@ -779,7 +792,7 @@ def test_discover_job_pca_applied_uses_boruvka_algorithm(mock_dependencies: dict
     """
     # 100 faces with 512d embeddings; pca_target_dim=50 triggers PCA reduction.
     face_ids = [uuid.uuid4() for _ in range(100)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(100)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(100)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -872,9 +885,9 @@ def test_batch_grouping_excludes_non_qualifying_clusters() -> None:
             if cluster_id in cluster_metadata:
                 cluster_to_faces.setdefault(cluster_id, []).append(face_id)
 
-    assert "unknown_1" not in cluster_to_faces, (
-        "Non-qualifying clusters must be excluded from batch updates"
-    )
+    assert (
+        "unknown_1" not in cluster_to_faces
+    ), "Non-qualifying clusters must be excluded from batch updates"
     assert "unknown_0" in cluster_to_faces
     assert len(cluster_to_faces["unknown_0"]) == 2
 
@@ -926,7 +939,7 @@ def test_batch_grouping_all_noise_faces() -> None:
 def test_batch_update_uses_update_statement_not_select(mock_dependencies: dict) -> None:
     """Phase 6 issues batch UPDATE statements grouped by cluster_id, not per-face SELECTs."""
     face_ids = [uuid.uuid4() for _ in range(6)]
-    embeddings_list = [np.random.randn(512).astype(np.float32) for _ in range(6)]
+    embeddings_list = [np.random.randn(FACE_EMBEDDING_DIM).astype(np.float32) for _ in range(6)]
 
     mock_dependencies["qdrant"].get_unlabeled_faces_with_embeddings.return_value = [
         (fid, emb) for fid, emb in zip(face_ids, embeddings_list)
@@ -961,12 +974,12 @@ def test_batch_update_uses_update_statement_not_select(mock_dependencies: dict) 
     # Phase 6 should have called execute exactly twice (one per cluster):
     # one batch UPDATE for unknown_0, one for unknown_1.
     # Confirm no per-face SELECT calls were issued by the new batch pattern.
-    assert len(execute_calls) == 2, (
-        f"Expected 2 batch UPDATE calls (one per cluster), got {len(execute_calls)}"
-    )
+    assert (
+        len(execute_calls) == 2
+    ), f"Expected 2 batch UPDATE calls (one per cluster), got {len(execute_calls)}"
 
     # Verify the execute call count is consistent with batch semantics:
     # 2 clusters × 1 batch each = 2 total execute calls (not 6 per-face calls).
-    assert mock_dependencies["session"].commit.call_count == 1, (
-        "Single commit after all batch updates"
-    )
+    assert (
+        mock_dependencies["session"].commit.call_count == 1
+    ), "Single commit after all batch updates"

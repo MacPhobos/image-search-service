@@ -25,6 +25,7 @@ from image_search_service.queue.training_jobs import (
     train_session,
     train_single_asset,
 )
+from tests.constants import CLIP_EMBEDDING_DIM, SHA256_HEX_LENGTH
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def training_job_fixtures(sync_db_session: Session, tmp_path: Path, monkeypatch)
 
     Provides:
     - DB session with test data (assets, session, jobs)
-    - Mock embedding service (512-dim vectors)
+    - Mock embedding service (CLIP_EMBEDDING_DIM-dim vectors)
     - Mock Qdrant client
     - Test images on disk
     - Mock ProgressTracker
@@ -45,12 +46,16 @@ def training_job_fixtures(sync_db_session: Session, tmp_path: Path, monkeypatch)
         lambda: sync_db_session,
     )
 
-    # Mock embedding service (768-dim for image search)
+    # Mock embedding service (CLIP_EMBEDDING_DIM for image search)
     mock_embed = MagicMock()
-    mock_embed.embed_image.return_value = [0.1] * 768
-    mock_embed.embed_images_batch.return_value = [[0.1] * 768, [0.2] * 768, [0.3] * 768]
-    mock_embed.embed_image_from_pil.return_value = [0.1] * 768
-    mock_embed.embedding_dim = 768
+    mock_embed.embed_image.return_value = [0.1] * CLIP_EMBEDDING_DIM
+    mock_embed.embed_images_batch.return_value = [
+        [0.1] * CLIP_EMBEDDING_DIM,
+        [0.2] * CLIP_EMBEDDING_DIM,
+        [0.3] * CLIP_EMBEDDING_DIM,
+    ]
+    mock_embed.embed_image_from_pil.return_value = [0.1] * CLIP_EMBEDDING_DIM
+    mock_embed.embedding_dim = CLIP_EMBEDDING_DIM
     mock_embed.device = "cpu"
     monkeypatch.setattr(
         "image_search_service.queue.training_jobs.get_embedding_service",
@@ -193,7 +198,7 @@ def test_build_evidence_metadata_basic(training_job_fixtures):
     """Test _build_evidence_metadata returns dict with expected keys."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 768  # 768-dim for image search
+    vector = [0.1] * CLIP_EMBEDDING_DIM
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(
@@ -220,7 +225,7 @@ def test_build_evidence_metadata_with_image_metadata(training_job_fixtures):
     """Test metadata includes image dimensions and file info."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 768  # 768-dim for image search
+    vector = [0.1] * CLIP_EMBEDDING_DIM
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(
@@ -243,7 +248,7 @@ def test_build_evidence_metadata_with_embedding_stats(training_job_fixtures):
     """Test metadata includes embedding dimension and norm."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 768  # 768-dim for image search
+    vector = [0.1] * CLIP_EMBEDDING_DIM
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(
@@ -256,7 +261,7 @@ def test_build_evidence_metadata_with_embedding_stats(training_job_fixtures):
 
     # Check embedding metadata
     embed_meta = metadata["embedding"]
-    assert embed_meta["dimension"] == 768
+    assert embed_meta["dimension"] == CLIP_EMBEDDING_DIM
     assert "norm" in embed_meta
     assert embed_meta["norm"] > 0  # L2 norm should be positive
     assert embed_meta["generation_time_ms"] == 100
@@ -286,7 +291,7 @@ def test_build_evidence_metadata_environment_info(training_job_fixtures):
     """Test metadata includes environment details."""
     fixtures = training_job_fixtures
     asset = fixtures["assets"][0]
-    vector = [0.1] * 768  # 768-dim for image search
+    vector = [0.1] * CLIP_EMBEDDING_DIM
     mock_embed = fixtures["mock_embed"]
 
     metadata = _build_evidence_metadata(
@@ -537,7 +542,7 @@ def test_train_single_asset_evidence_metadata(training_job_fixtures, monkeypatch
     assert "timing" in metadata
 
     # Check embedding checksum
-    assert len(evidence["embedding_checksum"]) == 64  # SHA256 hex digest
+    assert len(evidence["embedding_checksum"]) == SHA256_HEX_LENGTH
 
 
 # ==================== train_session Tests ====================
@@ -564,9 +569,7 @@ def test_train_session_not_found(training_job_fixtures, monkeypatch):
     assert "not found" in result["error"]
 
 
-def test_train_session_discovering_cancelled_before_discovery(
-    training_job_fixtures, monkeypatch
-):
+def test_train_session_discovering_cancelled_before_discovery(training_job_fixtures, monkeypatch):
     """Test train_session exits cleanly when cancelled while DISCOVERING."""
     fixtures = training_job_fixtures
 
@@ -608,9 +611,7 @@ def test_train_session_discovering_no_assets(training_job_fixtures, monkeypatch)
     assert "No assets found" in result["error"]
 
 
-def test_train_session_discovering_transitions_to_running(
-    training_job_fixtures, monkeypatch
-):
+def test_train_session_discovering_transitions_to_running(training_job_fixtures, monkeypatch):
     """Test DISCOVERING session transitions to RUNNING after discovery, then processes jobs."""
     fixtures = training_job_fixtures
     db_session = fixtures["db_session"]
@@ -683,9 +684,9 @@ def test_train_session_discovering_transitions_to_running(
 
     # Verify that the status was set to RUNNING during discovery phase
     # (one of the spy calls should have seen RUNNING)
-    assert "running" in status_updates, (
-        f"Expected RUNNING in status updates but got: {status_updates}"
-    )
+    assert (
+        "running" in status_updates
+    ), f"Expected RUNNING in status updates but got: {status_updates}"
 
 
 def test_train_session_no_pending_jobs(training_job_fixtures, monkeypatch):
@@ -889,6 +890,7 @@ def test_train_session_partial_failure(training_job_fixtures, monkeypatch):
 
 def test_train_session_exception_handling(training_job_fixtures, monkeypatch):
     """Test train_session handles unexpected exceptions gracefully."""
+
     # Mock train_batch to raise exception
     def mock_train_batch_error(*args, **kwargs):
         raise RuntimeError("Unexpected error in batch processing")

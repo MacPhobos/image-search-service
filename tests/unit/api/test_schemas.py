@@ -66,41 +66,23 @@ class TestLocationMetadata:
 class TestCameraMetadata:
     """Tests for CameraMetadata schema."""
 
-    def test_camera_with_both_fields(self):
-        """Should serialize camera with both make and model."""
-        camera = CameraMetadata(make="Canon", model="EOS 5D Mark IV")
+    @pytest.mark.parametrize(
+        "make,model,expected_make,expected_model",
+        [
+            pytest.param("Canon", "EOS 5D Mark IV", "Canon", "EOS 5D Mark IV", id="both-fields"),
+            pytest.param("Canon", None, "Canon", None, id="make-only"),
+            pytest.param(None, "iPhone 14 Pro", None, "iPhone 14 Pro", id="model-only"),
+            pytest.param(None, None, None, None, id="empty"),
+        ],
+    )
+    def test_camera_serialization(self, make, model, expected_make, expected_model):
+        """Should serialize camera metadata with correct field values."""
+        camera = CameraMetadata(make=make, model=model)
 
         data = camera.model_dump(by_alias=True)
 
-        assert data["make"] == "Canon"
-        assert data["model"] == "EOS 5D Mark IV"
-
-    def test_camera_with_make_only(self):
-        """Should allow only make to be set."""
-        camera = CameraMetadata(make="Canon", model=None)
-
-        data = camera.model_dump(by_alias=True)
-
-        assert data["make"] == "Canon"
-        assert data["model"] is None
-
-    def test_camera_with_model_only(self):
-        """Should allow only model to be set."""
-        camera = CameraMetadata(make=None, model="iPhone 14 Pro")
-
-        data = camera.model_dump(by_alias=True)
-
-        assert data["make"] is None
-        assert data["model"] == "iPhone 14 Pro"
-
-    def test_camera_empty(self):
-        """Should allow both fields to be None."""
-        camera = CameraMetadata(make=None, model=None)
-
-        data = camera.model_dump(by_alias=True)
-
-        assert data["make"] is None
-        assert data["model"] is None
+        assert data["make"] == expected_make
+        assert data["model"] == expected_model
 
 
 class TestAsset:
@@ -132,19 +114,20 @@ class TestAsset:
         assert asset.thumbnail_url == "/api/v1/images/456/thumbnail"
         assert asset.filename == "photo.jpg"
 
-    def test_asset_filename_extraction(self):
+    @pytest.mark.parametrize(
+        "path,expected_filename",
+        [
+            pytest.param("/photos/vacation/IMG_001.jpg", "IMG_001.jpg", id="nested-path"),
+            pytest.param("/photos/IMG_002.JPG", "IMG_002.JPG", id="uppercase-ext"),
+            pytest.param("/path/to/deeply/nested/photo.png", "photo.png", id="deeply-nested"),
+            pytest.param("simple.jpg", "simple.jpg", id="no-directory"),
+        ],
+    )
+    def test_asset_filename_extraction(self, path: str, expected_filename: str):
         """Should extract filename from various path formats."""
-        test_cases = [
-            ("/photos/vacation/IMG_001.jpg", "IMG_001.jpg"),
-            ("/photos/IMG_002.JPG", "IMG_002.JPG"),
-            ("/path/to/deeply/nested/photo.png", "photo.png"),
-            ("simple.jpg", "simple.jpg"),
-        ]
-
-        for path, expected_filename in test_cases:
-            mock_asset = MockImageAsset(path=path)
-            asset = Asset.model_validate(mock_asset)
-            assert asset.filename == expected_filename
+        mock_asset = MockImageAsset(path=path)
+        asset = Asset.model_validate(mock_asset)
+        assert asset.filename == expected_filename
 
     def test_asset_with_exif_taken_at(self):
         """Should include taken_at from EXIF metadata."""

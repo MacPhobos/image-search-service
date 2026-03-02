@@ -11,6 +11,7 @@ from qdrant_client.models import Distance, PointStruct, VectorParams
 from image_search_service.db.models import FaceInstance, ImageAsset, Person, PersonStatus
 from image_search_service.faces.trainer import FaceTrainer, TripletFaceDataset
 from image_search_service.vector.face_qdrant import FaceQdrantClient
+from tests.constants import FACE_EMBEDDING_DIM
 
 # ==============================================================================
 # TripletFaceDataset Tests (Pure NumPy, No Mocking)
@@ -19,8 +20,7 @@ from image_search_service.vector.face_qdrant import FaceQdrantClient
 
 def test_generate_triplets_basic():
     """Generate triplets with 3 persons, 5 faces each returns valid triplets."""
-    # Set seed for reproducibility
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     # Create embeddings for 3 persons, 5 faces each
     embeddings_by_person = {}
@@ -29,7 +29,7 @@ def test_generate_triplets_basic():
         embeddings = []
         for j in range(5):
             # Create normalized random embedding
-            emb = np.random.randn(512).astype(np.float64)
+            emb = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
             emb = emb / np.linalg.norm(emb)
             embeddings.append(emb)
         embeddings_by_person[person_id] = embeddings
@@ -43,9 +43,9 @@ def test_generate_triplets_basic():
 
     # Check each triplet has correct structure
     for anchor, positive, negative in triplets:
-        assert anchor.shape == (512,)
-        assert positive.shape == (512,)
-        assert negative.shape == (512,)
+        assert anchor.shape == (FACE_EMBEDDING_DIM,)
+        assert positive.shape == (FACE_EMBEDDING_DIM,)
+        assert negative.shape == (FACE_EMBEDDING_DIM,)
         assert anchor.dtype == np.float64
         assert positive.dtype == np.float64
         assert negative.dtype == np.float64
@@ -53,7 +53,7 @@ def test_generate_triplets_basic():
 
 def test_generate_triplets_count():
     """Triplets per person parameter controls output count."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     # 3 persons, 5 faces each
     embeddings_by_person = {}
@@ -61,7 +61,7 @@ def test_generate_triplets_count():
         person_id = f"person_{i}"
         embeddings = []
         for j in range(5):
-            emb = np.random.randn(512).astype(np.float64)
+            emb = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
             emb = emb / np.linalg.norm(emb)
             embeddings.append(emb)
         embeddings_by_person[person_id] = embeddings
@@ -76,17 +76,19 @@ def test_generate_triplets_count():
 
 def test_generate_triplets_skip_single_face_person():
     """Person with only 1 face is skipped (need 2 for anchor+positive)."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     embeddings_by_person = {
-        "person_1": [np.random.randn(512).astype(np.float64) / 10],  # Only 1 face
+        "person_1": [
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64) / 10
+        ],  # Only 1 face
         "person_2": [
-            np.random.randn(512).astype(np.float64) / 10,
-            np.random.randn(512).astype(np.float64) / 10,
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64) / 10,
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64) / 10,
         ],
         "person_3": [
-            np.random.randn(512).astype(np.float64) / 10,
-            np.random.randn(512).astype(np.float64) / 10,
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64) / 10,
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64) / 10,
         ],
     }
 
@@ -106,16 +108,16 @@ def test_generate_triplets_skip_single_face_person():
 
 def test_generate_triplets_two_persons_min():
     """Minimum 2 persons works correctly."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     embeddings_by_person = {
         "person_1": [
-            np.random.randn(512).astype(np.float64),
-            np.random.randn(512).astype(np.float64),
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64),
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64),
         ],
         "person_2": [
-            np.random.randn(512).astype(np.float64),
-            np.random.randn(512).astype(np.float64),
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64),
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64),
         ],
     }
 
@@ -134,13 +136,13 @@ def test_generate_triplets_two_persons_min():
 
 def test_generate_triplets_single_person():
     """Only 1 person produces no triplets (no negatives available)."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     embeddings_by_person = {
         "person_1": [
-            np.random.randn(512).astype(np.float64),
-            np.random.randn(512).astype(np.float64),
-            np.random.randn(512).astype(np.float64),
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64),
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64),
+            rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64),
         ],
     }
 
@@ -159,18 +161,16 @@ def test_generate_triplets_single_person():
 
 def test_select_hard_negative_returns_most_similar():
     """Hard negative mining selects most similar face from different person."""
-    np.random.seed(42)
-
     # Create embeddings where person_2's first face is most similar to person_1's anchor
-    anchor = np.array([1.0] + [0.0] * 511, dtype=np.float64)
+    anchor = np.array([1.0] + [0.0] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
     anchor = anchor / np.linalg.norm(anchor)
 
     # person_2's first face is very similar to anchor
-    similar_negative = np.array([0.9] + [0.1] * 511, dtype=np.float64)
+    similar_negative = np.array([0.9] + [0.1] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
     similar_negative = similar_negative / np.linalg.norm(similar_negative)
 
     # person_2's second face is less similar
-    dissimilar_negative = np.array([0.1] + [0.9] * 511, dtype=np.float64)
+    dissimilar_negative = np.array([0.1] + [0.9] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
     dissimilar_negative = dissimilar_negative / np.linalg.norm(dissimilar_negative)
 
     embeddings_by_person = {
@@ -193,7 +193,8 @@ def test_select_hard_negative_returns_most_similar():
 
 def test_select_hard_negative_no_other_persons():
     """Only 1 person returns None (no negatives available)."""
-    anchor = np.random.randn(512).astype(np.float64)
+    rng = np.random.default_rng(42)
+    anchor = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     anchor = anchor / np.linalg.norm(anchor)
 
     embeddings_by_person = {
@@ -208,14 +209,14 @@ def test_select_hard_negative_no_other_persons():
 
 def test_triplet_shapes():
     """Each triplet element has correct shape (512,)."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     embeddings_by_person = {}
     for i in range(3):
         person_id = f"person_{i}"
         embeddings = []
         for j in range(3):
-            emb = np.random.randn(512).astype(np.float64)
+            emb = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
             emb = emb / np.linalg.norm(emb)
             embeddings.append(emb)
         embeddings_by_person[person_id] = embeddings
@@ -224,9 +225,9 @@ def test_triplet_shapes():
     triplets = dataset.generate_triplets()
 
     for anchor, positive, negative in triplets:
-        assert anchor.shape == (512,)
-        assert positive.shape == (512,)
-        assert negative.shape == (512,)
+        assert anchor.shape == (FACE_EMBEDDING_DIM,)
+        assert positive.shape == (FACE_EMBEDDING_DIM,)
+        assert negative.shape == (FACE_EMBEDDING_DIM,)
 
 
 # ==============================================================================
@@ -238,7 +239,9 @@ def test_triplet_shapes():
 def trainer_with_mock_qdrant(sync_db_session, monkeypatch):
     """Create FaceTrainer with mocked Qdrant client."""
     client = QdrantClient(":memory:")
-    client.create_collection("faces", vectors_config=VectorParams(size=512, distance=Distance.COSINE))
+    client.create_collection(
+        "faces", vectors_config=VectorParams(size=FACE_EMBEDDING_DIM, distance=Distance.COSINE)
+    )
     face_qdrant = FaceQdrantClient()
     face_qdrant._client = client
     # Patch the import location (imported inside _get_face_embedding method)
@@ -250,14 +253,17 @@ def trainer_with_mock_qdrant(sync_db_session, monkeypatch):
     return trainer, client, face_qdrant
 
 
-def populate_labeled_faces(db_session, qdrant_client, persons_config):
+def populate_labeled_faces(db_session, qdrant_client, persons_config, rng=None):
     """Create labeled faces in DB + Qdrant.
 
     Args:
         db_session: Synchronous DB session
         qdrant_client: Qdrant client instance
         persons_config: list of (person_name, n_faces, base_embedding)
+        rng: numpy random Generator instance for reproducibility
     """
+    if rng is None:
+        rng = np.random.default_rng()
     for name, n_faces, base_embedding in persons_config:
         person = Person(id=uuid.uuid4(), name=name, status=PersonStatus.ACTIVE.value)
         db_session.add(person)
@@ -270,7 +276,7 @@ def populate_labeled_faces(db_session, qdrant_client, persons_config):
         for i in range(n_faces):
             point_id = uuid.uuid4()
             # Add small random noise to base embedding
-            emb = base_embedding + np.random.randn(512) * 0.05
+            emb = base_embedding + rng.standard_normal(FACE_EMBEDDING_DIM) * 0.05
             emb = emb / np.linalg.norm(emb)
 
             face = FaceInstance(
@@ -301,9 +307,9 @@ def test_compute_triplet_loss_satisfied():
     trainer = FaceTrainer(db_session=None, margin=0.2)  # type: ignore
 
     # Create embeddings where anchor is close to positive, far from negative
-    anchor = np.array([1.0] + [0.0] * 511, dtype=np.float64)
-    positive = np.array([0.95] + [0.05] * 511, dtype=np.float64)
-    negative = np.array([0.1] + [0.9] * 511, dtype=np.float64)
+    anchor = np.array([1.0] + [0.0] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
+    positive = np.array([0.95] + [0.05] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
+    negative = np.array([0.1] + [0.9] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
 
     # Normalize
     anchor = anchor / np.linalg.norm(anchor)
@@ -321,9 +327,13 @@ def test_compute_triplet_loss_violated():
     trainer = FaceTrainer(db_session=None, margin=0.2)  # type: ignore
 
     # Create embeddings where anchor is far from positive, close to negative
-    anchor = np.array([1.0] + [0.0] * 511, dtype=np.float64)
-    positive = np.array([0.1] + [0.9] * 511, dtype=np.float64)  # Far from anchor
-    negative = np.array([0.95] + [0.05] * 511, dtype=np.float64)  # Close to anchor
+    anchor = np.array([1.0] + [0.0] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
+    positive = np.array(
+        [0.1] + [0.9] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64
+    )  # Far from anchor
+    negative = np.array(
+        [0.95] + [0.05] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64
+    )  # Close to anchor
 
     # Normalize
     anchor = anchor / np.linalg.norm(anchor)
@@ -341,9 +351,9 @@ def test_compute_triplet_loss_identical_anchor_positive():
     trainer = FaceTrainer(db_session=None, margin=0.2)  # type: ignore
 
     # Identical anchor and positive
-    anchor = np.array([1.0] + [0.0] * 511, dtype=np.float64)
+    anchor = np.array([1.0] + [0.0] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
     positive = anchor.copy()
-    negative = np.array([0.5] + [0.5] * 511, dtype=np.float64)
+    negative = np.array([0.5] + [0.5] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
 
     # Normalize
     anchor = anchor / np.linalg.norm(anchor)
@@ -360,9 +370,9 @@ def test_compute_triplet_loss_identical_anchor_positive():
 def test_compute_triplet_loss_margin_effect():
     """Higher margin produces higher loss for same embeddings."""
     # Same embeddings for both trainers
-    anchor = np.array([1.0] + [0.0] * 511, dtype=np.float64)
-    positive = np.array([0.8] + [0.2] * 511, dtype=np.float64)
-    negative = np.array([0.7] + [0.3] * 511, dtype=np.float64)
+    anchor = np.array([1.0] + [0.0] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
+    positive = np.array([0.8] + [0.2] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
+    negative = np.array([0.7] + [0.3] * (FACE_EMBEDDING_DIM - 1), dtype=np.float64)
 
     # Normalize
     anchor = anchor / np.linalg.norm(anchor)
@@ -391,16 +401,16 @@ def test_get_labeled_faces_by_person_empty_db(trainer_with_mock_qdrant):
 def test_get_labeled_faces_by_person_groups_correctly(trainer_with_mock_qdrant):
     """Labeled faces are grouped by person_id."""
     trainer, qdrant_client, _ = trainer_with_mock_qdrant
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     # Create 3 persons with different numbers of faces
-    base_emb1 = np.random.randn(512).astype(np.float64)
+    base_emb1 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb1 = base_emb1 / np.linalg.norm(base_emb1)
 
-    base_emb2 = np.random.randn(512).astype(np.float64)
+    base_emb2 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb2 = base_emb2 / np.linalg.norm(base_emb2)
 
-    base_emb3 = np.random.randn(512).astype(np.float64)
+    base_emb3 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb3 = base_emb3 / np.linalg.norm(base_emb3)
 
     persons_config = [
@@ -409,7 +419,7 @@ def test_get_labeled_faces_by_person_groups_correctly(trainer_with_mock_qdrant):
         ("Charlie", 7, base_emb3),
     ]
 
-    populate_labeled_faces(trainer.db, qdrant_client, persons_config)
+    populate_labeled_faces(trainer.db, qdrant_client, persons_config, rng=rng)
 
     result = trainer.get_labeled_faces_by_person()
 
@@ -429,7 +439,7 @@ def test_get_labeled_faces_by_person_groups_correctly(trainer_with_mock_qdrant):
             assert "qdrant_point_id" in face
             assert "embedding" in face
             assert isinstance(face["embedding"], np.ndarray)
-            assert face["embedding"].shape == (512,)
+            assert face["embedding"].shape == (FACE_EMBEDDING_DIM,)
 
 
 def test_fine_tune_no_labeled_faces(trainer_with_mock_qdrant):
@@ -447,16 +457,16 @@ def test_fine_tune_no_labeled_faces(trainer_with_mock_qdrant):
 def test_fine_tune_insufficient_faces(trainer_with_mock_qdrant):
     """Fine-tuning where all persons have < min_faces returns zeros."""
     trainer, qdrant_client, _ = trainer_with_mock_qdrant
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     # Create 3 persons with only 3 faces each (below min_faces=5)
-    base_emb1 = np.random.randn(512).astype(np.float64)
+    base_emb1 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb1 = base_emb1 / np.linalg.norm(base_emb1)
 
-    base_emb2 = np.random.randn(512).astype(np.float64)
+    base_emb2 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb2 = base_emb2 / np.linalg.norm(base_emb2)
 
-    base_emb3 = np.random.randn(512).astype(np.float64)
+    base_emb3 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb3 = base_emb3 / np.linalg.norm(base_emb3)
 
     persons_config = [
@@ -465,7 +475,7 @@ def test_fine_tune_insufficient_faces(trainer_with_mock_qdrant):
         ("Charlie", 3, base_emb3),
     ]
 
-    populate_labeled_faces(trainer.db, qdrant_client, persons_config)
+    populate_labeled_faces(trainer.db, qdrant_client, persons_config, rng=rng)
 
     result = trainer.fine_tune_for_person_clustering(min_faces_per_person=5)
 
@@ -478,16 +488,16 @@ def test_fine_tune_insufficient_faces(trainer_with_mock_qdrant):
 def test_fine_tune_success(trainer_with_mock_qdrant):
     """Fine-tuning with sufficient data returns proper results."""
     trainer, qdrant_client, _ = trainer_with_mock_qdrant
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     # Create 3 persons with 10 faces each
-    base_emb1 = np.random.randn(512).astype(np.float64)
+    base_emb1 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb1 = base_emb1 / np.linalg.norm(base_emb1)
 
-    base_emb2 = np.random.randn(512).astype(np.float64)
+    base_emb2 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb2 = base_emb2 / np.linalg.norm(base_emb2)
 
-    base_emb3 = np.random.randn(512).astype(np.float64)
+    base_emb3 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb3 = base_emb3 / np.linalg.norm(base_emb3)
 
     persons_config = [
@@ -496,7 +506,7 @@ def test_fine_tune_success(trainer_with_mock_qdrant):
         ("Charlie", 10, base_emb3),
     ]
 
-    populate_labeled_faces(trainer.db, qdrant_client, persons_config)
+    populate_labeled_faces(trainer.db, qdrant_client, persons_config, rng=rng)
 
     result = trainer.fine_tune_for_person_clustering(min_faces_per_person=5)
 
@@ -509,13 +519,13 @@ def test_fine_tune_success(trainer_with_mock_qdrant):
 def test_fine_tune_saves_checkpoint(trainer_with_mock_qdrant, tmp_path):
     """Fine-tuning with checkpoint_path creates checkpoint file."""
     trainer, qdrant_client, _ = trainer_with_mock_qdrant
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     # Create 2 persons with 10 faces each
-    base_emb1 = np.random.randn(512).astype(np.float64)
+    base_emb1 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb1 = base_emb1 / np.linalg.norm(base_emb1)
 
-    base_emb2 = np.random.randn(512).astype(np.float64)
+    base_emb2 = rng.standard_normal(FACE_EMBEDDING_DIM).astype(np.float64)
     base_emb2 = base_emb2 / np.linalg.norm(base_emb2)
 
     persons_config = [
@@ -523,7 +533,7 @@ def test_fine_tune_saves_checkpoint(trainer_with_mock_qdrant, tmp_path):
         ("Bob", 10, base_emb2),
     ]
 
-    populate_labeled_faces(trainer.db, qdrant_client, persons_config)
+    populate_labeled_faces(trainer.db, qdrant_client, persons_config, rng=rng)
 
     checkpoint_path = tmp_path / "checkpoint.json"
 

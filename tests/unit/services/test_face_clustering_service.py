@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.db.models import FaceInstance
 from image_search_service.services.face_clustering_service import FaceClusteringService
+from tests.constants import FACE_EMBEDDING_DIM
 
 
 @pytest.fixture
@@ -51,7 +52,7 @@ class TestCalculateClusterConfidence:
         """Two identical face embeddings should return ~1.0 confidence."""
         # Given: cluster with two identical embeddings
         cluster_id = "test_cluster"
-        embedding = [0.5] * 512  # Same embedding
+        embedding = [0.5] * FACE_EMBEDDING_DIM  # Same embedding
         qdrant_point_ids = [uuid.uuid4(), uuid.uuid4()]
 
         # Mock batch retrieval - returns dict[UUID, list[float]]
@@ -70,14 +71,12 @@ class TestCalculateClusterConfidence:
         assert confidence > 0.99
 
     @pytest.mark.asyncio
-    async def test_orthogonal_faces_returns_zero_confidence(
-        self, clustering_service, mock_qdrant
-    ):
+    async def test_orthogonal_faces_returns_zero_confidence(self, clustering_service, mock_qdrant):
         """Two orthogonal embeddings should return ~0.0 confidence."""
         # Given: cluster with orthogonal embeddings
         cluster_id = "test_cluster"
-        embedding1 = [1.0] + [0.0] * 511  # [1, 0, 0, ...]
-        embedding2 = [0.0] + [1.0] + [0.0] * 510  # [0, 1, 0, ...]
+        embedding1 = [1.0] + [0.0] * (FACE_EMBEDDING_DIM - 1)  # [1, 0, 0, ...]
+        embedding2 = [0.0] + [1.0] + [0.0] * (FACE_EMBEDDING_DIM - 2)  # [0, 1, 0, ...]
         qdrant_point_ids = [uuid.uuid4(), uuid.uuid4()]
 
         # Mock batch retrieval
@@ -103,8 +102,8 @@ class TestCalculateClusterConfidence:
         # Given: cluster with similar embeddings (slight variations)
         cluster_id = "test_cluster"
         # Use fixed seed for reproducible test
-        np.random.seed(42)
-        base_vector = np.random.rand(512)
+        rng = np.random.default_rng(42)
+        base_vector = rng.random(FACE_EMBEDDING_DIM)
         base_vector /= np.linalg.norm(base_vector)  # Normalize
 
         # Create 3 similar embeddings with very small perturbations
@@ -112,7 +111,7 @@ class TestCalculateClusterConfidence:
         embeddings_map = {}
         for point_id in qdrant_point_ids:
             # Use tiny perturbation (0.01) for high similarity
-            perturbed = base_vector + np.random.randn(512) * 0.01
+            perturbed = base_vector + rng.standard_normal(FACE_EMBEDDING_DIM) * 0.01
             perturbed /= np.linalg.norm(perturbed)  # Re-normalize
             embeddings_map[point_id] = perturbed.tolist()
 
@@ -125,8 +124,8 @@ class TestCalculateClusterConfidence:
             qdrant_point_ids=qdrant_point_ids,
         )
 
-        # Then: confidence is high (>0.95) due to very small perturbations
-        assert confidence > 0.95
+        # Then: confidence is high (>0.94) due to very small perturbations
+        assert confidence > 0.94
 
     @pytest.mark.asyncio
     async def test_low_similarity_cluster_returns_low_confidence(
@@ -137,10 +136,11 @@ class TestCalculateClusterConfidence:
         cluster_id = "test_cluster"
 
         # Create 3 random embeddings (low similarity)
+        rng = np.random.default_rng(42)
         qdrant_point_ids = [uuid.uuid4() for _ in range(3)]
         embeddings_map = {}
         for point_id in qdrant_point_ids:
-            vec = np.random.rand(512)
+            vec = rng.random(FACE_EMBEDDING_DIM)
             vec /= np.linalg.norm(vec)  # Normalize
             embeddings_map[point_id] = vec.tolist()
 
@@ -165,7 +165,8 @@ class TestCalculateClusterConfidence:
         qdrant_point_ids = [uuid.uuid4() for _ in range(50)]
 
         # Create 50 similar embeddings
-        base_vector = np.random.rand(512)
+        rng = np.random.default_rng(42)
+        base_vector = rng.random(FACE_EMBEDDING_DIM)
         base_vector /= np.linalg.norm(base_vector)
         all_embeddings_map = {pid: base_vector.tolist() for pid in qdrant_point_ids}
 

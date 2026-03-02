@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qdrant_client.models import ScoredPoint
 
+from tests.constants import FACE_EMBEDDING_DIM
+
 # mock_image_asset, mock_face_instance, mock_person from root conftest.py
 
 
@@ -34,11 +36,9 @@ class TestGetFaceSuggestions:
     ):
         """Test successful face suggestions retrieval with valid face ID and similar persons."""
         # Mock Qdrant client methods
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
             # Setup mock embedding
-            mock_embedding = [0.1] * 512  # 512-dim embedding vector
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM  # 512-dim embedding vector
 
             # Setup mock Qdrant client
             qdrant_client = MagicMock()
@@ -97,9 +97,7 @@ class TestGetFaceSuggestions:
         """Test 404 when face ID doesn't exist in database."""
         fake_face_id = uuid.uuid4()
 
-        response = await test_client.get(
-            f"/api/v1/faces/faces/{fake_face_id}/suggestions"
-        )
+        response = await test_client.get(f"/api/v1/faces/faces/{fake_face_id}/suggestions")
 
         assert response.status_code == 404
         data = response.json()
@@ -111,9 +109,7 @@ class TestGetFaceSuggestions:
         """Test 422 validation error for invalid UUID format."""
         invalid_uuid = "not-a-valid-uuid"
 
-        response = await test_client.get(
-            f"/api/v1/faces/faces/{invalid_uuid}/suggestions"
-        )
+        response = await test_client.get(f"/api/v1/faces/faces/{invalid_uuid}/suggestions")
 
         # FastAPI validation should return 422 for invalid UUID
         assert response.status_code == 422
@@ -123,9 +119,7 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance
     ):
         """Test 404 when face exists but embedding is missing in Qdrant."""
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
             # Setup mock to return None for embedding (not found)
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = None
@@ -144,11 +138,9 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance
     ):
         """Test empty suggestions list when no matches above threshold (not an error)."""
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
             # Setup mock embedding
-            mock_embedding = [0.1] * 512
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             # Setup mock with no results above threshold
             qdrant_client = MagicMock()
@@ -172,10 +164,8 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance, mock_person
     ):
         """Test that min_confidence query param filters out low-confidence results."""
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
-            mock_embedding = [0.1] * 512
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = mock_embedding
@@ -188,9 +178,7 @@ class TestGetFaceSuggestions:
                 version=1,
                 vector=None,
             )
-            qdrant_client.search_against_prototypes.return_value = [
-                high_confidence_point
-            ]
+            qdrant_client.search_against_prototypes.return_value = [high_confidence_point]
 
             mock_qdrant.return_value = qdrant_client
 
@@ -229,10 +217,8 @@ class TestGetFaceSuggestions:
 
         await db_session.commit()
 
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
-            mock_embedding = [0.1] * 512
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = mock_embedding
@@ -273,10 +259,8 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance, mock_person, mock_inactive_person
     ):
         """Test that merged/hidden persons are filtered out from suggestions."""
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
-            mock_embedding = [0.1] * 512
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = mock_embedding
@@ -319,10 +303,8 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance, mock_person
     ):
         """Test that multiple prototypes for same person are deduplicated with highest confidence kept."""  # noqa: E501
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
-            mock_embedding = [0.1] * 512
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = mock_embedding
@@ -374,10 +356,8 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance
     ):
         """Test that suggestions with person_id not in database are skipped gracefully."""
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
-            mock_embedding = [0.1] * 512
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = mock_embedding
@@ -409,10 +389,8 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance, mock_person
     ):
         """Test endpoint uses correct default values when params not provided."""
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
-            mock_embedding = [0.1] * 512
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = mock_embedding
@@ -449,10 +427,8 @@ class TestGetFaceSuggestions:
         self, test_client, db_session, mock_face_instance
     ):
         """Test 500 error when Qdrant search fails."""
-        with patch(
-            "image_search_service.vector.face_qdrant.get_face_qdrant_client"
-        ) as mock_qdrant:
-            mock_embedding = [0.1] * 512
+        with patch("image_search_service.vector.face_qdrant.get_face_qdrant_client") as mock_qdrant:
+            mock_embedding = [0.1] * FACE_EMBEDDING_DIM
 
             qdrant_client = MagicMock()
             qdrant_client.get_embedding_by_point_id.return_value = mock_embedding
@@ -473,7 +449,9 @@ class TestGetFaceSuggestions:
             assert "failed to search" in data["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_get_face_suggestions_validation_min_confidence(self, test_client, mock_face_instance):  # noqa: E501
+    async def test_get_face_suggestions_validation_min_confidence(
+        self, test_client, mock_face_instance
+    ):  # noqa: E501
         """Test validation for min_confidence parameter boundaries."""
         # Test below minimum (< 0.0)
         response = await test_client.get(

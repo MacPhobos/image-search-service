@@ -8,6 +8,7 @@ import pytest
 from image_search_service.services.face_clustering_service import (
     compute_cluster_confidence_from_embeddings,
 )
+from tests.constants import FACE_EMBEDDING_DIM
 
 
 def test_identical_embeddings_perfect_confidence() -> None:
@@ -57,7 +58,7 @@ def test_single_embedding_returns_one() -> None:
 
 def test_empty_array_returns_one() -> None:
     """Test that empty array returns perfect confidence."""
-    embeddings = np.array([], dtype=np.float32).reshape(0, 512)
+    embeddings = np.array([], dtype=np.float32).reshape(0, FACE_EMBEDDING_DIM)
 
     confidence = compute_cluster_confidence_from_embeddings(embeddings)
 
@@ -83,7 +84,9 @@ def test_three_embeddings_high_similarity() -> None:
     confidence = compute_cluster_confidence_from_embeddings(embeddings)
 
     # Expect high confidence (>0.9) since vectors are similar
-    assert 0.9 < confidence <= 1.0, f"Similar embeddings should have high confidence, got {confidence}"
+    assert (
+        0.9 < confidence <= 1.0
+    ), f"Similar embeddings should have high confidence, got {confidence}"
 
 
 def test_mixed_embeddings_medium_confidence() -> None:
@@ -105,14 +108,16 @@ def test_mixed_embeddings_medium_confidence() -> None:
     confidence = compute_cluster_confidence_from_embeddings(embeddings)
 
     # Expect medium confidence (0.5-0.9) due to mixed similarity
-    assert 0.5 < confidence < 0.95, f"Mixed embeddings should have medium confidence, got {confidence}"
+    assert (
+        0.5 < confidence < 0.95
+    ), f"Mixed embeddings should have medium confidence, got {confidence}"
 
 
 def test_sampling_large_cluster() -> None:
     """Test that large clusters are sampled to sample_size."""
     # Create 50 random embeddings
-    np.random.seed(42)
-    embeddings = np.random.randn(50, 512).astype(np.float32)
+    rng = np.random.default_rng(42)
+    embeddings = rng.standard_normal((50, FACE_EMBEDDING_DIM)).astype(np.float32)
 
     # Normalize vectors
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -127,12 +132,12 @@ def test_sampling_large_cluster() -> None:
 
 def test_confidence_output_range() -> None:
     """Test that confidence is always between 0.0 and 1.0."""
-    np.random.seed(123)
+    rng = np.random.default_rng(123)
 
     # Test with various random embeddings
     for _ in range(10):
-        n_embeddings = np.random.randint(2, 30)
-        embeddings = np.random.randn(n_embeddings, 512).astype(np.float32)
+        n_embeddings = rng.integers(2, 30)
+        embeddings = rng.standard_normal((n_embeddings, FACE_EMBEDDING_DIM)).astype(np.float32)
 
         # Normalize
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -157,9 +162,9 @@ def test_normalized_vs_unnormalized_embeddings() -> None:
     confidence_unnormalized = compute_cluster_confidence_from_embeddings(embeddings_unnormalized)
 
     # Cosine similarity should be ~1.0 (same direction)
-    assert confidence_unnormalized == pytest.approx(1.0, abs=1e-5), (
-        "Vectors in same direction should have high confidence regardless of magnitude"
-    )
+    assert confidence_unnormalized == pytest.approx(
+        1.0, abs=1e-5
+    ), "Vectors in same direction should have high confidence regardless of magnitude"
 
 
 def test_opposite_direction_embeddings() -> None:
@@ -178,17 +183,17 @@ def test_opposite_direction_embeddings() -> None:
     confidence = compute_cluster_confidence_from_embeddings(embeddings)
 
     # Perpendicular vectors have cosine similarity ~0.0
-    assert confidence == pytest.approx(0.0, abs=1e-6), (
-        "Perpendicular embeddings should have confidence ~0.0"
-    )
+    assert confidence == pytest.approx(
+        0.0, abs=1e-6
+    ), "Perpendicular embeddings should have confidence ~0.0"
 
 
 def test_high_dimensional_embeddings() -> None:
     """Test with realistic face embedding dimensions (512-dim)."""
-    np.random.seed(99)
+    rng = np.random.default_rng(99)
 
     # Create 5 embeddings with 512 dimensions (realistic face embeddings)
-    embeddings = np.random.randn(5, 512).astype(np.float32)
+    embeddings = rng.standard_normal((5, FACE_EMBEDDING_DIM)).astype(np.float32)
 
     # Normalize (face embeddings are typically normalized)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -198,9 +203,9 @@ def test_high_dimensional_embeddings() -> None:
 
     # Random normalized vectors should have confidence near 0
     # (orthogonal in high dimensions)
-    assert -0.2 < confidence < 0.2, (
-        f"Random high-dim embeddings should have near-zero confidence, got {confidence}"
-    )
+    assert (
+        -0.2 < confidence < 0.2
+    ), f"Random high-dim embeddings should have near-zero confidence, got {confidence}"
 
 
 def test_deterministic_output() -> None:

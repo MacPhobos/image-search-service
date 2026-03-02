@@ -19,52 +19,37 @@ from image_search_service.storage.path_resolver import (
 class TestNormalizePath:
     """Test path normalization rules."""
 
-    def test_root_unchanged(self) -> None:
-        assert normalize_path("/") == "/"
+    @pytest.mark.parametrize(
+        "input_path,expected",
+        [
+            pytest.param("/", "/", id="root-unchanged"),
+            pytest.param("", "/", id="empty-becomes-root"),
+            pytest.param("a/b", "/a/b", id="add-leading-slash"),
+            pytest.param("/a/b/", "/a/b", id="remove-trailing-slash"),
+            pytest.param("//a///b", "/a/b", id="collapse-multiple-slashes"),
+            pytest.param("/a/b/c/d", "/a/b/c/d", id="deep-path"),
+            pytest.param("photos", "/photos", id="single-segment"),
+            pytest.param("/a/file..name", "/a/file..name", id="double-dot-in-filename"),
+            pytest.param("   ", "/", id="whitespace-only-becomes-root"),
+            pytest.param("/John Doe/photos", "/John Doe/photos", id="spaces-in-segment"),
+        ],
+    )
+    def test_normalize_path(self, input_path: str, expected: str) -> None:
+        """Should normalize paths according to rules."""
+        assert normalize_path(input_path) == expected
 
-    def test_empty_becomes_root(self) -> None:
-        assert normalize_path("") == "/"
-
-    def test_add_leading_slash(self) -> None:
-        assert normalize_path("a/b") == "/a/b"
-
-    def test_remove_trailing_slash(self) -> None:
-        assert normalize_path("/a/b/") == "/a/b"
-
-    def test_collapse_multiple_slashes(self) -> None:
-        assert normalize_path("//a///b") == "/a/b"
-
-    def test_deep_path(self) -> None:
-        assert normalize_path("/a/b/c/d") == "/a/b/c/d"
-
-    def test_single_segment(self) -> None:
-        assert normalize_path("photos") == "/photos"
-
-    def test_reject_parent_traversal(self) -> None:
+    @pytest.mark.parametrize(
+        "input_path",
+        [
+            pytest.param("/a/../b", id="parent-traversal"),
+            pytest.param("/..", id="root-traversal"),
+            pytest.param("/../../../etc/passwd", id="deep-traversal"),
+        ],
+    )
+    def test_reject_traversal(self, input_path: str) -> None:
+        """Should reject path traversal attempts with RootBoundaryError."""
         with pytest.raises(RootBoundaryError):
-            normalize_path("/a/../b")
-
-    def test_reject_root_traversal(self) -> None:
-        with pytest.raises(RootBoundaryError):
-            normalize_path("/..")
-
-    def test_reject_deep_traversal(self) -> None:
-        with pytest.raises(RootBoundaryError):
-            normalize_path("/../../../etc/passwd")
-
-    def test_double_dot_in_filename_allowed(self) -> None:
-        """Double dots within a segment name (not as a segment) are OK."""
-        assert normalize_path("/a/file..name") == "/a/file..name"
-
-    def test_whitespace_only_becomes_root(self) -> None:
-        assert normalize_path("   ") == "/"
-
-    def test_path_with_spaces_in_segment(self) -> None:
-        """Path segments with spaces are valid."""
-        assert normalize_path("/John Doe/photos") == "/John Doe/photos"
-
-    def test_single_slash_is_root(self) -> None:
-        assert normalize_path("/") == "/"
+            normalize_path(input_path)
 
     def test_whitespace_only_segment_in_path_raises(self) -> None:
         """Path like /a/   /b should raise ValueError."""
@@ -73,41 +58,38 @@ class TestNormalizePath:
 
 
 class TestSanitizeFolderName:
-    def test_normal_name(self) -> None:
-        assert sanitize_folder_name("John Doe") == "John Doe"
-
-    def test_replace_forward_slash(self) -> None:
-        assert sanitize_folder_name("John/Doe") == "John_Doe"
-
-    def test_replace_backslash(self) -> None:
-        assert sanitize_folder_name("John\\Doe") == "John_Doe"
-
-    def test_remove_special_chars(self) -> None:
-        assert sanitize_folder_name('John<>:"|?*Doe') == "JohnDoe"
-
-    def test_collapse_whitespace(self) -> None:
-        assert sanitize_folder_name("John   Doe") == "John Doe"
-
-    def test_strip_whitespace(self) -> None:
-        assert sanitize_folder_name("  John Doe  ") == "John Doe"
+    @pytest.mark.parametrize(
+        "input_name,expected",
+        [
+            pytest.param("John Doe", "John Doe", id="normal-name"),
+            pytest.param("John/Doe", "John_Doe", id="replace-forward-slash"),
+            pytest.param("John\\Doe", "John_Doe", id="replace-backslash"),
+            pytest.param('John<>:"|?*Doe', "JohnDoe", id="remove-special-chars"),
+            pytest.param("John   Doe", "John Doe", id="collapse-whitespace"),
+            pytest.param("  John Doe  ", "John Doe", id="strip-whitespace"),
+            pytest.param("José García", "José García", id="unicode-preserved"),
+        ],
+    )
+    def test_sanitize_folder_name(self, input_name: str, expected: str) -> None:
+        """Should sanitize folder names according to rules."""
+        assert sanitize_folder_name(input_name) == expected
 
     def test_truncate_long_name(self) -> None:
         long_name = "A" * 300
         result = sanitize_folder_name(long_name)
         assert len(result) == 255
 
-    def test_empty_after_sanitize_raises(self) -> None:
+    @pytest.mark.parametrize(
+        "input_name",
+        [
+            pytest.param('<>:"|?*', id="empty-after-sanitize"),
+            pytest.param("", id="empty-string"),
+        ],
+    )
+    def test_empty_raises(self, input_name: str) -> None:
+        """Should raise ValueError for names that are or become empty."""
         with pytest.raises(ValueError):
-            sanitize_folder_name('<>:"|?*')
-
-    def test_empty_string_raises(self) -> None:
-        with pytest.raises(ValueError):
-            sanitize_folder_name("")
-
-    def test_unicode_name_preserved(self) -> None:
-        """Unicode characters in names are preserved."""
-        result = sanitize_folder_name("José García")
-        assert result == "José García"
+            sanitize_folder_name(input_name)
 
 
 class TestPathResolver:
@@ -262,10 +244,7 @@ class TestPathResolver:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=worker, args=(f"folder_{i}",))
-            for i in range(10)
-        ]
+        threads = [threading.Thread(target=worker, args=(f"folder_{i}",)) for i in range(10)]
         for t in threads:
             t.start()
         for t in threads:
@@ -302,6 +281,7 @@ class TestPathResolver:
 
     def test_lookup_fn_type_alias(self) -> None:
         """LookupFn type alias is exported and usable."""
+
         def my_lookup(parent_id: str, child_name: str) -> tuple[str, bool]:
             return ("some_id", True)
 

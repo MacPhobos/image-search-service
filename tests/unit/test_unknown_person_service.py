@@ -12,6 +12,7 @@ from image_search_service.services.unknown_person_service import (
     get_dismissed_hashes,
     is_group_dismissed,
 )
+from tests.constants import SHA256_HEX_LENGTH
 
 
 class TestComputeMembershipHash:
@@ -45,7 +46,7 @@ class TestComputeMembershipHash:
         hash2 = compute_membership_hash([])
 
         assert hash1 == hash2
-        assert len(hash1) == 64  # SHA-256 hex digest
+        assert len(hash1) == SHA256_HEX_LENGTH
 
     def test_membership_hash_single_id(self):
         """Single ID produces deterministic hash."""
@@ -55,7 +56,7 @@ class TestComputeMembershipHash:
         hash2 = compute_membership_hash([face_id])
 
         assert hash1 == hash2
-        assert len(hash1) == 64  # SHA-256 hex digest
+        assert len(hash1) == SHA256_HEX_LENGTH
 
     def test_membership_hash_deterministic(self):
         """Same IDs always produce same hash (deterministic)."""
@@ -69,10 +70,10 @@ class TestComputeMembershipHash:
         assert hash1 == hash2 == hash3
 
     def test_membership_hash_length(self):
-        """Hash is always 64 characters (SHA-256 hex)."""
+        """Hash is always SHA256_HEX_LENGTH characters (SHA-256 hex)."""
         ids = [uuid.uuid4() for _ in range(10)]
         hash_result = compute_membership_hash(ids)
-        assert len(hash_result) == 64
+        assert len(hash_result) == SHA256_HEX_LENGTH
 
     def test_membership_hash_subset_different(self):
         """Adding/removing IDs changes the hash."""
@@ -92,7 +93,7 @@ class TestIsGroupDismissed:
     @pytest.mark.asyncio
     async def test_is_group_dismissed_not_found(self, db_session: AsyncSession):
         """Returns False when group not dismissed."""
-        fake_hash = "a" * 64
+        fake_hash = "a" * SHA256_HEX_LENGTH
         result = await is_group_dismissed(db_session, fake_hash)
         assert result is False
 

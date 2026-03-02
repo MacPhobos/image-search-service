@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from image_search_service.db.models import FaceInstance, ImageAsset
+from tests.constants import FACE_EMBEDDING_DIM
 
 
 @pytest.fixture
@@ -126,7 +127,7 @@ async def test_merge_suggestions_returns_similar_groups(
         mock_get_qdrant.return_value = mock_qdrant
 
         # Mock embeddings (similar vectors for high similarity)
-        embedding_a = np.random.rand(512).tolist()
+        embedding_a = np.random.rand(FACE_EMBEDDING_DIM).tolist()
         embedding_b = (np.array(embedding_a) + 0.01).tolist()  # Very similar
 
         # Build embeddings maps for each cluster (called separately per cluster)
@@ -186,8 +187,8 @@ async def test_merge_suggestions_respects_min_similarity_threshold(
         mock_get_qdrant.return_value = mock_qdrant
 
         # Mock dissimilar embeddings (low similarity)
-        embedding_a = np.zeros(512).tolist()
-        embedding_b = np.ones(512).tolist()
+        embedding_a = np.zeros(FACE_EMBEDDING_DIM).tolist()
+        embedding_b = np.ones(FACE_EMBEDDING_DIM).tolist()
 
         # Build embeddings maps for each cluster (called separately per cluster)
         def get_embeddings_for_cluster(point_ids):
@@ -316,14 +317,10 @@ async def test_merge_suggestions_no_groups(
     test_client: AsyncClient,
 ) -> None:
     """Test merge-suggestions with no candidate groups."""
-    response = await test_client.get(
-        "/api/v1/faces/unknown-persons/candidates/merge-suggestions"
-    )
+    response = await test_client.get("/api/v1/faces/unknown-persons/candidates/merge-suggestions")
 
     assert response.status_code == 200
     data = response.json()
 
     assert data["suggestions"] == []
     assert data["totalGroupsCompared"] == 0
-
-
