@@ -2079,8 +2079,10 @@ def _find_centroid_suggestions_for_person(
             },
         )
 
-        # Commit the new centroid so it's durable regardless of later per-person result
-        db_session.commit()
+        # Flush (not commit) so the centroid is visible in the current transaction
+        # without terminating the caller's savepoint.  The batch caller's final
+        # db_session.commit() will persist the centroid alongside all suggestions.
+        db_session.flush()
         logger.info(
             f"[{job_id}] Created centroid {centroid_id} from {len(face_ids)} faces"
         )
@@ -2415,7 +2417,7 @@ def find_more_centroid_suggestions_job(
         )
 
         if result.get("status") == "completed":
-            # Helper does NOT commit; we do it here in standalone mode
+            # Helper only flushes; we do the commit here in standalone mode
             db_session.commit()
             update_progress(
                 "completed",

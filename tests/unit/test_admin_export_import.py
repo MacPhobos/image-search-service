@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -1055,7 +1055,7 @@ async def test_import_person_metadata_no_faces_detected_in_image(
 async def test_import_person_metadata_updates_qdrant(
     db_session: AsyncSession,
 ) -> None:
-    """Test that Qdrant is updated when faces are assigned."""
+    """Test that Qdrant is updated when faces are assigned (R-2: after DB commit)."""
     # Create image asset and face
     asset = ImageAsset(path="/photos/alice.jpg", training_status="trained")
     db_session.add(asset)
@@ -1103,7 +1103,7 @@ async def test_import_person_metadata_updates_qdrant(
 
     # Import (skip_missing_images=False since files don't exist in test)
     options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
-    await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
+    result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
 
     # Verify Qdrant was updated
     assert mock_face_qdrant.update_person_ids.called
@@ -1115,6 +1115,9 @@ async def test_import_person_metadata_updates_qdrant(
     db_result = await db_session.execute(stmt)
     person = db_result.scalar_one()
     assert call_args[1]["person_id"] == person.id
+
+    # Verify qdrant_updates count is reported
+    assert result.qdrant_updates == 1
 
 
 @pytest.mark.asyncio
@@ -1188,6 +1191,500 @@ async def test_import_person_metadata_error_handling_continues_processing(
     # Bob should have succeeded
     bob_result = next(r for r in result.person_results if r.name == "Bob")
     assert bob_result.faces_matched == 1
+
+
+@pytest.mark.asyncio
+async def test_import_person_metadata_qdrant_updated_after_db_commit(
+    db_session: AsyncSession,
+) -> None:
+    """R-2: Qdrant update_person_ids is called AFTER the DB commit.
+
+    Verifies that if we track call order, Qdrant is not touched during the
+    per-face loop -- it is only called once, in a batched fashion, after commit.
+    """
+    asset = ImageAsset(path="/photos/alice.jpg", training_status="trained")
+    db_session.add(asset)
+    await db_session.flush()
+
+    point_id_1 = uuid.uuid4()
+    point_id_2 = uuid.uuid4()
+
+    face1 = FaceInstance(
+        asset_id=asset.id,
+        person_id=None,
+        bbox_x=100,
+        bbox_y=200,
+        bbox_w=50,
+        bbox_h=60,
+        detection_confidence=0.95,
+        quality_score=0.85,
+        qdrant_point_id=point_id_1,
+    )
+    face2 = FaceInstance(
+        asset_id=asset.id,
+        person_id=None,
+        bbox_x=300,
+        bbox_y=200,
+        bbox_w=50,
+        bbox_h=60,
+        detection_confidence=0.92,
+        quality_score=0.80,
+        qdrant_point_id=point_id_2,
+    )
+    db_session.add_all([face1, face2])
+    await db_session.commit()
+
+    import_data = PersonMetadataExport(
+        version="1.0",
+        exported_at=datetime.now(UTC),
+        metadata=ExportMetadata(total_persons=1, total_face_mappings=2),
+        persons=[
+            PersonExport(
+                name="Alice",
+                status="active",
+                face_mappings=[
+                    FaceMappingExport(
+                        image_path="/photos/alice.jpg",
+                        bounding_box=BoundingBoxExport(x=100, y=200, width=50, height=60),
+                        detection_confidence=0.95,
+                        quality_score=0.85,
+                    ),
+                    FaceMappingExport(
+                        image_path="/photos/alice.jpg",
+                        bounding_box=BoundingBoxExport(x=300, y=200, width=50, height=60),
+                        detection_confidence=0.92,
+                        quality_score=0.80,
+                    ),
+                ],
+            )
+        ],
+    )
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.update_person_ids = MagicMock()
+
+    options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
+    result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
+
+    # Both faces matched
+    assert result.total_faces_matched == 2
+    assert result.qdrant_updates == 2
+
+    # update_person_ids called once (batched by person_id), NOT once per face
+    assert mock_face_qdrant.update_person_ids.call_count == 1
+
+    # The single call should contain both point IDs
+    call_args = mock_face_qdrant.update_person_ids.call_args
+    assert set(call_args[1]["point_ids"]) == {point_id_1, point_id_2}
+
+    # Qdrant is NOT called in dry_run mode
+    mock_face_qdrant2 = MagicMock()
+    mock_face_qdrant2.update_person_ids = MagicMock()
+    dry_options = ImportOptions(dry_run=True, tolerance_pixels=10, skip_missing_images=False)
+    await import_person_metadata(db_session, import_data, dry_options, mock_face_qdrant2)
+    assert not mock_face_qdrant2.update_person_ids.called
+
+
+@pytest.mark.asyncio
+async def test_import_person_metadata_conflict_skipped_by_default(
+    db_session: AsyncSession,
+) -> None:
+    """R-3: A face already assigned to a different person is skipped by default.
+
+    Importing with force_reassign=False (default) should NOT overwrite an
+    existing assignment and should report a 'conflict' status.
+    """
+    # Create two persons
+    person_a = Person(name="Person A", status=PersonStatus.ACTIVE)
+    person_b_import_name = "Person B"  # Will be created during import
+    db_session.add(person_a)
+    await db_session.flush()
+
+    # Create image asset
+    asset = ImageAsset(path="/photos/shared.jpg", training_status="trained")
+    db_session.add(asset)
+    await db_session.flush()
+
+    point_id = uuid.uuid4()
+    # Face is already assigned to Person A
+    face = FaceInstance(
+        asset_id=asset.id,
+        person_id=person_a.id,  # Already assigned!
+        bbox_x=100,
+        bbox_y=200,
+        bbox_w=50,
+        bbox_h=60,
+        detection_confidence=0.95,
+        quality_score=0.85,
+        qdrant_point_id=point_id,
+    )
+    db_session.add(face)
+    await db_session.commit()
+
+    # Import data claims this face belongs to Person B
+    import_data = PersonMetadataExport(
+        version="1.0",
+        exported_at=datetime.now(UTC),
+        metadata=ExportMetadata(total_persons=1, total_face_mappings=1),
+        persons=[
+            PersonExport(
+                name=person_b_import_name,
+                status="active",
+                face_mappings=[
+                    FaceMappingExport(
+                        image_path="/photos/shared.jpg",
+                        bounding_box=BoundingBoxExport(x=100, y=200, width=50, height=60),
+                        detection_confidence=0.95,
+                        quality_score=0.85,
+                    )
+                ],
+            )
+        ],
+    )
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.update_person_ids = MagicMock()
+
+    # Default: force_reassign=False
+    options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
+    result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
+
+    # The conflict should be skipped: face stays with Person A
+    assert result.skipped_conflicts == 1
+    assert result.total_faces_matched == 0  # Not counted as matched
+
+    # Verify the face is still assigned to Person A
+    await db_session.refresh(face)
+    assert face.person_id == person_a.id
+
+    # Qdrant should NOT have been called (nothing assigned)
+    assert not mock_face_qdrant.update_person_ids.called
+
+    # Result detail should show "conflict" status
+    person_b_result = result.person_results[0]
+    assert person_b_result.details[0].status == "conflict"
+    assert "already assigned" in person_b_result.details[0].error.lower()
+
+
+@pytest.mark.asyncio
+async def test_import_person_metadata_conflict_force_reassign(
+    db_session: AsyncSession,
+) -> None:
+    """R-3: force_reassign=True allows overwriting an existing assignment."""
+    person_a = Person(name="Person A", status=PersonStatus.ACTIVE)
+    db_session.add(person_a)
+    await db_session.flush()
+
+    asset = ImageAsset(path="/photos/shared.jpg", training_status="trained")
+    db_session.add(asset)
+    await db_session.flush()
+
+    point_id = uuid.uuid4()
+    face = FaceInstance(
+        asset_id=asset.id,
+        person_id=person_a.id,  # Already assigned to Person A
+        bbox_x=100,
+        bbox_y=200,
+        bbox_w=50,
+        bbox_h=60,
+        detection_confidence=0.95,
+        quality_score=0.85,
+        qdrant_point_id=point_id,
+    )
+    db_session.add(face)
+    await db_session.commit()
+
+    import_data = PersonMetadataExport(
+        version="1.0",
+        exported_at=datetime.now(UTC),
+        metadata=ExportMetadata(total_persons=1, total_face_mappings=1),
+        persons=[
+            PersonExport(
+                name="Person B",
+                status="active",
+                face_mappings=[
+                    FaceMappingExport(
+                        image_path="/photos/shared.jpg",
+                        bounding_box=BoundingBoxExport(x=100, y=200, width=50, height=60),
+                        detection_confidence=0.95,
+                        quality_score=0.85,
+                    )
+                ],
+            )
+        ],
+    )
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.update_person_ids = MagicMock()
+
+    # Use force_reassign=True to allow the overwrite
+    options = ImportOptions(
+        dry_run=False,
+        tolerance_pixels=10,
+        skip_missing_images=False,
+        force_reassign=True,
+    )
+    result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
+
+    # No conflict skipped -- forced through
+    assert result.skipped_conflicts == 0
+    assert result.total_faces_matched == 1
+
+    # Verify face was reassigned to Person B
+    await db_session.refresh(face)
+    stmt = select(Person).where(Person.name == "Person B")
+    db_result = await db_session.execute(stmt)
+    person_b = db_result.scalar_one()
+    assert face.person_id == person_b.id
+
+    # Qdrant should have been updated
+    assert mock_face_qdrant.update_person_ids.called
+
+
+@pytest.mark.asyncio
+async def test_import_person_metadata_no_conflict_same_person(
+    db_session: AsyncSession,
+) -> None:
+    """R-3: No conflict when face is already assigned to the SAME person being imported."""
+    person = Person(name="Alice", status=PersonStatus.ACTIVE)
+    db_session.add(person)
+    await db_session.flush()
+
+    asset = ImageAsset(path="/photos/alice.jpg", training_status="trained")
+    db_session.add(asset)
+    await db_session.flush()
+
+    face = FaceInstance(
+        asset_id=asset.id,
+        person_id=person.id,  # Already assigned to Alice
+        bbox_x=100,
+        bbox_y=200,
+        bbox_w=50,
+        bbox_h=60,
+        detection_confidence=0.95,
+        quality_score=0.85,
+        qdrant_point_id=uuid.uuid4(),
+    )
+    db_session.add(face)
+    await db_session.commit()
+
+    # Import says this face belongs to Alice (same person)
+    import_data = PersonMetadataExport(
+        version="1.0",
+        exported_at=datetime.now(UTC),
+        metadata=ExportMetadata(total_persons=1, total_face_mappings=1),
+        persons=[
+            PersonExport(
+                name="Alice",
+                status="active",
+                face_mappings=[
+                    FaceMappingExport(
+                        image_path="/photos/alice.jpg",
+                        bounding_box=BoundingBoxExport(x=100, y=200, width=50, height=60),
+                        detection_confidence=0.95,
+                        quality_score=0.85,
+                    )
+                ],
+            )
+        ],
+    )
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.update_person_ids = MagicMock()
+
+    options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
+    result = await import_person_metadata(db_session, import_data, options, mock_face_qdrant)
+
+    # Re-assigning to the same person: no conflict
+    assert result.skipped_conflicts == 0
+    assert result.total_faces_matched == 1
+
+
+@pytest.mark.asyncio
+async def test_import_person_metadata_centroids_computed_after_import(
+    db_session: AsyncSession,
+) -> None:
+    """R-1: Centroids are computed for persons after import completes.
+
+    The centroid computation happens after the DB commit and is non-fatal.
+    We mock compute_centroids_for_person to verify it is called with the
+    correct person_id.
+    """
+    asset = ImageAsset(path="/photos/alice.jpg", training_status="trained")
+    db_session.add(asset)
+    await db_session.flush()
+
+    face = FaceInstance(
+        asset_id=asset.id,
+        person_id=None,
+        bbox_x=100,
+        bbox_y=200,
+        bbox_w=50,
+        bbox_h=60,
+        detection_confidence=0.95,
+        quality_score=0.85,
+        qdrant_point_id=uuid.uuid4(),
+    )
+    db_session.add(face)
+    await db_session.commit()
+
+    import_data = PersonMetadataExport(
+        version="1.0",
+        exported_at=datetime.now(UTC),
+        metadata=ExportMetadata(total_persons=1, total_face_mappings=1),
+        persons=[
+            PersonExport(
+                name="Alice",
+                status="active",
+                face_mappings=[
+                    FaceMappingExport(
+                        image_path="/photos/alice.jpg",
+                        bounding_box=BoundingBoxExport(x=100, y=200, width=50, height=60),
+                        detection_confidence=0.95,
+                        quality_score=0.85,
+                    )
+                ],
+            )
+        ],
+    )
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.update_person_ids = MagicMock()
+
+    # Patch compute_centroids_for_person and CentroidQdrantClient at module level
+    # (they are imported at the top of admin_service.py, so patch there)
+    mock_centroid = MagicMock()
+    mock_centroid_qdrant = MagicMock()
+
+    with (
+        patch(
+            "image_search_service.services.admin_service.compute_centroids_for_person",
+            new=AsyncMock(return_value=mock_centroid),
+        ),
+        patch(
+            "image_search_service.services.admin_service.CentroidQdrantClient"
+        ) as mock_centroid_client_cls,
+    ):
+        mock_centroid_client_cls.get_instance.return_value = mock_centroid_qdrant
+
+        options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
+        result = await import_person_metadata(
+            db_session, import_data, options, mock_face_qdrant
+        )
+
+    # The import should report 1 centroid computed
+    assert result.centroids_computed == 1
+
+
+@pytest.mark.asyncio
+async def test_import_person_metadata_centroids_not_computed_in_dry_run(
+    db_session: AsyncSession,
+) -> None:
+    """R-1: Centroids are NOT computed in dry_run mode (no DB changes)."""
+    import_data = PersonMetadataExport(
+        version="1.0",
+        exported_at=datetime.now(UTC),
+        metadata=ExportMetadata(total_persons=1, total_face_mappings=1),
+        persons=[
+            PersonExport(
+                name="Alice",
+                status="active",
+                face_mappings=[
+                    FaceMappingExport(
+                        image_path="/photos/alice.jpg",
+                        bounding_box=BoundingBoxExport(x=100, y=200, width=50, height=60),
+                        detection_confidence=0.95,
+                        quality_score=0.85,
+                    )
+                ],
+            )
+        ],
+    )
+
+    mock_face_qdrant = MagicMock()
+
+    with patch(
+        "image_search_service.services.admin_service.compute_centroids_for_person",
+        new=AsyncMock(return_value=MagicMock()),
+    ):
+        options = ImportOptions(dry_run=True, tolerance_pixels=10, skip_missing_images=True)
+        result = await import_person_metadata(
+            db_session, import_data, options, mock_face_qdrant
+        )
+
+    # No centroids computed in dry run
+    assert result.centroids_computed == 0
+    assert result.dry_run is True
+
+
+@pytest.mark.asyncio
+async def test_import_person_metadata_centroid_failure_does_not_fail_import(
+    db_session: AsyncSession,
+) -> None:
+    """R-1: A centroid computation failure is non-fatal -- import still succeeds."""
+    asset = ImageAsset(path="/photos/alice.jpg", training_status="trained")
+    db_session.add(asset)
+    await db_session.flush()
+
+    face = FaceInstance(
+        asset_id=asset.id,
+        person_id=None,
+        bbox_x=100,
+        bbox_y=200,
+        bbox_w=50,
+        bbox_h=60,
+        detection_confidence=0.95,
+        quality_score=0.85,
+        qdrant_point_id=uuid.uuid4(),
+    )
+    db_session.add(face)
+    await db_session.commit()
+
+    import_data = PersonMetadataExport(
+        version="1.0",
+        exported_at=datetime.now(UTC),
+        metadata=ExportMetadata(total_persons=1, total_face_mappings=1),
+        persons=[
+            PersonExport(
+                name="Alice",
+                status="active",
+                face_mappings=[
+                    FaceMappingExport(
+                        image_path="/photos/alice.jpg",
+                        bounding_box=BoundingBoxExport(x=100, y=200, width=50, height=60),
+                        detection_confidence=0.95,
+                        quality_score=0.85,
+                    )
+                ],
+            )
+        ],
+    )
+
+    mock_face_qdrant = MagicMock()
+    mock_face_qdrant.update_person_ids = MagicMock()
+
+    # Patch centroid computation to raise an exception
+    with (
+        patch(
+            "image_search_service.services.admin_service.compute_centroids_for_person",
+            new=AsyncMock(side_effect=RuntimeError("qdrant down")),
+        ),
+        patch(
+            "image_search_service.services.admin_service.CentroidQdrantClient"
+        ) as mock_centroid_client_cls,
+    ):
+        mock_centroid_client_cls.get_instance.return_value = MagicMock()
+
+        options = ImportOptions(dry_run=False, tolerance_pixels=10, skip_missing_images=False)
+        result = await import_person_metadata(
+            db_session, import_data, options, mock_face_qdrant
+        )
+
+    # Import itself succeeded despite centroid failure
+    assert result.success is True
+    assert result.total_faces_matched == 1
+    # Centroid failed -> 0 computed
+    assert result.centroids_computed == 0
 
 
 # ============ Batch Embedding Check Tests ============
