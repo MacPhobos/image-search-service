@@ -20,17 +20,6 @@ class CamelCaseModel(BaseModel):
     )
 
 
-class FaceDetectionSessionStatus(str):
-    """Face detection session status enum matching model."""
-
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    PAUSED = "paused"
-    CANCELLED = "cancelled"
-
-
 class CreateFaceDetectionSessionRequest(CamelCaseModel):
     """Request to create a new face detection session."""
 
@@ -260,5 +249,3 @@ class FindMoreJobResponse(CamelCaseModel):
     labeled_face_count: int  # Total available for sampling
     status: str  # "queued"
     progress_key: str  # Redis key for progress
-
-

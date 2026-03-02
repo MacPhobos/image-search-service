@@ -129,12 +129,6 @@ def _validate_device(device: str) -> None:
             raise ValueError(f"Invalid CUDA device ID in '{device}'")
 
 
-def clear_device_cache() -> None:
-    """Clear the cached device selection. Useful for testing."""
-    get_device.cache_clear()
-    get_device_info.cache_clear()
-
-
 @lru_cache(maxsize=1)
 def get_device_info() -> dict[str, Any]:
     """Get comprehensive device and platform information.

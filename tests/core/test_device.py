@@ -11,9 +11,10 @@ class TestGetDevice:
 
     def setup_method(self) -> None:
         """Clear device cache before each test."""
-        from image_search_service.core.device import clear_device_cache
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
     @pytest.mark.parametrize(
         "cuda_available,mps_available,expected",
@@ -31,11 +32,12 @@ class TestGetDevice:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Should auto-detect best available device."""
-        from image_search_service.core.device import clear_device_cache, get_device
+        from image_search_service.core.device import get_device, get_device_info
 
         monkeypatch.delenv("DEVICE", raising=False)
         monkeypatch.delenv("FORCE_CPU", raising=False)
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         with (
             patch("torch.cuda.is_available", return_value=cuda_available),
@@ -46,30 +48,31 @@ class TestGetDevice:
     @patch.dict(os.environ, {"DEVICE": "cpu"})
     def test_device_env_override(self) -> None:
         """Should respect DEVICE environment variable."""
-        from image_search_service.core.device import clear_device_cache, get_device
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
         assert get_device() == "cpu"
 
     @patch.dict(os.environ, {"DEVICE": "cuda:0"})
     @patch("torch.cuda.is_available", return_value=True)
     @patch("torch.cuda.device_count", return_value=2)
-    def test_device_env_cuda_with_id(
-        self, mock_count: MagicMock, mock_cuda: MagicMock
-    ) -> None:
+    def test_device_env_cuda_with_id(self, mock_count: MagicMock, mock_cuda: MagicMock) -> None:
         """Should respect DEVICE environment variable with CUDA device ID."""
-        from image_search_service.core.device import clear_device_cache, get_device
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
         assert get_device() == "cuda:0"
 
     @patch.dict(os.environ, {"DEVICE": "auto"})
     @patch("torch.cuda.is_available", return_value=True)
     def test_device_env_auto(self, mock_cuda: MagicMock) -> None:
         """Should auto-detect when DEVICE is 'auto'."""
-        from image_search_service.core.device import clear_device_cache, get_device
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
         assert get_device() == "cuda"
 
     @pytest.mark.parametrize(
@@ -80,14 +83,13 @@ class TestGetDevice:
             pytest.param("yes", id="yes"),
         ],
     )
-    def test_force_cpu(
-        self, force_cpu_value: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_force_cpu(self, force_cpu_value: str, monkeypatch: pytest.MonkeyPatch) -> None:
         """Should force CPU when FORCE_CPU is set to truthy value."""
-        from image_search_service.core.device import clear_device_cache, get_device
+        from image_search_service.core.device import get_device, get_device_info
 
         monkeypatch.setenv("FORCE_CPU", force_cpu_value)
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         with patch("torch.cuda.is_available", return_value=True):
             assert get_device() == "cpu"
@@ -109,10 +111,11 @@ class TestGetDevice:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Should raise ValueError for invalid device specifications."""
-        from image_search_service.core.device import clear_device_cache, get_device
+        from image_search_service.core.device import get_device, get_device_info
 
         monkeypatch.setenv("DEVICE", device)
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         with (
             patch("torch.cuda.is_available", return_value=cuda_available),
@@ -125,9 +128,10 @@ class TestGetDevice:
     @patch("torch.cuda.is_available", return_value=True)
     def test_device_cached(self, mock_cuda: MagicMock) -> None:
         """Should cache device selection across multiple calls."""
-        from image_search_service.core.device import clear_device_cache, get_device
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         # First call
         result1 = get_device()
@@ -147,17 +151,19 @@ class TestGetDeviceInfo:
 
     def setup_method(self) -> None:
         """Clear device cache before each test."""
-        from image_search_service.core.device import clear_device_cache
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
     @patch.dict(os.environ, {"FORCE_CPU": "true"})
     @patch("torch.cuda.is_available", return_value=False)
     def test_returns_expected_keys(self, mock_cuda: MagicMock) -> None:
         """Should return dict with expected keys."""
-        from image_search_service.core.device import clear_device_cache, get_device_info
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         info = get_device_info()
 
@@ -176,9 +182,10 @@ class TestGetDeviceInfo:
     @patch("torch.cuda.is_available", return_value=False)
     def test_cpu_mode_info(self, mock_cuda: MagicMock) -> None:
         """Should return correct info when in CPU mode."""
-        from image_search_service.core.device import clear_device_cache, get_device_info
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         info = get_device_info()
 
@@ -201,9 +208,10 @@ class TestGetDeviceInfo:
         mock_cuda: MagicMock,
     ) -> None:
         """Should return CUDA info when CUDA is available."""
-        from image_search_service.core.device import clear_device_cache, get_device_info
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         info = get_device_info()
 
@@ -224,9 +232,10 @@ class TestGetDeviceInfo:
         mock_cuda: MagicMock,
     ) -> None:
         """Should return MPS info when MPS is available."""
-        from image_search_service.core.device import clear_device_cache, get_device_info
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         info = get_device_info()
 
@@ -238,9 +247,10 @@ class TestGetDeviceInfo:
     @patch.dict(os.environ, {"FORCE_CPU": "true"})
     def test_info_cached(self) -> None:
         """Should cache device info across multiple calls."""
-        from image_search_service.core.device import clear_device_cache, get_device_info
+        from image_search_service.core.device import get_device, get_device_info
 
-        clear_device_cache()
+        get_device.cache_clear()
+        get_device_info.cache_clear()
 
         # First call
         info1 = get_device_info()
@@ -290,9 +300,7 @@ class TestGetOnnxProviders:
             ),
         ],
     )
-    def test_provider_priority_order(
-        self, available: list[str], expected: list[str]
-    ) -> None:
+    def test_provider_priority_order(self, available: list[str], expected: list[str]) -> None:
         """Should return providers in priority order (CUDA > CoreML > CPU)."""
         from image_search_service.core.device import get_onnx_providers
 
@@ -303,9 +311,7 @@ class TestGetOnnxProviders:
         """Should return CPU provider when onnxruntime not installed."""
         from image_search_service.core.device import get_onnx_providers
 
-        with patch(
-            "builtins.__import__", side_effect=ImportError("No module named 'onnxruntime'")
-        ):
+        with patch("builtins.__import__", side_effect=ImportError("No module named 'onnxruntime'")):
             providers = get_onnx_providers()
             assert providers == ["CPUExecutionProvider"]
 
@@ -323,9 +329,7 @@ class TestIsAppleSilicon:
             pytest.param("Windows", "AMD64", False, id="windows"),
         ],
     )
-    def test_is_apple_silicon(
-        self, system: str, machine: str, expected: bool
-    ) -> None:
+    def test_is_apple_silicon(self, system: str, machine: str, expected: bool) -> None:
         """Should detect Apple Silicon based on platform and architecture."""
         from image_search_service.core.device import is_apple_silicon
 
@@ -334,47 +338,3 @@ class TestIsAppleSilicon:
             patch("platform.machine", return_value=machine),
         ):
             assert is_apple_silicon() is expected
-
-
-class TestClearDeviceCache:
-    """Tests for clear_device_cache() function."""
-
-    @patch.dict(os.environ, {"FORCE_CPU": "true"})
-    def test_clears_get_device_cache(self) -> None:
-        """Should clear get_device() cache."""
-        from image_search_service.core.device import clear_device_cache, get_device
-
-        # Prime the cache
-        clear_device_cache()
-        device1 = get_device()
-
-        # Clear cache
-        clear_device_cache()
-
-        # Get device again - should be cpu due to FORCE_CPU
-        device2 = get_device()
-
-        # Both should return cpu
-        assert device1 == "cpu"
-        assert device2 == "cpu"
-
-    @patch.dict(os.environ, {"FORCE_CPU": "true"})
-    def test_clears_get_device_info_cache(self) -> None:
-        """Should clear get_device_info() cache."""
-        from image_search_service.core.device import (
-            clear_device_cache,
-            get_device_info,
-        )
-
-        # Prime the cache
-        clear_device_cache()
-        info1 = get_device_info()
-
-        # Clear cache
-        clear_device_cache()
-
-        # Get info again
-        info2 = get_device_info()
-
-        # Should be different objects (cache was cleared)
-        assert info1 is not info2

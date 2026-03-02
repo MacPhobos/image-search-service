@@ -16,6 +16,11 @@ from image_search_service.core.config import get_settings
 from image_search_service.core.logging import get_logger
 from image_search_service.queue.listener_worker import main
 
+# NOTE: macOS fork safety was previously handled by queue/macos_fork_safety.py
+# (removed as dead code, 2026-03-02). If macOS fork crashes recur with
+# multiprocessing, consider setting OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+# or re-implementing proxy detection disabling. See git history commit 56fdad8.
+
 logger = get_logger(__name__)
 
 # Queue names by priority

@@ -1,11 +1,9 @@
 """Pydantic schemas for API requests and responses."""
 
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
-
-T = TypeVar("T")
 
 
 class LocationMetadata(BaseModel):
