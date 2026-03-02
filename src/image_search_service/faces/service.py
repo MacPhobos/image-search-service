@@ -42,24 +42,6 @@ class LoadedBatch:
     batch_index: int = 0
 
 
-@dataclass
-class ProcessedBatch:
-    """Results from GPU processing a batch."""
-
-    # Number of assets successfully processed
-    processed: int = 0
-    # Total faces detected
-    total_faces: int = 0
-    # Errors encountered during processing
-    errors: list[dict[str, Any]] = field(default_factory=list)
-    # GPU processing time for this batch
-    gpu_time: float = 0.0
-    # Qdrant points to buffer
-    qdrant_points: list[dict[str, Any]] = field(default_factory=list)
-    # FaceInstance records created (for DB commit)
-    face_instances: list["FaceInstance"] = field(default_factory=list)
-
-
 def _load_image(image_path: str) -> tuple[str, "np.ndarray[Any, Any] | None"]:
     """Load image from disk (I/O bound operation).
 
@@ -626,105 +608,6 @@ class FaceProcessingService:
         if hasattr(asset, "source_path") and asset.source_path:
             return str(asset.source_path)
         return None
-
-    def _process_loaded_image(
-        self,
-        asset: ImageAsset,
-        image: "np.ndarray[Any, Any]",
-        min_confidence: float = 0.5,
-        min_face_size: int = 20,
-    ) -> list[FaceInstance]:
-        """Process a pre-loaded image through face detection.
-
-        This is separated from image loading to allow parallel I/O.
-
-        Args:
-            asset: The ImageAsset record
-            image: Pre-loaded BGR image array from cv2.imread
-            min_confidence: Minimum detection confidence threshold
-            min_face_size: Minimum face width/height in pixels
-
-        Returns:
-            List of created/existing FaceInstance records
-        """
-        # Detect faces using pre-loaded image
-        detected = detect_faces(
-            image,
-            min_confidence=min_confidence,
-            min_face_size=min_face_size,
-        )
-
-        if not detected:
-            logger.debug(f"No faces detected in asset {asset.id}")
-            return []
-
-        face_instances = []
-        qdrant_points = []
-
-        for face in detected:
-            # Check if this face already exists (idempotency)
-            existing = self._find_existing_face(asset.id, face.bbox)
-            if existing:
-                face_instances.append(existing)
-                continue
-
-            # Create new FaceInstance
-            point_id = uuid.uuid4()
-            quality_score = face.compute_quality_score()
-
-            face_instance = FaceInstance(
-                id=uuid.uuid4(),
-                asset_id=asset.id,
-                bbox_x=face.bbox[0],
-                bbox_y=face.bbox[1],
-                bbox_w=face.bbox[2],
-                bbox_h=face.bbox[3],
-                landmarks=face.landmarks_as_dict(),
-                detection_confidence=face.confidence,
-                quality_score=quality_score,
-                qdrant_point_id=point_id,
-            )
-
-            self.db.add(face_instance)
-            face_instances.append(face_instance)
-
-            # Prepare Qdrant point
-            qdrant_point: dict[str, Any] = {
-                "point_id": point_id,
-                "embedding": face.embedding.tolist(),
-                "asset_id": asset.id,
-                "face_instance_id": face_instance.id,
-                "detection_confidence": face.confidence,
-                "quality_score": quality_score,
-                "bbox": {
-                    "x": face.bbox[0],
-                    "y": face.bbox[1],
-                    "w": face.bbox[2],
-                    "h": face.bbox[3],
-                },
-            }
-
-            # Add optional taken_at if available
-            if hasattr(asset, "file_modified_at") and asset.file_modified_at:
-                qdrant_point["taken_at"] = asset.file_modified_at
-
-            qdrant_points.append(qdrant_point)
-
-        # Batch upsert to Qdrant FIRST (before commit)
-        if qdrant_points:
-            try:
-                self.qdrant.upsert_faces_batch(qdrant_points)
-                logger.info(f"Stored {len(qdrant_points)} new faces for asset {asset.id}")
-            except Exception as e:
-                # Rollback DB if Qdrant fails
-                self.db.rollback()
-                logger.error(f"Failed to upsert faces to Qdrant for asset {asset.id}: {e}")
-                raise RuntimeError(f"Face detection failed: Qdrant upsert error: {e}") from e
-
-        # Commit DB changes ONLY if Qdrant succeeded
-        self.db.commit()
-
-        return face_instances
 
     def _find_existing_face(
         self,

@@ -260,32 +260,6 @@ class TestCentroidQdrantClient:
         assert delete_call.kwargs["collection_name"] == CENTROID_COLLECTION_NAME
         assert str(centroid_id) in delete_call.kwargs["points_selector"].points
 
-    def test_delete_centroids_by_person(
-        self, centroid_qdrant: CentroidQdrantClient, mock_qdrant_client: MagicMock
-    ) -> None:
-        """Test deleting all centroids for a person."""
-        person_id = uuid.uuid4()
-
-        # Mock: scroll returns 2 batches of centroids
-        mock_record1 = MagicMock()
-        mock_record1.id = str(uuid.uuid4())
-        mock_record2 = MagicMock()
-        mock_record2.id = str(uuid.uuid4())
-        mock_record3 = MagicMock()
-        mock_record3.id = str(uuid.uuid4())
-
-        # First scroll call returns 2 records, second returns 1, third returns empty
-        mock_qdrant_client.scroll.side_effect = [
-            ([mock_record1, mock_record2], "offset_1"),
-            ([mock_record3], None),
-        ]
-
-        deleted_count = centroid_qdrant.delete_centroids_by_person(person_id)
-
-        # Verify 3 centroids deleted in 2 batches
-        assert deleted_count == 3
-        assert mock_qdrant_client.delete.call_count == 2
-
     def test_get_collection_info_success(
         self, centroid_qdrant: CentroidQdrantClient, mock_qdrant_client: MagicMock
     ) -> None:
@@ -372,24 +346,3 @@ class TestCentroidQdrantClient:
         assert results[0].score == 0.85
         mock_qdrant_client.query_points.assert_called_once()
 
-    def test_scroll_centroids_with_filters(
-        self, centroid_qdrant: CentroidQdrantClient, mock_qdrant_client: MagicMock
-    ) -> None:
-        """Test scrolling centroids with person_id filter."""
-        person_id = uuid.uuid4()
-
-        # Mock scroll response
-        mock_record = MagicMock()
-        mock_record.id = str(uuid.uuid4())
-        mock_record.payload = {"person_id": str(person_id)}
-        mock_qdrant_client.scroll.return_value = ([mock_record], None)
-
-        records, next_offset = centroid_qdrant.scroll_centroids(
-            limit=100, filter_person_id=person_id
-        )
-
-        assert len(records) == 1
-        assert next_offset is None
-        # Verify filter was applied
-        scroll_call = mock_qdrant_client.scroll.call_args
-        assert scroll_call.kwargs["scroll_filter"] is not None

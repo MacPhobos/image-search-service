@@ -180,20 +180,6 @@ def update_asset_indexed_at_sync(session: Session, asset_id: int) -> None:
     logger.debug(f"Updated asset {asset_id} indexed_at timestamp")
 
 
-def get_training_job_sync(session: Session, job_id: int) -> TrainingJob | None:
-    """Get training job by ID synchronously.
-
-    Args:
-        session: Database session
-        job_id: Training job ID
-
-    Returns:
-        TrainingJob or None if not found
-    """
-    stmt = select(TrainingJob).where(TrainingJob.id == job_id)
-    return session.execute(stmt).scalar_one_or_none()
-
-
 def get_session_by_id_sync(session: Session, session_id: int) -> TrainingSession | None:
     """Get training session by ID synchronously.
 

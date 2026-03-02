@@ -25,7 +25,6 @@ class ProgressTracker:
             session_id: Training session ID
         """
         self.session_id = session_id
-        self._last_check_time = datetime.now(UTC)
 
     def update_progress(
         self, db_session: Session, processed: int, failed: int

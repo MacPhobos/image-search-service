@@ -124,11 +124,6 @@ class TestOAuthInheritsProtocol:
             assert hasattr(oauth_storage, method_name), f"Missing method: {method_name}"
             assert callable(getattr(oauth_storage, method_name))
 
-    def test_has_mkdirp_convenience_method(self, oauth_storage: GoogleDriveOAuthV3Storage) -> None:
-        """OAuth backend inherits mkdirp() convenience method from parent."""
-        assert hasattr(oauth_storage, "mkdirp")
-        assert callable(oauth_storage.mkdirp)
-
 
 # ─── TestOAuthInit ─────────────────────────────────────────────────────────────
 
@@ -661,13 +656,6 @@ class TestInheritedCreateFolder:
 
         result = oauth_storage.create_folder("Photos 2026")
         assert result == "new-folder-id"
-
-    def test_mkdirp_root_returns_root_folder_id(
-        self, oauth_storage: GoogleDriveOAuthV3Storage
-    ) -> None:
-        """mkdirp('/') returns root folder ID without any API calls."""
-        result = oauth_storage.mkdirp("/")
-        assert result == "root-folder-id"
 
 
 # ─── TestInheritedErrorTranslation ────────────────────────────────────────────

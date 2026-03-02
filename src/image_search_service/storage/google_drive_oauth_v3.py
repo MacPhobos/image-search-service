@@ -85,7 +85,7 @@ class GoogleDriveOAuthV3Storage(GoogleDriveV3Storage):
     service account JSON key file.
 
     All operational methods (upload_file, create_folder, file_exists,
-    list_folder, delete_file, mkdirp) and retry/error-handling logic are
+    list_folder, delete_file) and retry/error-handling logic are
     inherited from GoogleDriveV3Storage without modification.
 
     Attributes:

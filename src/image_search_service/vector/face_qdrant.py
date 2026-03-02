@@ -926,54 +926,6 @@ class FaceQdrantClient:
             logger.error(f"Failed to delete faces for asset {asset_id}: {e}")
             raise
 
-    def delete_by_face_instance(self, face_instance_id: uuid.UUID) -> int:
-        """Delete a specific face by face_instance_id.
-
-        Args:
-            face_instance_id: Face instance UUID
-
-        Returns:
-            Number of faces deleted (0 or 1)
-        """
-        try:
-            deleted_count = 0
-            offset = None
-
-            # Scroll with face_instance_id filter
-            face_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="face_instance_id", match=MatchValue(value=str(face_instance_id))
-                    )
-                ]
-            )
-
-            records, _ = self.client.scroll(
-                collection_name=_get_face_collection_name(),
-                scroll_filter=face_filter,
-                limit=10,  # Should only be 1
-                offset=offset,
-                with_payload=False,
-            )
-
-            # Extract point IDs
-            point_ids = [record.id for record in records]
-
-            # Delete
-            if point_ids:
-                self.client.delete(
-                    collection_name=_get_face_collection_name(),
-                    points_selector=PointIdsList(points=point_ids),
-                )
-                deleted_count = len(point_ids)
-                logger.info(f"Deleted face instance {face_instance_id}")
-
-            return deleted_count
-
-        except Exception as e:
-            logger.error(f"Failed to delete face instance {face_instance_id}: {e}")
-            raise
-
     def point_exists(self, point_id: uuid.UUID) -> bool:
         """Check if a point exists in the collection.
 

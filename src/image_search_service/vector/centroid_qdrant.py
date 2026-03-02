@@ -19,7 +19,6 @@ from qdrant_client.models import (
     PayloadSchemaType,
     PointIdsList,
     PointStruct,
-    Record,
     ScoredPoint,
     VectorParams,
 )
@@ -335,130 +334,6 @@ class CentroidQdrantClient:
 
         except Exception as e:
             logger.error(f"Failed to search faces with centroid: {e}")
-            raise
-
-    def scroll_centroids(
-        self,
-        limit: int = 100,
-        offset: str | None = None,
-        filter_person_id: uuid.UUID | None = None,
-        filter_model_version: str | None = None,
-        filter_centroid_type: str | None = None,
-        include_vectors: bool = False,
-    ) -> tuple[list[Record], str | None]:
-        """Scroll through centroids with optional filters.
-
-        Args:
-            limit: Maximum number of records per page
-            offset: Scroll offset from previous call
-            filter_person_id: Filter by person_id
-            filter_model_version: Filter by model_version
-            filter_centroid_type: Filter by centroid_type
-            include_vectors: Whether to include embeddings in response
-
-        Returns:
-            Tuple of (records, next_offset)
-        """
-        # Ensure collection exists before reading
-        self.ensure_collection()
-
-        try:
-            # Build filter conditions
-            conditions = []
-
-            if filter_person_id is not None:
-                conditions.append(
-                    FieldCondition(key="person_id", match=MatchValue(value=str(filter_person_id)))
-                )
-
-            if filter_model_version is not None:
-                conditions.append(
-                    FieldCondition(
-                        key="model_version", match=MatchValue(value=filter_model_version)
-                    )
-                )
-
-            if filter_centroid_type is not None:
-                conditions.append(
-                    FieldCondition(
-                        key="centroid_type", match=MatchValue(value=filter_centroid_type)
-                    )
-                )
-
-            scroll_filter = Filter(must=conditions) if conditions else None  # type: ignore[arg-type]
-
-            records, next_offset = self.client.scroll(
-                collection_name=self.collection_name,
-                scroll_filter=scroll_filter,
-                limit=limit,
-                offset=offset,
-                with_payload=True,
-                with_vectors=include_vectors,
-            )
-
-            logger.debug(f"Scrolled {len(records)} centroids, next_offset={next_offset}")
-            # Convert next_offset to string or None for type safety
-            next_offset_str = str(next_offset) if next_offset is not None else None
-            return records, next_offset_str
-
-        except Exception as e:
-            logger.error(f"Failed to scroll centroids: {e}")
-            raise
-
-    def delete_centroids_by_person(self, person_id: uuid.UUID) -> int:
-        """Delete all centroids for a person.
-
-        Args:
-            person_id: Person UUID
-
-        Returns:
-            Number of centroids deleted
-        """
-        try:
-            deleted_count = 0
-            offset = None
-
-            # Scroll with person_id filter
-            person_filter = Filter(
-                must=[FieldCondition(key="person_id", match=MatchValue(value=str(person_id)))]
-            )
-
-            while True:
-                records, next_offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=person_filter,
-                    limit=100,
-                    offset=offset,
-                    with_payload=False,
-                )
-
-                if not records:
-                    break
-
-                # Extract point IDs
-                point_ids = [record.id for record in records]
-
-                # Delete batch
-                if point_ids:
-                    self.client.delete(
-                        collection_name=self.collection_name,
-                        points_selector=PointIdsList(points=point_ids),
-                    )
-                    deleted_count += len(point_ids)
-
-                # Check if we've scrolled through all matching points
-                if next_offset is None:
-                    break
-
-                offset = next_offset
-
-            if deleted_count > 0:
-                logger.info(f"Deleted {deleted_count} centroids for person {person_id}")
-
-            return deleted_count
-
-        except Exception as e:
-            logger.error(f"Failed to delete centroids for person {person_id}: {e}")
             raise
 
     def get_collection_info(self) -> dict[str, Any] | None:

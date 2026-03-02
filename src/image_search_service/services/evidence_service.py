@@ -220,25 +220,3 @@ class EvidenceService:
         logger.info(f"Deleted evidence {evidence_id}")
         return True
 
-    async def delete_session_evidence(self, db: AsyncSession, session_id: int) -> int:
-        """Delete all evidence for a session.
-
-        Args:
-            db: Database session
-            session_id: Training session ID
-
-        Returns:
-            Number of evidence records deleted
-        """
-        query = select(TrainingEvidence).where(TrainingEvidence.session_id == session_id)
-        result = await db.execute(query)
-        evidence_list = list(result.scalars().all())
-
-        count = len(evidence_list)
-        for evidence in evidence_list:
-            await db.delete(evidence)
-
-        await db.commit()
-
-        logger.info(f"Deleted {count} evidence records for session {session_id}")
-        return count

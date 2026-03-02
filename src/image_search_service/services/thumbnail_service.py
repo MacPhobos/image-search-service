@@ -69,29 +69,6 @@ class ThumbnailService:
         thumb_path = self.get_thumbnail_path(asset_id, original_path)
         return thumb_path.exists()
 
-    def get_image_dimensions(self, image_path: str) -> tuple[int, int]:
-        """Get original image dimensions.
-
-        Args:
-            image_path: Path to image file
-
-        Returns:
-            Tuple of (width, height) in pixels
-
-        Raises:
-            FileNotFoundError: If image file doesn't exist
-            IOError: If file is not a valid image
-        """
-        path = Path(image_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Image not found: {image_path}")
-
-        with Image.open(path) as img:
-            # Apply EXIF orientation to get actual dimensions
-            img = ImageOps.exif_transpose(img) or img
-            width, height = img.size
-            return (width, height)
-
     def get_thumbnail_as_base64(self, asset_id: int, original_path: str) -> str | None:
         """Get thumbnail as base64 data URI.
 

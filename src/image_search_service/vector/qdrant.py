@@ -229,22 +229,6 @@ def search_vectors(
     ]
 
 
-def ping() -> bool:
-    """Check if Qdrant server is accessible.
-
-    Returns:
-        True if server is accessible, False otherwise
-    """
-    try:
-        client = get_qdrant_client()
-        # Try to get collections to verify connection
-        client.get_collections()
-        return True
-    except Exception as e:
-        logger.warning("Qdrant ping failed: %s", e)
-        return False
-
-
 def validate_qdrant_collections() -> list[str]:
     """Validate that all required Qdrant collections exist.
 

@@ -49,7 +49,6 @@ from image_search_service.storage.exceptions import (
 from image_search_service.storage.path_resolver import (
     LookupFn,
     PathResolver,
-    normalize_path,
 )
 
 
@@ -506,80 +505,6 @@ class GoogleDriveV3Storage:
         # lookups re-query the Drive API instead of using stale entries.
         for parent_id in parents:
             self.resolver.invalidate_parent(parent_id)
-
-    # ─── Convenience methods (NOT part of StorageBackend protocol) ────────────
-
-    def mkdirp(self, path: str) -> str:
-        """Create directory and all parent directories.
-
-        NOT part of StorageBackend protocol — convenience method for
-        batch job setup where path-based access is simpler.
-
-        Args:
-            path: Virtual path like "/people/John Doe".
-
-        Returns:
-            Drive folder ID of the deepest folder.
-
-        Raises:
-            RootBoundaryError: If path contains "..".
-            PathAmbiguousError: If duplicate folder names found.
-        """
-        normalized = normalize_path(path)
-        if normalized == "/":
-            return self._root_folder_id
-
-        segments = normalized.strip("/").split("/")
-        current_id = self._root_folder_id
-
-        for segment in segments:
-            current_id = self.create_folder(segment, parent_id=current_id)
-
-        return current_id
-
-    def _validate_root_access(self) -> bool:
-        """Verify that the service account can access the root folder.
-
-        Used by health check endpoints to confirm Drive connectivity.
-
-        Returns:
-            True if root folder is accessible and is a non-trashed folder.
-        """
-        try:
-            result = self._execute_with_backoff(
-                self.service.files().get(
-                    fileId=self._root_folder_id,
-                    fields="id,name,mimeType,trashed",
-                    supportsAllDrives=True,
-                ),
-                path="/",
-            )
-            if result.get("trashed"):
-                self._logger.error("Root folder is trashed!")
-                return False
-            if result.get("mimeType") != self.DRIVE_FOLDER_MIME:
-                self._logger.error(
-                    "Root folder ID does not point to a folder (mimeType=%s)",
-                    result.get("mimeType"),
-                )
-                return False
-            return True
-        except StorageError as e:
-            self._logger.error("Cannot access root folder: %s", e)
-            return False
-
-    def get_service_account_email(self) -> str | None:
-        """Extract the service account email from the SA JSON key file.
-
-        Returns:
-            Service account email address, or None if not readable.
-        """
-        try:
-            with open(self._sa_json_path) as f:
-                data = json.load(f)
-            return str(data.get("client_email", "")) or None
-        except Exception:
-            return None
 
     # ─── Private helpers ──────────────────────────────────────────────────────
 

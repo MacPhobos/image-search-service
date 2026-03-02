@@ -523,24 +523,6 @@ class TrainingService:
 
         logger.debug(f"Updated training job {job_id} to status {status.value}")
 
-    async def get_pending_assets(self, db: AsyncSession, session_id: int) -> list[int]:
-        """Get asset IDs that have not been successfully trained yet.
-
-        Args:
-            db: Database session
-            session_id: Training session ID
-
-        Returns:
-            List of asset IDs with pending or failed jobs
-        """
-        query = (
-            select(TrainingJob.asset_id)
-            .where(TrainingJob.session_id == session_id)
-            .where(TrainingJob.status.in_([JobStatus.PENDING.value, JobStatus.FAILED.value]))
-        )
-        result = await db.execute(query)
-        return list(result.scalars().all())
-
     async def start_training(self, db: AsyncSession, session_id: int) -> TrainingSession:
         """Start or resume training for a session.
 
