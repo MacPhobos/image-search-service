@@ -126,6 +126,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await close_db()
     close_qdrant()
 
+    # Close face and centroid Qdrant clients
+    from image_search_service.vector.centroid_qdrant import CentroidQdrantClient
+    from image_search_service.vector.face_qdrant import FaceQdrantClient
+
+    face_client = FaceQdrantClient.get_instance()
+    if face_client:
+        face_client.close()
+
+    centroid_client = CentroidQdrantClient.get_instance()
+    if centroid_client:
+        centroid_client.close()
+
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application.
@@ -143,7 +155,7 @@ def create_app() -> FastAPI:
     )
 
     # Add CORS middleware (enabled by default, disable with ENABLE_CORS=false)
-    if not settings.enable_cors:
+    if settings.enable_cors:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -153,7 +165,7 @@ def create_app() -> FastAPI:
         )
         logger.info("CORS middleware enabled")
     else:
-        logger.info("CORS middleware disabled via DISABLE_CORS=true")
+        logger.info("CORS middleware disabled (ENABLE_CORS=false)")
 
     # Register routes
     app.include_router(router)
